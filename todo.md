@@ -535,6 +535,8 @@ output:
 - [x] `gui/result_panel.py`: result summary and defect table
 - [x] `main.py --gui`: GUI launch path
 - [x] GUI phase shell
+- [x] `AGENT.md`: repository agent workflow instructions
+- [x] Local Codex skill `aoi-verify-push`: validate, update todo, commit, and push workflow
 - [ ] OP mode
 - [ ] debug image export per detector
 - [ ] editable recipe saving from GUI
