@@ -9,8 +9,9 @@ from core.pipeline import AOIPipeline
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run AOI CV inspection pipeline.")
-    parser.add_argument("--image", required=True, help="Path to input image.")
-    parser.add_argument("--recipe", required=True, help="Path to YAML recipe.")
+    parser.add_argument("--gui", action="store_true", help="Start the PySide6 GUI.")
+    parser.add_argument("--image", help="Path to input image.")
+    parser.add_argument("--recipe", help="Path to YAML recipe.")
     parser.add_argument("--output", default="outputs", help="Output directory.")
     parser.add_argument("--debug", action="store_true", help="Save extra debug artifacts when available.")
     return parser.parse_args()
@@ -18,6 +19,14 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    if args.gui:
+        from gui.main_window import run_app
+
+        return run_app()
+
+    if not args.image or not args.recipe:
+        raise SystemExit("--image and --recipe are required unless --gui is used.")
+
     pipeline = AOIPipeline(
         recipe_path=Path(args.recipe),
         output_dir=Path(args.output),

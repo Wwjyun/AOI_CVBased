@@ -61,6 +61,20 @@ python main.py --image C:\path\to\image.png --recipe recipes\PRODUCT_A_AOI_01.ya
 
 The command prints the final PASS / NG result and report file paths.
 
+## Run GUI
+
+```powershell
+python main.py --gui
+```
+
+The GUI supports:
+
+- Loading an inspection image.
+- Loading a YAML recipe.
+- Viewing recipe metadata and detector parameters.
+- Running the current recipe against the loaded image.
+- Viewing the generated overlay and defect table.
+
 ## Recipe Format
 
 Recipes are YAML files. Example:
@@ -133,6 +147,16 @@ Detector output follows the shared detector result format:
 }
 ```
 
+## Available Detectors
+
+- `999`: threshold and contour based blob detector.
+- `102`: Canny and morphology based scratch / thin line detector.
+- `305`: cell based brightness and uniformity detector.
+- `777`: template matching detector for missing or excessive pattern counts.
+- `888`: local texture / blur detector using Laplacian variance and local standard deviation.
+
+The sample recipe includes all detector parameter blocks. Only `999` is enabled by default so the CLI example remains predictable before recipe tuning.
+
 ## Outputs
 
 The pipeline can write:
@@ -158,5 +182,6 @@ Implemented MVP scope:
 - Aggregator
 - Reporter
 - CLI entry point
+- GUI shell with recipe panel, image viewer, detector parameter view, and result table
 
-GUI files and additional detectors are intentionally left for later phases.
+OP mode, detector debug image export, and editable recipe saving are intentionally left for later phases.

@@ -508,3 +508,35 @@ output:
 - [ ] recipe 要能追溯版本
 - [ ] 所有 detector 都要遵守統一輸出格式
 - [ ] 後續 AI 模型也應該包成 detector plugin，不要破壞主架構
+## Progress / Completed Items
+
+- [x] Phase 1 CLI project structure
+- [x] `requirements.txt`
+- [x] `README.md`
+- [x] `main.py` CLI entry point
+- [x] `core/image_loader.py`: OpenCV image loading for jpg/png/bmp/tif/tiff
+- [x] `core/tiler.py`: tile width/height, overlap, tile metadata
+- [x] `detectors/base_detector.py`: shared detector API
+- [x] `detectors/detector_999.py`: threshold/blob detector
+- [x] `core/detector_manager.py`: detector registry and factory
+- [x] `core/aggregator.py`: tile/final PASS-NG aggregation
+- [x] `core/result_mapper.py`: local bbox to global bbox mapping
+- [x] `core/reporter.py`: overlay, NG tile, CSV, JSON output
+- [x] `core/recipe_manager.py`: YAML recipe loading and validation
+- [x] `recipes/PRODUCT_A_AOI_01.yaml`: sample recipe and detector parameters
+- [x] `detectors/detector_102.py`: scratch / thin line detector
+- [x] `detectors/detector_305.py`: brightness / uniformity detector
+- [x] `detectors/detector_777.py`: pattern match count detector
+- [x] `detectors/detector_888.py`: texture / blur detector
+- [x] `gui/main_window.py`: PySide6 main window
+- [x] `gui/image_viewer.py`: image and overlay viewer
+- [x] `gui/recipe_panel.py`: recipe metadata and detector list
+- [x] `gui/detector_param_panel.py`: detector parameter display
+- [x] `gui/result_panel.py`: result summary and defect table
+- [x] `main.py --gui`: GUI launch path
+- [x] GUI phase shell
+- [ ] OP mode
+- [ ] debug image export per detector
+- [ ] editable recipe saving from GUI
+- [ ] validation dataset
+- [ ] AI detector plugin phase

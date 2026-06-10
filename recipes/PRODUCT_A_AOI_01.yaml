@@ -13,6 +13,10 @@ decision:
   mode: "all_detectors_must_pass"
   important_detectors:
     - "999"
+    - "102"
+    - "305"
+    - "777"
+    - "888"
   max_ng_count: 0
 
 detectors:
@@ -26,6 +30,48 @@ detectors:
       blur_size: 3
       invert: false
       clahe_enabled: true
+
+  "102":
+    enabled: false
+    display_name: "Scratch / thin line detector"
+    params:
+      canny_low: 30
+      canny_high: 120
+      min_length: 50
+      max_width: 8
+      morphology_kernel: 3
+      blur_size: 3
+      clahe_enabled: true
+
+  "305":
+    enabled: false
+    display_name: "Brightness / uniformity detector"
+    params:
+      mean_min: 20
+      mean_max: 235
+      std_max: 60
+      percentile_low: 1
+      percentile_high: 99
+      cell_size: 128
+
+  "777":
+    enabled: false
+    display_name: "Pattern match detector"
+    params:
+      template_path: ""
+      match_threshold: 0.8
+      max_count: 999
+      min_count: 1
+      nms_threshold: 0.3
+
+  "888":
+    enabled: false
+    display_name: "Texture / blur detector"
+    params:
+      laplacian_var_min: 20
+      local_std_min: 3
+      local_std_max: 80
+      block_size: 128
 
 output:
   save_overlay: true
