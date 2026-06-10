@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+
+env/
+.venv/
+venv/
+
+outputs_validation/
+tmp_validation_input.png
+tmp_validation_pass.png

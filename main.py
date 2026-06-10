@@ -1,0 +1,41 @@
+from __future__ import annotations
+
+import argparse
+import json
+from pathlib import Path
+
+from core.pipeline import AOIPipeline
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Run AOI CV inspection pipeline.")
+    parser.add_argument("--image", required=True, help="Path to input image.")
+    parser.add_argument("--recipe", required=True, help="Path to YAML recipe.")
+    parser.add_argument("--output", default="outputs", help="Output directory.")
+    parser.add_argument("--debug", action="store_true", help="Save extra debug artifacts when available.")
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    pipeline = AOIPipeline(
+        recipe_path=Path(args.recipe),
+        output_dir=Path(args.output),
+        debug=args.debug,
+    )
+    result = pipeline.run(Path(args.image))
+
+    summary = {
+        "image_name": result["image_name"],
+        "recipe_name": result["recipe_name"],
+        "final_result": result["final_result"],
+        "ng_count": result["summary"]["ng_count"],
+        "defect_count": result["summary"]["defect_count"],
+        "outputs": result["outputs"],
+    }
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    return 0 if result["final_result"] == "PASS" else 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
