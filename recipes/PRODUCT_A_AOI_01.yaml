@@ -4,6 +4,7 @@ machine_id: "AOI_01"
 version: "0.1.0"
 
 tile:
+  mode: "grid"
   width: 512
   height: 512
   overlap_x: 64

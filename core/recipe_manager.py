@@ -31,9 +31,13 @@ class RecipeManager:
             raise RecipeError(f"Recipe missing required keys: {', '.join(sorted(missing))}")
 
         tile = recipe["tile"]
-        for key in ("width", "height", "overlap_x", "overlap_y"):
-            if key not in tile:
-                raise RecipeError(f"Recipe tile section missing: {key}")
+        mode = str(tile.get("mode", "grid")).lower()
+        if mode == "grid":
+            for key in ("width", "height", "overlap_x", "overlap_y"):
+                if key not in tile:
+                    raise RecipeError(f"Recipe tile section missing: {key}")
+        elif mode != "contour":
+            raise RecipeError(f"Unsupported tile mode: {mode}")
 
         if not isinstance(recipe["detectors"], dict) or not recipe["detectors"]:
             raise RecipeError("Recipe must define at least one detector.")

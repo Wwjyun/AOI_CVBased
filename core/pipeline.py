@@ -8,7 +8,7 @@ from core.image_loader import load_image
 from core.recipe_manager import RecipeManager
 from core.reporter import Reporter
 from core.result_mapper import map_tile_result_to_global
-from core.tiler import Tiler
+from core.tiler import create_tiler
 
 
 class AOIPipeline:
@@ -23,12 +23,7 @@ class AOIPipeline:
         recipe = self.recipe_manager.load(self.recipe_path)
         image = load_image(image_path)
         tile_config = recipe["tile"]
-        tiler = Tiler(
-            width=int(tile_config["width"]),
-            height=int(tile_config["height"]),
-            overlap_x=int(tile_config.get("overlap_x", 0)),
-            overlap_y=int(tile_config.get("overlap_y", 0)),
-        )
+        tiler = create_tiler(tile_config)
         detectors = self.detector_manager.create_enabled(self.recipe_manager.enabled_detectors(recipe))
 
         tile_results = []
@@ -48,6 +43,7 @@ class AOIPipeline:
                         "height": tile.height,
                         "row": tile.row,
                         "col": tile.col,
+                        "metadata": tile.metadata or {},
                     },
                     "detectors": detector_results,
                     "_tile_image": tile.image,
