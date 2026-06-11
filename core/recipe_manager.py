@@ -36,7 +36,7 @@ class RecipeManager:
             for key in ("width", "height", "overlap_x", "overlap_y"):
                 if key not in tile:
                     raise RecipeError(f"Recipe tile section missing: {key}")
-        elif mode != "contour":
+        elif mode not in {"contour", "pattern_match"}:
             raise RecipeError(f"Unsupported tile mode: {mode}")
 
         if not isinstance(recipe["detectors"], dict) or not recipe["detectors"]:

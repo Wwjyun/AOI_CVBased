@@ -6,6 +6,8 @@ from typing import Iterator
 import cv2
 import numpy as np
 
+from core.image_loader import ImageLoader
+
 
 @dataclass(frozen=True)
 class Tile:
@@ -256,6 +258,95 @@ class ContourShapeAnalyzer:
         return True
 
 
+@dataclass(frozen=True)
+class PatternMatchConfig:
+    template_path: str = ""
+    match_threshold: float = 0.8
+    max_count: int = 999
+    nms_threshold: float = 0.3
+    crop_padding: int = 0
+    sort_row_tolerance: int = 20
+
+    @classmethod
+    def from_dict(cls, config: dict | None) -> "PatternMatchConfig":
+        config = config or {}
+        return cls(
+            template_path=str(config.get("template_path", "")),
+            match_threshold=float(config.get("match_threshold", 0.8)),
+            max_count=int(config.get("max_count", 999)),
+            nms_threshold=float(config.get("nms_threshold", 0.3)),
+            crop_padding=int(config.get("crop_padding", 0)),
+            sort_row_tolerance=int(config.get("sort_row_tolerance", 20)),
+        )
+
+
+class PatternMatcher:
+    def __init__(self, config: PatternMatchConfig):
+        self.config = config
+        self.image_loader = ImageLoader()
+
+    def find_matches(self, image) -> list[dict]:
+        template_path = self.config.template_path.strip()
+        if not template_path:
+            raise ValueError("Pattern match template_path is required.")
+
+        template = self.image_loader.load_bgr(template_path)
+        image_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image.copy()
+        template_gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY) if template.ndim == 3 else template.copy()
+        template_height, template_width = template_gray.shape[:2]
+        image_height, image_width = image_gray.shape[:2]
+        if template_width > image_width or template_height > image_height:
+            raise ValueError("Pattern match template is larger than the input image.")
+
+        result = cv2.matchTemplate(image_gray, template_gray, cv2.TM_CCOEFF_NORMED)
+        ys, xs = np.where(result >= self.config.match_threshold)
+        candidates = [
+            {
+                "x": int(x),
+                "y": int(y),
+                "width": int(template_width),
+                "height": int(template_height),
+                "score": float(result[y, x]),
+            }
+            for x, y in zip(xs, ys)
+        ]
+        candidates.sort(key=lambda item: item["score"], reverse=True)
+        selected = self._nms(candidates)
+        selected.sort(key=lambda item: (self._row_bucket(item["y"]), item["x"]))
+        if self.config.max_count > 0:
+            selected = selected[: self.config.max_count]
+        return selected
+
+    def _nms(self, candidates: list[dict]) -> list[dict]:
+        selected: list[dict] = []
+        for candidate in candidates:
+            if all(self._iou(candidate, existing) <= self.config.nms_threshold for existing in selected):
+                selected.append(candidate)
+        return selected
+
+    def _row_bucket(self, y: int) -> int:
+        tolerance = max(1, self.config.sort_row_tolerance)
+        return int(round(y / tolerance))
+
+    @staticmethod
+    def _iou(first: dict, second: dict) -> float:
+        ax1, ay1 = first["x"], first["y"]
+        ax2, ay2 = ax1 + first["width"], ay1 + first["height"]
+        bx1, by1 = second["x"], second["y"]
+        bx2, by2 = bx1 + second["width"], by1 + second["height"]
+        inter_x1 = max(ax1, bx1)
+        inter_y1 = max(ay1, by1)
+        inter_x2 = min(ax2, bx2)
+        inter_y2 = min(ay2, by2)
+        inter_width = max(0, inter_x2 - inter_x1)
+        inter_height = max(0, inter_y2 - inter_y1)
+        intersection = inter_width * inter_height
+        first_area = first["width"] * first["height"]
+        second_area = second["width"] * second["height"]
+        union = first_area + second_area - intersection
+        return float(intersection / union) if union > 0 else 0.0
+
+
 class Tiler:
     def __init__(self, width: int, height: int, overlap_x: int = 0, overlap_y: int = 0):
         if width <= 0 or height <= 0:
@@ -358,6 +449,51 @@ class ContourTiler:
             accepted_index += 1
 
 
+class PatternMatchTiler:
+    def __init__(self, config: PatternMatchConfig):
+        self.config = config
+        self.matcher = PatternMatcher(config)
+
+    @classmethod
+    def from_config(cls, config: dict) -> "PatternMatchTiler":
+        return cls(PatternMatchConfig.from_dict(config.get("pattern_match")))
+
+    def iter_tiles(self, image) -> Iterator[Tile]:
+        image_height, image_width = image.shape[:2]
+        matches = self.matcher.find_matches(image)
+        padding = self.config.crop_padding
+        for index, match in enumerate(matches):
+            x = int(match["x"])
+            y = int(match["y"])
+            width = int(match["width"])
+            height = int(match["height"])
+            x1 = max(0, x - padding)
+            y1 = max(0, y - padding)
+            x2 = min(image_width, x + width + padding)
+            y2 = min(image_height, y + height + padding)
+            if x2 <= x1 or y2 <= y1:
+                continue
+
+            tile_image = image[y1:y2, x1:x2].copy()
+            yield Tile(
+                tile_id=f"pm_{index:04d}",
+                x=x1,
+                y=y1,
+                width=x2 - x1,
+                height=y2 - y1,
+                row=index,
+                col=0,
+                image=tile_image,
+                metadata={
+                    "mode": "pattern_match",
+                    "match_index": index,
+                    "score": float(match["score"]),
+                    "match_bbox": [x, y, width, height],
+                    "template_path": self.config.template_path,
+                },
+            )
+
+
 def create_tiler(tile_config: dict):
     mode = str(tile_config.get("mode", "grid")).lower()
     if mode == "grid":
@@ -369,4 +505,6 @@ def create_tiler(tile_config: dict):
         )
     if mode == "contour":
         return ContourTiler.from_config(tile_config)
+    if mode == "pattern_match":
+        return PatternMatchTiler.from_config(tile_config)
     raise ValueError(f"Unsupported tile mode: {mode}")

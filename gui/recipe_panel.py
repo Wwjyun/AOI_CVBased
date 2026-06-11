@@ -27,7 +27,7 @@ class RecipePanel(QWidget):
         self.recipe: dict | None = None
         self._manager = RecipeManager()
 
-        self.load_button = QPushButton("載入配方")
+        self.load_button = QPushButton("載入 Recipe")
         self.load_button.clicked.connect(self._choose_recipe)
 
         self.recipe_name = QLabel("-")
@@ -35,12 +35,12 @@ class RecipePanel(QWidget):
         self.machine_id = QLabel("-")
         self.version = QLabel("-")
         form = QFormLayout()
-        form.addRow("配方", self.recipe_name)
+        form.addRow("Recipe", self.recipe_name)
         form.addRow("產品", self.product_id)
         form.addRow("機台", self.machine_id)
         form.addRow("版本", self.version)
 
-        meta_group = QGroupBox("配方資訊")
+        meta_group = QGroupBox("Recipe 資訊")
         meta_group.setLayout(form)
 
         self.detector_list = QListWidget()
@@ -72,7 +72,7 @@ class RecipePanel(QWidget):
         self.recipe_loaded.emit(self.recipe_path, recipe)
 
     def _choose_recipe(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "載入配方", "recipes", "YAML 檔案 (*.yaml *.yml)")
+        path, _ = QFileDialog.getOpenFileName(self, "載入 Recipe", "recipes", "YAML 檔案 (*.yaml *.yml)")
         if path:
             self.load_recipe(Path(path))
 

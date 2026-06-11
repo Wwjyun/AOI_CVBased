@@ -66,7 +66,7 @@ class InspectionWorker(QObject):
         self.finished.emit(result)
 
 
-class ContourTilePreviewWorker(QObject):
+class TilePreviewWorker(QObject):
     finished = Signal(object, int, dict)
     failed = Signal(str)
 
@@ -93,9 +93,16 @@ class ContourTilePreviewWorker(QObject):
                 QImage.Format.Format_RGB888,
             ).copy()
             shape_counts: dict[str, int] = {}
+            best_score = None
             for tile in tiles:
-                shape = (tile.metadata or {}).get("shape", "unknown")
-                shape_counts[shape] = shape_counts.get(shape, 0) + 1
+                metadata = tile.metadata or {}
+                mode = metadata.get("mode", "unknown")
+                key = metadata.get("shape", mode)
+                shape_counts[key] = shape_counts.get(key, 0) + 1
+                if metadata.get("score") is not None:
+                    score = float(metadata["score"])
+                    best_score = score if best_score is None else max(best_score, score)
+            shape_counts["best_score"] = best_score
         except Exception as exc:
             self.failed.emit(str(exc))
             return
@@ -109,15 +116,22 @@ class ContourTilePreviewWorker(QObject):
             "rectangle": (0, 180, 0),
             "circle": (255, 120, 0),
             "polygon": (180, 0, 180),
+            "pattern_match": (0, 180, 255),
             "unknown": (0, 0, 255),
         }
         for tile in tiles:
             metadata = tile.metadata or {}
-            shape = metadata.get("shape", "unknown")
+            shape = metadata.get("shape", metadata.get("mode", "unknown"))
             color = colors.get(shape, colors["unknown"])
             cv2.rectangle(preview, (tile.x, tile.y), (tile.x + tile.width, tile.y + tile.height), color, 2)
-            label = f"{tile.tile_id}"
+            score = metadata.get("score")
+            label = f"{tile.tile_id}" if score is None else f"{tile.tile_id}:{score:.3f}"
             cv2.putText(preview, label, (tile.x, max(0, tile.y - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
+
+            match_bbox = metadata.get("match_bbox")
+            if match_bbox:
+                x, y, width, height = match_bbox
+                cv2.rectangle(preview, (x, y), (x + width, y + height), (0, 255, 255), 1)
 
             vertices = metadata.get("vertices") or []
             if vertices:

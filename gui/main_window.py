@@ -24,7 +24,7 @@ from gui.image_viewer import ImageViewer
 from gui.recipe_designer_panel import RecipeDesignerPanel
 from gui.recipe_panel import RecipePanel
 from gui.result_panel import ResultPanel
-from gui.workers import ContourTilePreviewWorker, ImagePreviewWorker, InspectionWorker
+from gui.workers import ImagePreviewWorker, InspectionWorker, TilePreviewWorker
 
 
 class MainWindow(QMainWindow):
@@ -40,7 +40,7 @@ class MainWindow(QMainWindow):
         self._inspection_thread: QThread | None = None
         self._inspection_worker: InspectionWorker | None = None
         self._tile_preview_thread: QThread | None = None
-        self._tile_preview_worker: ContourTilePreviewWorker | None = None
+        self._tile_preview_worker: TilePreviewWorker | None = None
 
         self.image_viewer = ImageViewer()
         self.recipe_panel = RecipePanel()
@@ -56,7 +56,7 @@ class MainWindow(QMainWindow):
         self.output_edit = QLineEdit("outputs")
         self.output_edit.setMinimumWidth(220)
         self.load_image_button = QPushButton("載入圖片")
-        self.load_recipe_button = QPushButton("載入配方")
+        self.load_recipe_button = QPushButton("載入 Recipe")
         self.output_button = QPushButton("瀏覽")
         self.run_button = QPushButton("開始檢測")
 
@@ -88,7 +88,7 @@ class MainWindow(QMainWindow):
     def _build_layout(self) -> None:
         tabs = QTabWidget()
         tabs.addTab(self._inspection_controls(), "檢測執行")
-        tabs.addTab(self.recipe_designer_panel, "配方設計")
+        tabs.addTab(self.recipe_designer_panel, "Recipe 設計")
 
         right = QWidget()
         right_layout = QVBoxLayout(right)
@@ -165,11 +165,11 @@ class MainWindow(QMainWindow):
 
     def _on_recipe_loaded(self, path: Path, recipe: dict) -> None:
         self.recipe_path = path
-        self.statusBar().showMessage(f"配方已載入：{path}")
+        self.statusBar().showMessage(f"Recipe 已載入：{path}")
 
     def _on_designed_recipe_saved(self, path: Path) -> None:
         self.recipe_panel.load_recipe(path)
-        self.statusBar().showMessage(f"設計配方已儲存並載入：{path}")
+        self.statusBar().showMessage(f"設計 Recipe 已儲存並載入：{path}")
 
     def _choose_output_dir(self) -> None:
         path = QFileDialog.getExistingDirectory(self, "選擇輸出目錄", self.output_edit.text())
@@ -181,7 +181,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "執行檢測", "請先載入圖片。")
             return
         if not self.recipe_path:
-            QMessageBox.warning(self, "執行檢測", "請先載入配方。")
+            QMessageBox.warning(self, "執行檢測", "請先載入 Recipe。")
             return
         if self._inspection_thread and self._inspection_thread.isRunning():
             QMessageBox.information(self, "執行檢測", "檢測執行中，請稍候。")
@@ -223,16 +223,16 @@ class MainWindow(QMainWindow):
 
     def _preview_contour_tiles(self, tile_config: dict) -> None:
         if not self.image_path:
-            QMessageBox.warning(self, "配方設計", "請先載入圖片再預覽切圖。")
+            QMessageBox.warning(self, "Recipe 設計", "請先載入圖片再預覽切圖。")
             return
         if self._tile_preview_thread and self._tile_preview_thread.isRunning():
-            QMessageBox.information(self, "配方設計", "切圖預覽執行中，請稍候。")
+            QMessageBox.information(self, "Recipe 設計", "切圖預覽執行中，請稍候。")
             return
 
         self.recipe_designer_panel.set_preview_running(True)
-        self.statusBar().showMessage("二值化切圖預覽中...")
+        self.statusBar().showMessage("切圖預覽中...")
         self._tile_preview_thread = QThread(self)
-        self._tile_preview_worker = ContourTilePreviewWorker(self.image_path, tile_config)
+        self._tile_preview_worker = TilePreviewWorker(self.image_path, tile_config)
         self._tile_preview_worker.moveToThread(self._tile_preview_thread)
         self._tile_preview_thread.started.connect(self._tile_preview_worker.run)
         self._tile_preview_worker.finished.connect(self._on_tile_preview_finished)
@@ -250,7 +250,7 @@ class MainWindow(QMainWindow):
 
     def _on_tile_preview_failed(self, message: str) -> None:
         self.recipe_designer_panel.show_preview_error(message)
-        QMessageBox.warning(self, "配方設計", message)
+        QMessageBox.warning(self, "Recipe 設計", message)
         self.statusBar().showMessage("切圖預覽失敗")
 
     def _on_tile_preview_thread_finished(self) -> None:
