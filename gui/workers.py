@@ -16,6 +16,7 @@ from core.tiler import create_tiler
 class ImagePreviewWorker(QObject):
     loaded = Signal(Path, object)
     failed = Signal(Path, str)
+    progress = Signal(int, str)
 
     def __init__(self, path: Path):
         super().__init__()
@@ -25,7 +26,9 @@ class ImagePreviewWorker(QObject):
     @Slot()
     def run(self) -> None:
         try:
+            self.progress.emit(0, "Loading image")
             image = self.image_loader.load_rgb(self.path)
+            self.progress.emit(60, "Converting preview")
             height, width, channels = image.shape
             qimage = QImage(
                 image.data,
@@ -38,12 +41,14 @@ class ImagePreviewWorker(QObject):
             self.failed.emit(self.path, str(exc))
             return
 
+        self.progress.emit(100, "Preview ready")
         self.loaded.emit(self.path, qimage)
 
 
 class InspectionWorker(QObject):
     finished = Signal(dict)
     failed = Signal(str)
+    progress = Signal(int, str)
 
     def __init__(self, image_path: Path, recipe_path: Path, output_dir: Path):
         super().__init__()
@@ -57,6 +62,7 @@ class InspectionWorker(QObject):
             pipeline = AOIPipeline(
                 recipe_path=self.recipe_path,
                 output_dir=self.output_dir,
+                progress_callback=self.progress.emit,
             )
             result = pipeline.run(self.image_path)
         except Exception as exc:
@@ -69,6 +75,7 @@ class InspectionWorker(QObject):
 class TilePreviewWorker(QObject):
     finished = Signal(object, int, dict)
     failed = Signal(str)
+    progress = Signal(int, str)
 
     def __init__(self, image_path: Path, tile_config: dict):
         super().__init__()
@@ -79,11 +86,15 @@ class TilePreviewWorker(QObject):
     @Slot()
     def run(self) -> None:
         try:
+            self.progress.emit(0, "Loading image for tile preview")
             image = self.image_loader.load_bgr(self.image_path)
+            self.progress.emit(20, "Creating tiler")
             tiler = create_tiler(self.tile_config)
             tiles = list(tiler.iter_tiles(image))
+            self.progress.emit(60, f"Drawing {len(tiles)} preview tiles")
             preview = self._draw_tiles(image, tiles)
             rgb = cv2.cvtColor(preview, cv2.COLOR_BGR2RGB)
+            self.progress.emit(80, "Converting tile preview")
             height, width, channels = rgb.shape
             qimage = QImage(
                 rgb.data,
@@ -107,6 +118,7 @@ class TilePreviewWorker(QObject):
             self.failed.emit(str(exc))
             return
 
+        self.progress.emit(100, "Tile preview ready")
         self.finished.emit(qimage, len(tiles), shape_counts)
 
     @staticmethod

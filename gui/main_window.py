@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMainWindow,
     QMessageBox,
+    QProgressBar,
     QPushButton,
     QSplitter,
     QStatusBar,
@@ -59,6 +60,12 @@ class MainWindow(QMainWindow):
         self.load_recipe_button = QPushButton("載入 Recipe")
         self.output_button = QPushButton("瀏覽")
         self.run_button = QPushButton("開始檢測")
+        self.progress_label = QLabel("Ready")
+        self.progress_bar = QProgressBar()
+        self.progress_bar.setRange(0, 100)
+        self.progress_bar.setValue(0)
+        self.progress_bar.setFormat("%p%")
+        self.progress_bar.setMinimumWidth(160)
 
         self._build_toolbar()
         self._build_layout()
@@ -84,6 +91,9 @@ class MainWindow(QMainWindow):
 
         self.run_button.clicked.connect(self._run_inspection)
         toolbar.addWidget(self.run_button)
+        toolbar.addSeparator()
+        toolbar.addWidget(self.progress_label)
+        toolbar.addWidget(self.progress_bar)
 
     def _build_layout(self) -> None:
         tabs = QTabWidget()
@@ -133,6 +143,7 @@ class MainWindow(QMainWindow):
         self._preview_worker = ImagePreviewWorker(path)
         self._preview_worker.moveToThread(self._preview_thread)
         self._preview_thread.started.connect(self._preview_worker.run)
+        self._preview_worker.progress.connect(self._on_progress)
         self._preview_worker.loaded.connect(self._on_preview_loaded)
         self._preview_worker.failed.connect(self._on_preview_failed)
         self._preview_worker.loaded.connect(self._preview_thread.quit)
@@ -197,6 +208,7 @@ class MainWindow(QMainWindow):
         )
         self._inspection_worker.moveToThread(self._inspection_thread)
         self._inspection_thread.started.connect(self._inspection_worker.run)
+        self._inspection_worker.progress.connect(self._on_progress)
         self._inspection_worker.finished.connect(self._on_inspection_finished)
         self._inspection_worker.failed.connect(self._on_inspection_failed)
         self._inspection_worker.finished.connect(self._inspection_thread.quit)
@@ -235,6 +247,7 @@ class MainWindow(QMainWindow):
         self._tile_preview_worker = TilePreviewWorker(self.image_path, tile_config)
         self._tile_preview_worker.moveToThread(self._tile_preview_thread)
         self._tile_preview_thread.started.connect(self._tile_preview_worker.run)
+        self._tile_preview_worker.progress.connect(self._on_progress)
         self._tile_preview_worker.finished.connect(self._on_tile_preview_finished)
         self._tile_preview_worker.failed.connect(self._on_tile_preview_failed)
         self._tile_preview_worker.finished.connect(self._tile_preview_thread.quit)
@@ -264,6 +277,12 @@ class MainWindow(QMainWindow):
         self.load_recipe_button.setEnabled(not running)
         self.output_button.setEnabled(not running)
         self.output_edit.setEnabled(not running)
+
+    def _on_progress(self, percent: int, message: str) -> None:
+        percent = max(0, min(100, int(percent)))
+        self.progress_bar.setValue(percent)
+        self.progress_label.setText(message)
+        self.statusBar().showMessage(f"{message} ({percent}%)")
 
     def closeEvent(self, event) -> None:
         if self._inspection_thread and self._inspection_thread.isRunning():

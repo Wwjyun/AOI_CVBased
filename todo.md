@@ -546,6 +546,7 @@ output:
 - [x] Detector000 binary contour area guard and pattern-match Recipe using detector 000
 - [x] GUI Recipe designer admin-mode detector selection and editable detector parameters
 - [x] Detector001 circle threshold NG detector and circle overlay preview with thicker frames
+- [x] GUI progress bar for image loading, tile preview, inspection, aggregation, and report output steps
 - [ ] OP mode
 - [ ] debug image export per detector
 - [ ] editable recipe saving from GUI
