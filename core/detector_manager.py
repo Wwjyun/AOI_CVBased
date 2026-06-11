@@ -3,6 +3,7 @@ from __future__ import annotations
 from copy import deepcopy
 
 from detectors.detector_000 import Detector000
+from detectors.detector_001 import Detector001
 from detectors.detector_102 import Detector102
 from detectors.detector_305 import Detector305
 from detectors.detector_777 import Detector777
@@ -14,6 +15,7 @@ class DetectorManager:
     def __init__(self):
         self._registry = {
             Detector000.detector_id: Detector000,
+            Detector001.detector_id: Detector001,
             Detector102.detector_id: Detector102,
             Detector305.detector_id: Detector305,
             Detector777.detector_id: Detector777,

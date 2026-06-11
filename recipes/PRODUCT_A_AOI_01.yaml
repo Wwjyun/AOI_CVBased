@@ -13,6 +13,7 @@ tile:
 decision:
   mode: "all_detectors_must_pass"
   important_detectors:
+    - "001"
     - "999"
     - "102"
     - "305"
@@ -21,6 +22,31 @@ decision:
   max_ng_count: 0
 
 detectors:
+  "001":
+    enabled: false
+    display_name: "Circle threshold NG detector"
+    params:
+      threshold_method: "adaptive_mean"
+      threshold: 128
+      max_value: 255
+      invert: false
+      adaptive_block_size: 31
+      adaptive_c: -10.0
+      canny_low: 128
+      canny_high: 200
+      blur_size: 20
+      contour_mode: "external"
+      morph_operation: "none"
+      morph_kernel: 3
+      morph_iterations: 1
+      process_scale: 1.0
+      min_area: 0
+      max_area: 0
+      min_radius: 0
+      max_radius: 0
+      min_circularity: 0.70
+      min_fill_ratio: 0.55
+
   "999":
     enabled: true
     display_name: "Dark / bright blob detector"

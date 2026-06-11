@@ -64,11 +64,23 @@ class Reporter:
         for tile_result in result["tiles"]:
             for detector_result in tile_result["detectors"]:
                 for defect in detector_result.get("defects", []):
-                    x, y, width, height = defect["bbox_global"]
-                    cv2.rectangle(overlay, (x, y), (x + width, y + height), (0, 0, 255), 2)
+                    Reporter._draw_defect(overlay, defect)
+                    x, y, _, _ = defect["bbox_global"]
                     label = f"{detector_result['detector_id']}:{defect['type']}"
-                    cv2.putText(overlay, label, (x, max(0, y - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, (0, 0, 255), 1)
+                    cv2.putText(overlay, label, (x, max(0, y - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 255), 2)
         return overlay
+
+    @staticmethod
+    def _draw_defect(overlay, defect: dict) -> None:
+        x, y, width, height = defect["bbox_global"]
+        metadata = defect.get("metadata", {})
+        if metadata.get("shape") == "circle" and metadata.get("center_global") and metadata.get("radius"):
+            cx, cy = metadata["center_global"]
+            radius = metadata["radius"]
+            cv2.circle(overlay, (int(round(cx)), int(round(cy))), int(round(radius)), (0, 0, 255), 4)
+            cv2.rectangle(overlay, (x, y), (x + width, y + height), (0, 255, 255), 2)
+            return
+        cv2.rectangle(overlay, (x, y), (x + width, y + height), (0, 0, 255), 4)
 
     def _write_ng_tiles(self, result: dict, base_name: str) -> None:
         for tile_result in result["tiles"]:

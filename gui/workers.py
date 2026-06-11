@@ -123,18 +123,18 @@ class TilePreviewWorker(QObject):
             metadata = tile.metadata or {}
             shape = metadata.get("shape", metadata.get("mode", "unknown"))
             color = colors.get(shape, colors["unknown"])
-            cv2.rectangle(preview, (tile.x, tile.y), (tile.x + tile.width, tile.y + tile.height), color, 2)
+            cv2.rectangle(preview, (tile.x, tile.y), (tile.x + tile.width, tile.y + tile.height), color, 4)
             score = metadata.get("score")
             label = f"{tile.tile_id}" if score is None else f"{tile.tile_id}:{score:.3f}"
-            cv2.putText(preview, label, (tile.x, max(0, tile.y - 4)), cv2.FONT_HERSHEY_SIMPLEX, 0.45, color, 1)
+            cv2.putText(preview, label, (tile.x, max(0, tile.y - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 2)
 
             match_bbox = metadata.get("match_bbox")
             if match_bbox:
                 x, y, width, height = match_bbox
-                cv2.rectangle(preview, (x, y), (x + width, y + height), (0, 255, 255), 1)
+                cv2.rectangle(preview, (x, y), (x + width, y + height), (0, 255, 255), 3)
 
             vertices = metadata.get("vertices") or []
             if vertices:
                 points = np.array(vertices, dtype=np.int32).reshape(-1, 1, 2)
-                cv2.polylines(preview, [points], True, color, 1)
+                cv2.polylines(preview, [points], True, color, 3)
         return preview

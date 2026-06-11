@@ -545,6 +545,7 @@ output:
 - [x] Pattern match tile mode with multi-match preview, top-to-bottom/left-to-right sorting, and Recipe wording in GUI
 - [x] Detector000 binary contour area guard and pattern-match Recipe using detector 000
 - [x] GUI Recipe designer admin-mode detector selection and editable detector parameters
+- [x] Detector001 circle threshold NG detector and circle overlay preview with thicker frames
 - [ ] OP mode
 - [ ] debug image export per detector
 - [ ] editable recipe saving from GUI
