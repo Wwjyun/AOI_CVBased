@@ -19,17 +19,21 @@ class AOIPipeline:
         output_dir: Path,
         debug: bool = False,
         progress_callback: Callable[[int, str], None] | None = None,
+        output_overrides: dict | None = None,
     ):
         self.recipe_path = Path(recipe_path)
         self.output_dir = Path(output_dir)
         self.debug = debug
         self.progress_callback = progress_callback
+        self.output_overrides = output_overrides
         self.recipe_manager = RecipeManager()
         self.detector_manager = DetectorManager()
 
     def run(self, image_path: Path) -> dict:
         self._progress(0, "Starting inspection")
         recipe = self.recipe_manager.load(self.recipe_path)
+        if self.output_overrides:
+            recipe["output"] = {**recipe.get("output", {}), **self.output_overrides}
         self._progress(5, "Recipe loaded")
         image = load_image(image_path)
         self._progress(10, "Image loaded")

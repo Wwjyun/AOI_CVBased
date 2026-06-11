@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AOI 視覺檢測系統 — GUI Redesign</title>
+
+<!--
+  AOI Console — GUI 重新設計（互動原型）
+  ─────────────────────────────────────
+  依據：AOI_CVbased PySide6 GUI（main_window / recipe_panel / recipe_designer_panel /
+        detector_param_panel / result_panel）
+
+  設計重點：
+  · 左側窄圖示導覽（檢測執行 / Recipe 設計 / 檢測結果）取代分頁，畫面層級更清楚
+  · 頂部精簡：影像與 Recipe 變成「狀態 chip」，點擊載入；「開始檢測」移入右側控制面板成為唯一主按鈕
+  · 輸出目錄等不常用設定收進右側「設定」抽屜
+  · 操作員 OP / 工程師模式切換：OP 只看大狀態與開始按鈕，工程師看完整參數
+  · 檢測結果獨立頁：摘要卡 + 缺陷表 + NG tile 縮圖，可點擊回到影像定位缺陷
+-->
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&family=Noto+Sans+TC:wght@400;500;600;700&display=swap" rel="stylesheet" />
+
+<link rel="stylesheet" href="app/tokens.css" />
+<link rel="stylesheet" href="app/ui.css" />
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="app/data.js"></script>
+<script type="text/babel" src="app/tweaks-panel.jsx"></script>
+<script type="text/babel" src="app/icons.jsx"></script>
+<script type="text/babel" src="app/components.jsx"></script>
+<script type="text/babel" src="app/viewer.jsx"></script>
+<script type="text/babel" src="app/screen-run.jsx"></script>
+<script type="text/babel" src="app/screen-results.jsx"></script>
+<script type="text/babel" src="app/screen-designer.jsx"></script>
+<script type="text/babel" src="app/main.jsx"></script>
+</body>
+</html>

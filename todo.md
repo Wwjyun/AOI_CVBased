@@ -548,8 +548,10 @@ output:
 - [x] Detector001 circle threshold NG detector and circle overlay preview with thicker frames
 - [x] GUI progress bar for image loading, tile preview, inspection, aggregation, and report output steps
 - [x] Pattern-match inspection overlay shows each matched unit as OK green frame or NG red frame
-- [ ] OP mode
+- [x] 2026-06-11 GUI redesign validation: rail/topbar/screen shell, run/results/designer screens, settings drawer, themed widgets, and design handoff files
+- [x] 2026-06-11 GUI output toggles wired to reporter `save_*` options and validated with no-output pipeline smoke
+- [x] OP mode
 - [ ] debug image export per detector
-- [ ] editable recipe saving from GUI
+- [x] editable recipe saving from GUI
 - [ ] validation dataset
 - [ ] AI detector plugin phase

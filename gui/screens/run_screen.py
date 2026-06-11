@@ -1,0 +1,465 @@
+from __future__ import annotations
+
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtWidgets import (
+    QFormLayout,
+    QFrame,
+    QHBoxLayout,
+    QLabel,
+    QPushButton,
+    QScrollArea,
+    QSizePolicy,
+    QTableWidget,
+    QTableWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
+
+from gui import icons
+from gui.detector_labels import detector_zh_name
+from gui.image_viewer import ImageViewer
+from gui.theme import COLORS
+from gui.widgets.common import Badge, EmptyState, ProgressBar, make_param_widget, result_badge
+from gui.widgets.panel import Panel
+
+# ============================================================
+# AOI Console — 檢測執行 screen
+# ============================================================
+
+
+class DetectorRow(QWidget):
+    def __init__(self, detector_id: str, display_name: str, params: dict, enabled: bool, parent=None):
+        super().__init__(parent)
+        self._expanded = False
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        header = QWidget()
+        header.setProperty("role", "row-item")
+        header.setCursor(Qt.CursorShape.PointingHandCursor)
+        header.setMinimumHeight(34)
+        header_layout = QHBoxLayout(header)
+        header_layout.setContentsMargins(12, 6, 12, 6)
+        header_layout.setSpacing(8)
+
+        self._chevron = QLabel()
+        self._chevron.setPixmap(icons.pixmap("chevron_right", size=13, color=COLORS["text_3"]))
+        header_layout.addWidget(self._chevron)
+
+        id_label = QLabel(detector_id)
+        id_label.setProperty("mono", "true")
+        id_label.setStyleSheet(f"font-weight: 600; color: {COLORS['text']};")
+        header_layout.addWidget(id_label)
+
+        name_label = QLabel(detector_zh_name(detector_id))
+        name_label.setStyleSheet(f"color: {COLORS['text_2']};")
+        header_layout.addWidget(name_label, 1)
+
+        header_layout.addWidget(Badge("啟用" if enabled else "停用", kind="accent" if enabled else "neutral"))
+
+        header.mousePressEvent = lambda _event: self._toggle()
+        layout.addWidget(header)
+
+        self._body = QWidget()
+        body_layout = QVBoxLayout(self._body)
+        body_layout.setContentsMargins(34, 4, 12, 12)
+        body_layout.setSpacing(6)
+
+        display_label = QLabel(display_name)
+        display_label.setStyleSheet(f"color: {COLORS['text_3']}; font-size: 11px;")
+        body_layout.addWidget(display_label)
+
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignmentFlag.AlignLeft)
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(6)
+        for key, value in params.items():
+            key_label = QLabel(key)
+            key_label.setProperty("mono", "true")
+            key_label.setProperty("role", "form-label")
+            form.addRow(key_label, make_param_widget(value, read_only=True))
+        body_layout.addLayout(form)
+
+        self._body.setVisible(False)
+        layout.addWidget(self._body)
+
+    def _toggle(self) -> None:
+        self._expanded = not self._expanded
+        self._body.setVisible(self._expanded)
+        self._chevron.setPixmap(
+            icons.pixmap("chevron_down" if self._expanded else "chevron_right", size=13, color=COLORS["text_3"])
+        )
+
+
+class RecipeInfoPanel(QWidget):
+    open_recipe_requested = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        self._layout = layout
+        self._panel: QWidget | None = None
+        self.set_recipe(None)
+
+    def set_recipe(self, recipe: dict | None) -> None:
+        if self._panel is not None:
+            self._layout.removeWidget(self._panel)
+            self._panel.deleteLater()
+            self._panel = None
+
+        if recipe is None:
+            change_button = QPushButton("載入 Recipe")
+            change_button.setProperty("variant", "secondary")
+            change_button.setProperty("size", "sm")
+            change_button.setIcon(icons.icon("folder", size=14, color=COLORS["text_2"]))
+            change_button.clicked.connect(self.open_recipe_requested.emit)
+            panel = Panel(title="Recipe")
+            panel.add_widget(EmptyState("recipe", "尚未載入 Recipe", action=change_button))
+        else:
+            change_button = QPushButton("更換")
+            change_button.setProperty("variant", "ghost")
+            change_button.setProperty("size", "sm")
+            change_button.clicked.connect(self.open_recipe_requested.emit)
+            panel = Panel(title="Recipe", actions=change_button, flush=True)
+
+            header = QWidget()
+            header_layout = QVBoxLayout(header)
+            header_layout.setContentsMargins(16, 12, 16, 12)
+            header_layout.setSpacing(8)
+            header.setStyleSheet(f"border-bottom: 1px solid {COLORS['surface_3']};")
+
+            name_label = QLabel(str(recipe.get("recipe_name", "-")))
+            name_label.setProperty("mono", "true")
+            name_label.setWordWrap(True)
+            name_label.setStyleSheet("font-weight: 600; font-size: 13px;")
+            header_layout.addWidget(name_label)
+
+            badge_row = QHBoxLayout()
+            badge_row.setSpacing(6)
+            badge_row.addWidget(Badge(str(recipe.get("product_id", "-")), kind="neutral"))
+            badge_row.addWidget(Badge(str(recipe.get("machine_id", "-")), kind="neutral"))
+            badge_row.addWidget(Badge(f"v{recipe.get('version', '-')}", kind="neutral"))
+            badge_row.addWidget(Badge(str(recipe.get("tile", {}).get("mode", "-")), kind="accent"))
+            badge_row.addStretch(1)
+            header_layout.addLayout(badge_row)
+            panel.add_widget(header)
+
+            detectors = recipe.get("detectors", {})
+            count_label = QLabel(f"DETECTORS（{len(detectors)}）")
+            count_label.setStyleSheet(
+                f"color: {COLORS['text_3']}; font-size: 11px; font-weight: 600; "
+                f"letter-spacing: 0.05em; padding: 8px 16px 4px;"
+            )
+            panel.add_widget(count_label)
+
+            for detector_id, config in detectors.items():
+                row = DetectorRow(
+                    str(detector_id),
+                    str(config.get("display_name", detector_id)),
+                    config.get("params", {}),
+                    bool(config.get("enabled", False)),
+                )
+                panel.add_widget(row)
+
+        self._panel = panel
+        self._layout.addWidget(panel)
+
+
+class RunControlPanel(Panel):
+    start_requested = Signal()
+    view_results_requested = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(title="檢測控制", parent=parent)
+
+        self.start_button = QPushButton("開始檢測")
+        self.start_button.setProperty("variant", "primary")
+        self.start_button.setProperty("size", "lg")
+        self.start_button.setIcon(icons.icon("play", size=17, color="#ffffff"))
+        self.start_button.setEnabled(False)
+        self.start_button.clicked.connect(self.start_requested.emit)
+        self.add_widget(self.start_button)
+
+        self.hint_label = QLabel("請先載入影像與 Recipe")
+        self.hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.hint_label.setStyleSheet(f"color: {COLORS['text_3']}; font-size: 12px;")
+        self.add_widget(self.hint_label)
+
+        self._progress_row = QWidget()
+        progress_layout = QHBoxLayout(self._progress_row)
+        progress_layout.setContentsMargins(0, 0, 0, 0)
+        progress_layout.setSpacing(10)
+        self.progress_bar = ProgressBar()
+        progress_layout.addWidget(self.progress_bar, 1)
+        self.progress_pct_label = QLabel("0%")
+        self.progress_pct_label.setProperty("mono", "true")
+        self.progress_pct_label.setFixedWidth(38)
+        self.progress_pct_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        progress_layout.addWidget(self.progress_pct_label)
+        self._progress_row.setVisible(False)
+        self.add_widget(self._progress_row)
+
+        self.run_msg_label = QLabel("")
+        self.run_msg_label.setProperty("mono", "true")
+        self.run_msg_label.setStyleSheet(f"color: {COLORS['text_2']}; font-size: 11px;")
+        self.run_msg_label.setVisible(False)
+        self.add_widget(self.run_msg_label)
+
+        self._result_card = QFrame()
+        self._result_card.setStyleSheet(
+            f"QFrame {{ border: 1px solid {COLORS['border']}; border-radius: 6px; }}"
+        )
+        result_layout = QVBoxLayout(self._result_card)
+        result_layout.setContentsMargins(0, 0, 0, 0)
+        result_layout.setSpacing(0)
+
+        self._result_header = QWidget()
+        result_header_layout = QHBoxLayout(self._result_header)
+        result_header_layout.setContentsMargins(12, 10, 12, 10)
+        result_header_layout.setSpacing(10)
+        self.result_label = QLabel("PASS")
+        self.result_label.setStyleSheet("font-size: 18px; font-weight: 700; letter-spacing: 0.04em;")
+        result_header_layout.addWidget(self.result_label)
+        self.result_dur_label = QLabel("")
+        self.result_dur_label.setStyleSheet(f"color: {COLORS['text_2']}; font-size: 12px;")
+        result_header_layout.addWidget(self.result_dur_label)
+        result_header_layout.addStretch(1)
+        result_layout.addWidget(self._result_header)
+
+        stats_row = QWidget()
+        stats_row.setStyleSheet(f"border-top: 1px solid {COLORS['border']};")
+        stats_layout = QHBoxLayout(stats_row)
+        stats_layout.setContentsMargins(0, 0, 0, 0)
+        stats_layout.setSpacing(0)
+        self._stat_value_labels: list[QLabel] = []
+        for stat_name in ("Tiles", "NG Tiles", "缺陷"):
+            cell = QWidget()
+            cell_layout = QVBoxLayout(cell)
+            cell_layout.setContentsMargins(12, 8, 12, 8)
+            cell_layout.setSpacing(2)
+            value_label = QLabel("0")
+            value_label.setProperty("mono", "true")
+            value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            value_label.setStyleSheet("font-size: 16px; font-weight: 600;")
+            name_label = QLabel(stat_name)
+            name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            name_label.setStyleSheet(f"color: {COLORS['text_3']}; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em;")
+            cell_layout.addWidget(value_label)
+            cell_layout.addWidget(name_label)
+            stats_layout.addWidget(cell, 1)
+            self._stat_value_labels.append(value_label)
+        result_layout.addWidget(stats_row)
+
+        self.view_results_button = QPushButton("查看完整結果 →")
+        self.view_results_button.setStyleSheet(
+            f"QPushButton {{ border: none; border-top: 1px solid {COLORS['border']}; "
+            f"background: {COLORS['surface_2']}; color: {COLORS['accent_text']}; "
+            f"padding: 8px; font-size: 12px; font-weight: 600; border-radius: 0; }}"
+            f"QPushButton:hover {{ background: {COLORS['surface_3']}; }}"
+        )
+        self.view_results_button.clicked.connect(self.view_results_requested.emit)
+        result_layout.addWidget(self.view_results_button)
+
+        self._result_card.setVisible(False)
+        self.add_widget(self._result_card)
+
+        self.body_layout.addStretch(1)
+
+    def set_ready(self, ready: bool, has_image: bool, has_recipe: bool, running: bool) -> None:
+        self.start_button.setEnabled(ready)
+        self.start_button.setText("檢測執行中…" if running else "開始檢測")
+        show_hint = not has_image or not has_recipe
+        self.hint_label.setVisible(show_hint and not running)
+        if not has_image:
+            self.hint_label.setText("請先載入影像與 Recipe")
+        elif not has_recipe:
+            self.hint_label.setText("請先載入影像與 Recipe")
+
+    def set_progress(self, running: bool, has_result: bool, pct: int, message: str) -> None:
+        self._progress_row.setVisible(running or has_result)
+        self.progress_bar.setValue(pct)
+        self.progress_pct_label.setText(f"{pct}%")
+        self.run_msg_label.setVisible(running)
+        self.run_msg_label.setText(message)
+
+    def show_result(self, result: dict, duration: str) -> None:
+        final = result.get("final_result", "-")
+        summary = result.get("summary", {})
+        is_ng = final == "NG"
+        self.result_label.setText(final)
+        self.result_label.setStyleSheet(
+            f"font-size: 18px; font-weight: 700; letter-spacing: 0.04em; "
+            f"color: {COLORS['ng'] if is_ng else COLORS['pass']};"
+        )
+        self._result_header.setStyleSheet(
+            f"background: {COLORS['ng_soft'] if is_ng else COLORS['pass_soft']};"
+        )
+        self.result_dur_label.setText(f"檢測完成 · {duration}")
+        values = [summary.get("tile_count", 0), summary.get("ng_count", 0), summary.get("defect_count", 0)]
+        for label, value in zip(self._stat_value_labels, values):
+            label.setText(str(value))
+        self._result_card.setVisible(True)
+
+    def clear_result(self) -> None:
+        self._result_card.setVisible(False)
+
+
+class OpModePanel(QWidget):
+    start_requested = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        status_panel = Panel()
+        status_layout = QVBoxLayout()
+        status_layout.setSpacing(6)
+
+        self.status_label = QLabel("待機")
+        self.status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.status_label.setProperty("mono", "true")
+        self.status_label.setStyleSheet(
+            f"font-size: 44px; font-weight: 800; letter-spacing: 0.05em; color: {COLORS['text_3']};"
+        )
+        status_layout.addWidget(self.status_label)
+
+        self.hint_label = QLabel("載入影像後按下開始檢測")
+        self.hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.hint_label.setStyleSheet(f"color: {COLORS['text_3']}; font-size: 12px;")
+        status_layout.addWidget(self.hint_label)
+        status_panel.add_layout(status_layout)
+
+        self.start_button = QPushButton("開始檢測")
+        self.start_button.setProperty("variant", "primary")
+        self.start_button.setProperty("size", "lg")
+        self.start_button.setMinimumHeight(52)
+        self.start_button.setIcon(icons.icon("play", size=18, color="#ffffff"))
+        self.start_button.setStyleSheet("font-size: 16px;")
+        self.start_button.setEnabled(False)
+        self.start_button.clicked.connect(self.start_requested.emit)
+        status_panel.add_widget(self.start_button)
+        layout.addWidget(status_panel)
+
+        history_panel = Panel(title="本批紀錄", flush=True)
+        self.history_table = QTableWidget(0, 3)
+        self.history_table.horizontalHeader().setVisible(False)
+        self.history_table.verticalHeader().setVisible(False)
+        self.history_table.setShowGrid(False)
+        self.history_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        self.history_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        history_panel.add_widget(self.history_table, 1)
+        layout.addWidget(history_panel, 1)
+
+    def set_state(self, ready: bool, running: bool, pct: int, message: str, result: dict | None) -> None:
+        self.start_button.setEnabled(ready)
+        self.start_button.setText("檢測中…" if running else "開始檢測")
+
+        if running:
+            self.status_label.setText(f"{pct}%")
+            self.status_label.setStyleSheet(
+                f"font-size: 44px; font-weight: 800; letter-spacing: 0.05em; color: {COLORS['accent']};"
+            )
+            self.hint_label.setText(message)
+        elif result is not None:
+            final = result.get("final_result", "-")
+            summary = result.get("summary", {})
+            color = COLORS["ng"] if final == "NG" else COLORS["pass"]
+            self.status_label.setText(final)
+            self.status_label.setStyleSheet(
+                f"font-size: 44px; font-weight: 800; letter-spacing: 0.05em; color: {color};"
+            )
+            self.hint_label.setText(f"缺陷 {summary.get('defect_count', 0)} · NG tiles {summary.get('ng_count', 0)}")
+        else:
+            self.status_label.setText("待機")
+            self.status_label.setStyleSheet(
+                f"font-size: 44px; font-weight: 800; letter-spacing: 0.05em; color: {COLORS['text_3']};"
+            )
+            self.hint_label.setText("載入影像後按下開始檢測")
+
+    def set_history(self, history: list[dict]) -> None:
+        self.history_table.setRowCount(len(history))
+        for row, entry in enumerate(history):
+            time_item = QTableWidgetItem(str(entry.get("time", "")))
+            time_item.setForeground(_color(COLORS["text_3"]))
+            font = time_item.font()
+            font.setFamily("IBM Plex Mono")
+            time_item.setFont(font)
+            self.history_table.setItem(row, 0, time_item)
+            self.history_table.setCellWidget(row, 1, result_badge(entry.get("result")))
+            defects_item = QTableWidgetItem(f"{entry.get('defects', 0)} 缺陷")
+            defects_item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+            font2 = defects_item.font()
+            font2.setFamily("IBM Plex Mono")
+            defects_item.setFont(font2)
+            self.history_table.setItem(row, 2, defects_item)
+        self.history_table.resizeColumnsToContents()
+        self.history_table.horizontalHeader().setStretchLastSection(True)
+
+
+def _color(hex_value: str):
+    from PySide6.QtGui import QColor
+
+    return QColor(hex_value)
+
+
+class RunScreen(QWidget):
+    start_requested = Signal()
+    open_recipe_requested = Signal()
+    view_results_requested = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
+
+        self.image_viewer = ImageViewer()
+        viewer_frame = QFrame()
+        viewer_frame.setProperty("role", "panel")
+        viewer_frame.setStyleSheet(f"QFrame[role=\"panel\"] {{ background: {COLORS['viewer_bg']}; }}")
+        viewer_layout = QVBoxLayout(viewer_frame)
+        viewer_layout.setContentsMargins(0, 0, 0, 0)
+        viewer_layout.addWidget(self.image_viewer)
+        layout.addWidget(viewer_frame, 1)
+
+        sidebar_scroll = QScrollArea()
+        sidebar_scroll.setWidgetResizable(True)
+        sidebar_scroll.setFixedWidth(318)
+        sidebar_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        sidebar_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        sidebar = QWidget()
+        self._sidebar_layout = QVBoxLayout(sidebar)
+        self._sidebar_layout.setContentsMargins(0, 0, 0, 0)
+        self._sidebar_layout.setSpacing(12)
+
+        self.op_panel = OpModePanel()
+        self.run_control_panel = RunControlPanel()
+        self.recipe_info_panel = RecipeInfoPanel()
+
+        self._sidebar_layout.addWidget(self.op_panel)
+        self._sidebar_layout.addWidget(self.run_control_panel)
+        self._sidebar_layout.addWidget(self.recipe_info_panel)
+        self._sidebar_layout.addStretch(1)
+
+        sidebar_scroll.setWidget(sidebar)
+        layout.addWidget(sidebar_scroll)
+
+        self.run_control_panel.start_requested.connect(self.start_requested.emit)
+        self.op_panel.start_requested.connect(self.start_requested.emit)
+        self.run_control_panel.view_results_requested.connect(self.view_results_requested.emit)
+        self.recipe_info_panel.open_recipe_requested.connect(self.open_recipe_requested.emit)
+
+        self.set_mode("eng")
+
+    def set_mode(self, mode: str) -> None:
+        is_op = mode == "op"
+        self.op_panel.setVisible(is_op)
+        self.run_control_panel.setVisible(not is_op)
+        self.recipe_info_panel.setVisible(not is_op)

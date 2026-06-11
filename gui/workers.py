@@ -50,11 +50,12 @@ class InspectionWorker(QObject):
     failed = Signal(str)
     progress = Signal(int, str)
 
-    def __init__(self, image_path: Path, recipe_path: Path, output_dir: Path):
+    def __init__(self, image_path: Path, recipe_path: Path, output_dir: Path, output_overrides: dict | None = None):
         super().__init__()
         self.image_path = Path(image_path)
         self.recipe_path = Path(recipe_path)
         self.output_dir = Path(output_dir)
+        self.output_overrides = output_overrides
 
     @Slot()
     def run(self) -> None:
@@ -63,6 +64,7 @@ class InspectionWorker(QObject):
                 recipe_path=self.recipe_path,
                 output_dir=self.output_dir,
                 progress_callback=self.progress.emit,
+                output_overrides=self.output_overrides,
             )
             result = pipeline.run(self.image_path)
         except Exception as exc:
