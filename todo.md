@@ -541,6 +541,7 @@ output:
 - [x] GUI Chinese localization and background workers for image preview loading and inspection execution
 - [x] Contour-based tile splitting with binary/adaptive/inverse thresholding, shape filters, and subpixel metadata
 - [x] GUI recipe design tab with contour threshold controls, tile preview, and recipe YAML export
+- [x] `recipes/PRODUCT_A_CONTOUR_AOI_01.yaml`: contour tiling recipe for GUI preview and per-tile detector execution
 - [ ] OP mode
 - [ ] debug image export per detector
 - [ ] editable recipe saving from GUI
