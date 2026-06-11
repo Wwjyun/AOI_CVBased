@@ -27,7 +27,7 @@ class RecipePanel(QWidget):
         self.recipe: dict | None = None
         self._manager = RecipeManager()
 
-        self.load_button = QPushButton("Load Recipe")
+        self.load_button = QPushButton("載入配方")
         self.load_button.clicked.connect(self._choose_recipe)
 
         self.recipe_name = QLabel("-")
@@ -35,12 +35,12 @@ class RecipePanel(QWidget):
         self.machine_id = QLabel("-")
         self.version = QLabel("-")
         form = QFormLayout()
-        form.addRow("Recipe", self.recipe_name)
-        form.addRow("Product", self.product_id)
-        form.addRow("Machine", self.machine_id)
-        form.addRow("Version", self.version)
+        form.addRow("配方", self.recipe_name)
+        form.addRow("產品", self.product_id)
+        form.addRow("機台", self.machine_id)
+        form.addRow("版本", self.version)
 
-        meta_group = QGroupBox("Recipe")
+        meta_group = QGroupBox("配方資訊")
         meta_group.setLayout(form)
 
         self.detector_list = QListWidget()
@@ -49,7 +49,7 @@ class RecipePanel(QWidget):
         layout = QVBoxLayout(self)
         layout.addWidget(self.load_button)
         layout.addWidget(meta_group)
-        layout.addWidget(QLabel("Detectors"))
+        layout.addWidget(QLabel("檢測器"))
         layout.addWidget(self.detector_list, 1)
 
     def load_recipe(self, path: Path) -> None:
@@ -63,7 +63,7 @@ class RecipePanel(QWidget):
 
         self.detector_list.clear()
         for detector_id, config in recipe.get("detectors", {}).items():
-            state = "ON" if config.get("enabled", False) else "OFF"
+            state = "啟用" if config.get("enabled", False) else "停用"
             display = config.get("display_name", detector_id)
             self.detector_list.addItem(f"{detector_id} [{state}] {display}")
 
@@ -72,7 +72,7 @@ class RecipePanel(QWidget):
         self.recipe_loaded.emit(self.recipe_path, recipe)
 
     def _choose_recipe(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Load Recipe", "recipes", "YAML Files (*.yaml *.yml)")
+        path, _ = QFileDialog.getOpenFileName(self, "載入配方", "recipes", "YAML 檔案 (*.yaml *.yml)")
         if path:
             self.load_recipe(Path(path))
 

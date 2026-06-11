@@ -5,11 +5,11 @@ from PySide6.QtWidgets import QLabel, QTableWidget, QTableWidgetItem, QVBoxLayou
 
 
 class ResultPanel(QWidget):
-    HEADERS = ["Tile", "Detector", "Type", "Global BBox", "Area", "Score"]
+    HEADERS = ["Tile", "檢測器", "類型", "全域框", "面積", "分數"]
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.summary = QLabel("No result")
+        self.summary = QLabel("尚無結果")
         self.summary.setAlignment(Qt.AlignmentFlag.AlignLeft)
         self.table = QTableWidget(0, len(self.HEADERS))
         self.table.setHorizontalHeaderLabels(self.HEADERS)
@@ -24,9 +24,9 @@ class ResultPanel(QWidget):
         summary = result.get("summary", {})
         self.summary.setText(
             f"{result.get('final_result', '-')} | "
-            f"tiles: {summary.get('tile_count', 0)} | "
-            f"NG tiles: {summary.get('ng_count', 0)} | "
-            f"defects: {summary.get('defect_count', 0)}"
+            f"Tile 數：{summary.get('tile_count', 0)} | "
+            f"NG Tile：{summary.get('ng_count', 0)} | "
+            f"缺陷數：{summary.get('defect_count', 0)}"
         )
 
         rows = []
@@ -54,5 +54,5 @@ class ResultPanel(QWidget):
         self.table.resizeColumnsToContents()
 
     def clear(self) -> None:
-        self.summary.setText("No result")
+        self.summary.setText("尚無結果")
         self.table.setRowCount(0)

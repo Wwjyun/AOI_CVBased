@@ -538,6 +538,7 @@ output:
 - [x] `AGENT.md`: repository agent workflow instructions
 - [x] Local Codex skill `aoi-verify-push`: validate, update todo, commit, and push workflow
 - [x] `core/image_loader.py` and `gui/image_viewer.py`: PIL-first image loading with disabled Pillow pixel limit before OpenCV/preview conversion
+- [x] GUI Chinese localization and background workers for image preview loading and inspection execution
 - [ ] OP mode
 - [ ] debug image export per detector
 - [ ] editable recipe saving from GUI

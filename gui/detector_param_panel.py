@@ -6,8 +6,8 @@ from PySide6.QtWidgets import QCheckBox, QFormLayout, QLabel, QLineEdit, QScroll
 class DetectorParamPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.title = QLabel("Detector Parameters")
-        self.enabled = QCheckBox("Enabled")
+        self.title = QLabel("檢測器參數")
+        self.enabled = QCheckBox("啟用")
         self.enabled.setEnabled(False)
         self.form_container = QWidget()
         self.form = QFormLayout(self.form_container)
@@ -22,13 +22,13 @@ class DetectorParamPanel(QWidget):
         layout.addWidget(scroll, 1)
 
     def show_detector(self, detector_id: str, config: dict) -> None:
-        self.title.setText(f"Detector {detector_id}")
+        self.title.setText(f"檢測器 {detector_id}")
         self.enabled.setChecked(bool(config.get("enabled", False)))
         self._clear_form()
 
         params = config.get("params", {})
         if not params:
-            self.form.addRow(QLabel("No parameters"))
+            self.form.addRow(QLabel("沒有參數"))
             return
 
         for key, value in params.items():
@@ -36,7 +36,7 @@ class DetectorParamPanel(QWidget):
             self.form.addRow(key, widget)
 
     def clear(self) -> None:
-        self.title.setText("Detector Parameters")
+        self.title.setText("檢測器參數")
         self.enabled.setChecked(False)
         self._clear_form()
 

@@ -30,11 +30,22 @@ class ImageViewer(QGraphicsView):
             self.last_error = str(exc)
             return False
         self.last_error = ""
+        self.set_pixmap(pixmap)
+        return True
+
+    def set_qimage(self, image: QImage) -> None:
+        pixmap = QPixmap.fromImage(image)
+        if pixmap.isNull():
+            self.last_error = "無法建立圖片預覽。"
+            return
+        self.last_error = ""
+        self.set_pixmap(pixmap)
+
+    def set_pixmap(self, pixmap: QPixmap) -> None:
         self._pixmap_item.setPixmap(pixmap)
         self._scene.setSceneRect(pixmap.rect())
         self.fitInView(self._pixmap_item, Qt.AspectRatioMode.KeepAspectRatio)
         self._zoom = 0
-        return True
 
     def _load_pixmap(self, path: Path) -> QPixmap:
         image = self.image_loader.load_rgb(path)
@@ -49,7 +60,7 @@ class ImageViewer(QGraphicsView):
         ).copy()
         pixmap = QPixmap.fromImage(qimage)
         if pixmap.isNull():
-            raise ImageLoadError(f"Qt failed to create preview pixmap: {path}")
+            raise ImageLoadError(f"無法建立圖片預覽：{path}")
         return pixmap
 
     def clear(self) -> None:
