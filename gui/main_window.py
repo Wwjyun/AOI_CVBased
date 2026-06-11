@@ -107,7 +107,8 @@ class MainWindow(QMainWindow):
 
     def load_image(self, path: Path) -> None:
         if not self.image_viewer.load_image(path):
-            QMessageBox.warning(self, "Load Image", f"Failed to load image:\n{path}")
+            message = self.image_viewer.last_error or f"Failed to load image:\n{path}"
+            QMessageBox.warning(self, "Load Image", message)
             return
         self.image_path = Path(path)
         self.result_panel.clear()
