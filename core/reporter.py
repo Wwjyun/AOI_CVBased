@@ -61,6 +61,10 @@ class Reporter:
     @staticmethod
     def _make_overlay(image, result: dict):
         overlay = image.copy()
+        if Reporter._has_pattern_match_tiles(result):
+            Reporter._draw_pattern_match_status_overlay(overlay, result)
+            return overlay
+
         for tile_result in result["tiles"]:
             for detector_result in tile_result["detectors"]:
                 for defect in detector_result.get("defects", []):
@@ -69,6 +73,33 @@ class Reporter:
                     label = f"{detector_result['detector_id']}:{defect['type']}"
                     cv2.putText(overlay, label, (x, max(0, y - 6)), cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 0, 255), 2)
         return overlay
+
+    @staticmethod
+    def _has_pattern_match_tiles(result: dict) -> bool:
+        return any(
+            tile_result.get("tile", {}).get("metadata", {}).get("mode") == "pattern_match"
+            for tile_result in result.get("tiles", [])
+        )
+
+    @staticmethod
+    def _draw_pattern_match_status_overlay(overlay, result: dict) -> None:
+        for tile_result in result.get("tiles", []):
+            tile = tile_result.get("tile", {})
+            metadata = tile.get("metadata", {})
+            if metadata.get("mode") != "pattern_match":
+                continue
+
+            bbox = metadata.get("match_bbox") or [tile.get("x", 0), tile.get("y", 0), tile.get("width", 0), tile.get("height", 0)]
+            x, y, width, height = [int(round(value)) for value in bbox]
+            is_ng = tile_result.get("result") == "NG"
+            color = (0, 0, 255) if is_ng else (0, 180, 0)
+            status = "NG" if is_ng else "OK"
+            tile_id = str(tile.get("tile_id", ""))
+            label = f"{tile_id} {status}".strip()
+
+            cv2.rectangle(overlay, (x, y), (x + width, y + height), color, 4)
+            label_y = y - 8 if y >= 18 else y + height + 22
+            cv2.putText(overlay, label, (x, max(18, label_y)), cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, 2)
 
     @staticmethod
     def _draw_defect(overlay, defect: dict) -> None:

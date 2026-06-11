@@ -547,6 +547,7 @@ output:
 - [x] GUI Recipe designer admin-mode detector selection and editable detector parameters
 - [x] Detector001 circle threshold NG detector and circle overlay preview with thicker frames
 - [x] GUI progress bar for image loading, tile preview, inspection, aggregation, and report output steps
+- [x] Pattern-match inspection overlay shows each matched unit as OK green frame or NG red frame
 - [ ] OP mode
 - [ ] debug image export per detector
 - [ ] editable recipe saving from GUI
