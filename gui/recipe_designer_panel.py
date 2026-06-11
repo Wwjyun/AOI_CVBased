@@ -3,20 +3,26 @@ from __future__ import annotations
 from pathlib import Path
 
 import yaml
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
+    QCheckBox,
     QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
+    QListWidgetItem,
     QPushButton,
+    QScrollArea,
     QSpinBox,
     QDoubleSpinBox,
     QVBoxLayout,
     QWidget,
 )
+
+from core.detector_manager import DetectorManager
 
 
 class RecipeDesignerPanel(QWidget):
@@ -26,8 +32,10 @@ class RecipeDesignerPanel(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.image_path: Path | None = None
+        self.detector_definitions = DetectorManager().definitions()
+        self.param_widgets: dict[str, dict[str, QWidget]] = {}
 
-        self.recipe_name = QLineEdit("PRODUCT_A_PATTERN_MATCH_AOI_01")
+        self.recipe_name = QLineEdit("PRODUCT_A_PATTERN_MATCH_000_AOI_01")
         self.product_id = QLineEdit("PRODUCT_A")
         self.machine_id = QLineEdit("AOI_01")
         self.version = QLineEdit("0.1.0")
@@ -41,6 +49,13 @@ class RecipeDesignerPanel(QWidget):
         self.crop_padding = self._spin(0, 10000, 8)
         self.sort_row_tolerance = self._spin(1, 10000, 20)
 
+        self.detector_list = QListWidget()
+        self.detector_list.currentRowChanged.connect(self._show_detector_params)
+        self.detector_title = QLabel("Detector 參數")
+        self.detector_form_container = QWidget()
+        self.detector_form = QFormLayout(self.detector_form_container)
+        self._build_detector_items()
+
         self.status_label = QLabel("尚未預覽")
         self.preview_button = QPushButton("預覽 Pattern Match 切圖")
         self.save_button = QPushButton("儲存 Recipe")
@@ -48,6 +63,8 @@ class RecipeDesignerPanel(QWidget):
         self.save_button.clicked.connect(self._save_recipe)
 
         self._build_layout()
+        if self.detector_list.count():
+            self.detector_list.setCurrentRow(0)
 
     def set_image_path(self, path: Path | None) -> None:
         self.image_path = Path(path) if path else None
@@ -81,31 +98,20 @@ class RecipeDesignerPanel(QWidget):
         }
 
     def build_recipe(self) -> dict:
+        detectors = self._selected_detectors()
+        important_detectors = list(detectors)
         return {
-            "recipe_name": self.recipe_name.text() or "PRODUCT_A_PATTERN_MATCH_AOI_01",
+            "recipe_name": self.recipe_name.text() or "PRODUCT_A_PATTERN_MATCH_000_AOI_01",
             "product_id": self.product_id.text() or "PRODUCT_A",
             "machine_id": self.machine_id.text() or "AOI_01",
             "version": self.version.text() or "0.1.0",
             "tile": self.build_tile_config(),
             "decision": {
                 "mode": "all_detectors_must_pass",
-                "important_detectors": ["999"],
+                "important_detectors": important_detectors,
                 "max_ng_count": 0,
             },
-            "detectors": {
-                "999": {
-                    "enabled": True,
-                    "display_name": "Dark / bright blob detector",
-                    "params": {
-                        "threshold": 45,
-                        "min_area": 20,
-                        "max_area": 5000,
-                        "blur_size": 3,
-                        "invert": False,
-                        "clahe_enabled": True,
-                    },
-                }
-            },
+            "detectors": detectors,
             "output": {
                 "save_overlay": True,
                 "save_ng_tiles": True,
@@ -115,19 +121,29 @@ class RecipeDesignerPanel(QWidget):
         }
 
     def _build_layout(self) -> None:
-        layout = QVBoxLayout(self)
-        layout.addWidget(self._recipe_group())
-        layout.addWidget(self._pattern_match_group())
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.addWidget(self._recipe_group())
+        content_layout.addWidget(self._pattern_match_group())
+        content_layout.addWidget(self._detector_group())
 
         button_row = QHBoxLayout()
         button_row.addWidget(self.preview_button)
         button_row.addWidget(self.save_button)
-        layout.addLayout(button_row)
-        layout.addWidget(self.status_label)
-        layout.addStretch(1)
+        content_layout.addLayout(button_row)
+        content_layout.addWidget(self.status_label)
+        content_layout.addStretch(1)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(content)
+
+        layout = QVBoxLayout(self)
+        layout.addWidget(scroll)
 
     def _recipe_group(self) -> QGroupBox:
         form = QFormLayout()
+        form.addRow("模式", QLabel("管理者"))
         form.addRow("Recipe 名稱", self.recipe_name)
         form.addRow("產品", self.product_id)
         form.addRow("機台", self.machine_id)
@@ -152,6 +168,83 @@ class RecipeDesignerPanel(QWidget):
         group.setLayout(form)
         return group
 
+    def _detector_group(self) -> QGroupBox:
+        params_scroll = QScrollArea()
+        params_scroll.setWidgetResizable(True)
+        params_scroll.setWidget(self.detector_form_container)
+
+        layout = QHBoxLayout()
+        layout.addWidget(self.detector_list, 2)
+
+        params_layout = QVBoxLayout()
+        params_layout.addWidget(self.detector_title)
+        params_layout.addWidget(params_scroll, 1)
+        layout.addLayout(params_layout, 3)
+
+        group = QGroupBox("Detector 選用與參數")
+        group.setLayout(layout)
+        return group
+
+    def _build_detector_items(self) -> None:
+        for detector_id in sorted(self.detector_definitions):
+            definition = self.detector_definitions[detector_id]
+            item = QListWidgetItem(f"{detector_id} - {definition['display_name']}")
+            item.setData(Qt.ItemDataRole.UserRole, detector_id)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked if detector_id == "000" else Qt.CheckState.Unchecked)
+            self.detector_list.addItem(item)
+
+    def _show_detector_params(self, row: int) -> None:
+        self._clear_detector_form()
+        item = self.detector_list.item(row)
+        if item is None:
+            return
+        detector_id = str(item.data(Qt.ItemDataRole.UserRole))
+        definition = self.detector_definitions[detector_id]
+        self.detector_title.setText(f"{detector_id} - {definition['display_name']}")
+
+        widgets = self.param_widgets.setdefault(detector_id, {})
+        for key, value in definition["default_params"].items():
+            widget = widgets.get(key)
+            if widget is None:
+                widget = self._make_param_widget(value)
+                widgets[key] = widget
+            self.detector_form.addRow(key, widget)
+
+    def _clear_detector_form(self) -> None:
+        while self.detector_form.rowCount():
+            row = self.detector_form.takeRow(0)
+            for item in (row.labelItem, row.fieldItem):
+                if item and item.widget():
+                    item.widget().setParent(None)
+
+    def _selected_detectors(self) -> dict:
+        selected = {}
+        for index in range(self.detector_list.count()):
+            item = self.detector_list.item(index)
+            if item.checkState() != Qt.CheckState.Checked:
+                continue
+            detector_id = str(item.data(Qt.ItemDataRole.UserRole))
+            definition = self.detector_definitions[detector_id]
+            selected[detector_id] = {
+                "enabled": True,
+                "display_name": definition["display_name"],
+                "params": self._params_for_detector(detector_id),
+            }
+        return selected
+
+    def _params_for_detector(self, detector_id: str) -> dict:
+        definition = self.detector_definitions[detector_id]
+        widgets = self.param_widgets.setdefault(detector_id, {})
+        params = {}
+        for key, default_value in definition["default_params"].items():
+            widget = widgets.get(key)
+            if widget is None:
+                widget = self._make_param_widget(default_value)
+                widgets[key] = widget
+            params[key] = self._widget_value(widget)
+        return params
+
     def _emit_preview(self) -> None:
         self.preview_requested.emit(self.build_tile_config())
 
@@ -159,7 +252,7 @@ class RecipeDesignerPanel(QWidget):
         path, _ = QFileDialog.getSaveFileName(
             self,
             "儲存 Recipe",
-            f"recipes/{self.recipe_name.text() or 'PRODUCT_A_PATTERN_MATCH_AOI_01'}.yaml",
+            f"recipes/{self.recipe_name.text() or 'PRODUCT_A_PATTERN_MATCH_000_AOI_01'}.yaml",
             "YAML 檔案 (*.yaml *.yml)",
         )
         if not path:
@@ -179,6 +272,37 @@ class RecipeDesignerPanel(QWidget):
         )
         if path:
             self.template_path.setText(path)
+
+    @staticmethod
+    def _make_param_widget(value):
+        if isinstance(value, bool):
+            widget = QCheckBox()
+            widget.setChecked(value)
+            return widget
+        if isinstance(value, int):
+            widget = QSpinBox()
+            widget.setRange(-1_000_000, 1_000_000)
+            widget.setValue(value)
+            return widget
+        if isinstance(value, float):
+            widget = QDoubleSpinBox()
+            widget.setRange(-1_000_000.0, 1_000_000.0)
+            widget.setDecimals(4)
+            widget.setValue(value)
+            return widget
+        return QLineEdit(str(value))
+
+    @staticmethod
+    def _widget_value(widget):
+        if isinstance(widget, QCheckBox):
+            return widget.isChecked()
+        if isinstance(widget, QSpinBox):
+            return widget.value()
+        if isinstance(widget, QDoubleSpinBox):
+            return widget.value()
+        if isinstance(widget, QLineEdit):
+            return widget.text()
+        return None
 
     @staticmethod
     def _spin(minimum: int, maximum: int, value: int, step: int = 1) -> QSpinBox:

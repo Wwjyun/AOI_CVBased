@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from copy import deepcopy
+
 from detectors.detector_000 import Detector000
 from detectors.detector_102 import Detector102
 from detectors.detector_305 import Detector305
@@ -36,3 +38,13 @@ class DetectorManager:
                 )
             )
         return detectors
+
+    def definitions(self) -> dict[str, dict]:
+        return {
+            detector_id: {
+                "display_name": detector_cls.display_name,
+                "detector_name": detector_cls.detector_name,
+                "default_params": deepcopy(detector_cls.default_params),
+            }
+            for detector_id, detector_cls in self._registry.items()
+        }
