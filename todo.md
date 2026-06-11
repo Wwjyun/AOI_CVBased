@@ -540,6 +540,7 @@ output:
 - [x] `core/image_loader.py` and `gui/image_viewer.py`: PIL-first image loading with disabled Pillow pixel limit before OpenCV/preview conversion
 - [x] GUI Chinese localization and background workers for image preview loading and inspection execution
 - [x] Contour-based tile splitting with binary/adaptive/inverse thresholding, shape filters, and subpixel metadata
+- [x] GUI recipe design tab with contour threshold controls, tile preview, and recipe YAML export
 - [ ] OP mode
 - [ ] debug image export per detector
 - [ ] editable recipe saving from GUI
