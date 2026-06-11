@@ -543,6 +543,7 @@ output:
 - [x] GUI recipe design tab with contour threshold controls, tile preview, and recipe YAML export
 - [x] `recipes/PRODUCT_A_CONTOUR_AOI_01.yaml`: contour tiling recipe for GUI preview and per-tile detector execution
 - [x] Pattern match tile mode with multi-match preview, top-to-bottom/left-to-right sorting, and Recipe wording in GUI
+- [x] Detector000 binary contour area guard and pattern-match Recipe using detector 000
 - [ ] OP mode
 - [ ] debug image export per detector
 - [ ] editable recipe saving from GUI

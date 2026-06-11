@@ -1,0 +1,49 @@
+recipe_name: "PRODUCT_A_PATTERN_MATCH_000_AOI_01"
+product_id: "PRODUCT_A"
+machine_id: "AOI_01"
+version: "0.1.0"
+
+tile:
+  mode: "pattern_match"
+  pattern_match:
+    template_path: ""
+    match_threshold: 0.8
+    max_count: 999
+    nms_threshold: 0.3
+    crop_padding: 8
+    sort_row_tolerance: 20
+
+decision:
+  mode: "all_detectors_must_pass"
+  important_detectors:
+    - "000"
+  max_ng_count: 0
+
+detectors:
+  "000":
+    enabled: true
+    display_name: "Binary contour area guard"
+    params:
+      threshold_method: "adaptive_gaussian"
+      threshold: 128
+      max_value: 255
+      invert: true
+      adaptive_block_size: 31
+      adaptive_c: 5.0
+      blur_size: 3
+      morph_open_kernel: 0
+      morph_open_iterations: 1
+      morph_close_kernel: 0
+      morph_close_iterations: 1
+      min_area: 50
+      max_area: 5000
+      min_width: 0
+      max_width: 0
+      min_height: 0
+      max_height: 0
+
+output:
+  save_overlay: true
+  save_ng_tiles: true
+  save_csv: true
+  save_json: true
