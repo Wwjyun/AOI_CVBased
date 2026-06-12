@@ -23,7 +23,7 @@ from PySide6.QtWidgets import (
 from core.recipe_manager import RecipeError, RecipeManager
 from gui import theme
 from gui.screens.designer_screen import DesignerScreen
-from gui.screens.results_screen import ResultsScreen, flatten_defects
+from gui.screens.results_screen import ResultsScreen, flatten_defects, flatten_viewer_overlays
 from gui.screens.run_screen import RunScreen
 from gui.widgets.common import Toggle
 from gui.widgets.drawer import Drawer
@@ -452,8 +452,9 @@ class MainWindow(QMainWindow):
     def _on_inspection_finished(self, result: dict) -> None:
         self.result = result
         self._defects = flatten_defects(result)
+        viewer_overlays = flatten_viewer_overlays(result)
         self.selected_defect_id = None
-        self.run_screen.image_viewer.set_defects(self._defects)
+        self.run_screen.image_viewer.set_defects(viewer_overlays)
         self.run_screen.image_viewer.set_selected_defect(None)
 
         duration = ""
