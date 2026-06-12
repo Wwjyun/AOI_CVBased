@@ -266,6 +266,7 @@ class PatternMatchConfig:
     nms_threshold: float = 0.3
     crop_padding: int = 0
     sort_row_tolerance: int = 20
+    max_candidates: int = 20000
 
     @classmethod
     def from_dict(cls, config: dict | None) -> "PatternMatchConfig":
@@ -277,6 +278,7 @@ class PatternMatchConfig:
             nms_threshold=float(config.get("nms_threshold", 0.3)),
             crop_padding=int(config.get("crop_padding", 0)),
             sort_row_tolerance=int(config.get("sort_row_tolerance", 20)),
+            max_candidates=int(config.get("max_candidates", 20000)),
         )
 
 
@@ -300,6 +302,11 @@ class PatternMatcher:
 
         result = cv2.matchTemplate(image_gray, template_gray, cv2.TM_CCOEFF_NORMED)
         ys, xs = np.where(result >= self.config.match_threshold)
+        if len(xs) > self.config.max_candidates:
+            scores = result[ys, xs]
+            keep = np.argpartition(scores, -self.config.max_candidates)[-self.config.max_candidates :]
+            ys = ys[keep]
+            xs = xs[keep]
         candidates = [
             {
                 "x": int(x),
@@ -313,15 +320,16 @@ class PatternMatcher:
         candidates.sort(key=lambda item: item["score"], reverse=True)
         selected = self._nms(candidates)
         selected.sort(key=lambda item: (self._row_bucket(item["y"]), item["x"]))
-        if self.config.max_count > 0:
-            selected = selected[: self.config.max_count]
         return selected
 
     def _nms(self, candidates: list[dict]) -> list[dict]:
         selected: list[dict] = []
+        max_count = self.config.max_count if self.config.max_count > 0 else len(candidates)
         for candidate in candidates:
             if all(self._iou(candidate, existing) <= self.config.nms_threshold for existing in selected):
                 selected.append(candidate)
+                if len(selected) >= max_count:
+                    break
         return selected
 
     def _row_bucket(self, y: int) -> int:

@@ -78,6 +78,7 @@ class TilePreviewWorker(QObject):
     finished = Signal(object, int, dict)
     failed = Signal(str)
     progress = Signal(int, str)
+    MAX_PREVIEW_SIDE = 2200
 
     def __init__(self, image_path: Path, tile_config: dict):
         super().__init__()
@@ -95,6 +96,7 @@ class TilePreviewWorker(QObject):
             tiles = list(tiler.iter_tiles(image))
             self.progress.emit(60, f"Drawing {len(tiles)} preview tiles")
             preview = self._draw_tiles(image, tiles)
+            preview = self._resize_preview(preview)
             rgb = cv2.cvtColor(preview, cv2.COLOR_BGR2RGB)
             self.progress.emit(80, "Converting tile preview")
             height, width, channels = rgb.shape
@@ -152,3 +154,13 @@ class TilePreviewWorker(QObject):
                 points = np.array(vertices, dtype=np.int32).reshape(-1, 1, 2)
                 cv2.polylines(preview, [points], True, color, 3)
         return preview
+
+    @classmethod
+    def _resize_preview(cls, preview):
+        height, width = preview.shape[:2]
+        longest_side = max(width, height)
+        if longest_side <= cls.MAX_PREVIEW_SIDE:
+            return preview
+        scale = cls.MAX_PREVIEW_SIDE / float(longest_side)
+        target_size = (max(1, int(width * scale)), max(1, int(height * scale)))
+        return cv2.resize(preview, target_size, interpolation=cv2.INTER_AREA)

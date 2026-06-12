@@ -551,6 +551,7 @@ output:
 - [x] 2026-06-11 GUI redesign validation: rail/topbar/screen shell, run/results/designer screens, settings drawer, themed widgets, and design handoff files
 - [x] 2026-06-11 GUI output toggles wired to reporter `save_*` options and validated with no-output pipeline smoke
 - [x] OP mode
+- [x] 2026-06-12 GUI tile preview QFont point-size warning fixed and preview matching bounded
 - [ ] debug image export per detector
 - [x] editable recipe saving from GUI
 - [ ] validation dataset

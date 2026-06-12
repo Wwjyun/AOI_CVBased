@@ -60,7 +60,7 @@ class _DefectItem(QGraphicsRectItem):
 
         font = QFont("IBM Plex Mono")
         font.setStyleHint(QFont.StyleHint.Monospace)
-        font.setPixelSize(11)
+        font.setPointSize(9)
         font.setWeight(QFont.Weight.DemiBold)
         return font
 
