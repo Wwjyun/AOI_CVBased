@@ -98,7 +98,7 @@ class TilePreviewLabel(QLabel):
         self.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.setStyleSheet(
             f"background: {COLORS['viewer_bg']}; border: 1px solid {COLORS['border']}; "
-            f"border-radius: {R_MD}px; color: rgba(255,255,255,0.4); font-size: 12px;"
+            f"border-radius: {R_MD}px; color: rgba(255,255,255,0.4); font-size: 9pt;"
         )
         self.setText("尚未預覽")
         self._pixmap: QPixmap | None = None
@@ -294,7 +294,7 @@ class DesignerScreen(QWidget):
         panel.add_widget(self.preview_label)
 
         self.preview_status = QLabel("尚未預覽")
-        self.preview_status.setStyleSheet(f"color: {COLORS['text_3']}; font-size: 12px;")
+        self.preview_status.setStyleSheet(f"color: {COLORS['text_3']}; font-size: 9pt;")
         self.preview_status.setWordWrap(True)
         panel.add_widget(self.preview_status)
         return panel
@@ -307,7 +307,7 @@ class DesignerScreen(QWidget):
         self.save_button.setEnabled(not running)
         if running:
             self.preview_status.setText("切圖預覽執行中…")
-            self.preview_status.setStyleSheet(f"color: {COLORS['text_3']}; font-size: 12px;")
+            self.preview_status.setStyleSheet(f"color: {COLORS['text_3']}; font-size: 9pt;")
 
     def show_preview_result(self, image, tile_count: int, shape_counts: dict) -> None:
         self.preview_label.set_image(image)
@@ -316,11 +316,11 @@ class DesignerScreen(QWidget):
         if best_score is not None:
             score_text = f"；最佳分數：{best_score:.4f}"
         self.preview_status.setText(f"匹配 {tile_count} 張小圖{score_text}")
-        self.preview_status.setStyleSheet(f"color: {COLORS['accent_text']}; font-size: 12px;")
+        self.preview_status.setStyleSheet(f"color: {COLORS['accent_text']}; font-size: 9pt;")
 
     def show_preview_error(self, message: str) -> None:
         self.preview_status.setText(f"預覽失敗：{message}")
-        self.preview_status.setStyleSheet(f"color: {COLORS['ng']}; font-size: 12px;")
+        self.preview_status.setStyleSheet(f"color: {COLORS['ng']}; font-size: 9pt;")
 
     # ------------------------------------------------------------------
     # detector selection / params
@@ -578,7 +578,7 @@ class DesignerScreen(QWidget):
     def _save_recipe(self) -> None:
         if not any(self._enabled.values()):
             self.preview_status.setText("請至少啟用一個 detector")
-            self.preview_status.setStyleSheet(f"color: {COLORS['ng']}; font-size: 12px;")
+            self.preview_status.setStyleSheet(f"color: {COLORS['ng']}; font-size: 9pt;")
             return
 
         path, _ = QFileDialog.getSaveFileName(
@@ -594,7 +594,7 @@ class DesignerScreen(QWidget):
             yaml.safe_dump(self.build_recipe(), handle, allow_unicode=True, sort_keys=False)
         self.recipe_saved.emit(recipe_path)
         self.preview_status.setText(f"Recipe 已儲存：{recipe_path}")
-        self.preview_status.setStyleSheet(f"color: {COLORS['accent_text']}; font-size: 12px;")
+        self.preview_status.setStyleSheet(f"color: {COLORS['accent_text']}; font-size: 9pt;")
 
 
 def _wrap_layout(layout) -> QWidget:

@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QStatusBar,
     QVBoxLayout,
     QWidget,
+    QApplication,
 )
 
 from core.recipe_manager import RecipeError, RecipeManager
@@ -71,6 +72,9 @@ class _RecipePanelCompatibility:
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        app = QApplication.instance()
+        if app is not None:
+            theme.install_application_font(app)
         self.setWindowTitle("AOI 視覺檢測系統")
         self.resize(1440, 900)
 
@@ -516,10 +520,12 @@ class MainWindow(QMainWindow):
         self._tile_preview_worker.progress.connect(self._on_status_progress)
         self._tile_preview_worker.finished.connect(self._on_tile_preview_finished)
         self._tile_preview_worker.failed.connect(self._on_tile_preview_failed)
+        self._tile_preview_worker.finished.connect(self._tile_preview_worker.deleteLater)
+        self._tile_preview_worker.failed.connect(self._tile_preview_worker.deleteLater)
         self._tile_preview_worker.finished.connect(self._tile_preview_thread.quit)
         self._tile_preview_worker.failed.connect(self._tile_preview_thread.quit)
-        self._tile_preview_thread.finished.connect(self._tile_preview_worker.deleteLater)
         self._tile_preview_thread.finished.connect(self._on_tile_preview_thread_finished)
+        self._tile_preview_thread.finished.connect(self._tile_preview_thread.deleteLater)
         self._tile_preview_thread.start()
 
     def _on_tile_preview_finished(self, image, tile_count: int, shape_counts: dict) -> None:
@@ -559,6 +565,7 @@ def run_app() -> int:
     from PySide6.QtWidgets import QApplication
 
     app = QApplication.instance() or QApplication([])
+    theme.install_application_font(app)
     app.setStyleSheet(theme.build_stylesheet())
     window = MainWindow()
     window.show()

@@ -47,8 +47,8 @@ DEFECT_TYPE_LABELS = {
     "rectangle": "Rectangle",
 }
 
-FONT_UI = '"IBM Plex Sans", "Noto Sans TC", "Microsoft JhengHei", "PingFang TC", sans-serif'
-FONT_MONO = '"IBM Plex Mono", "Cascadia Mono", "Consolas", monospace'
+FONT_UI = '"Microsoft JhengHei UI", "Microsoft JhengHei", "Noto Sans TC", "PingFang TC", sans-serif'
+FONT_MONO = '"Consolas", "Cascadia Mono", "Microsoft JhengHei UI", monospace'
 
 RAIL_W = 56
 TOPBAR_H = 52
@@ -58,6 +58,15 @@ PAD_PANEL = 16
 R_SM = 4
 R_MD = 6
 R_LG = 10
+
+
+def install_application_font(app) -> None:
+    from PySide6.QtGui import QFont
+
+    font = QFont("Microsoft JhengHei UI")
+    font.setStyleHint(QFont.StyleHint.SansSerif)
+    font.setPointSize(10)
+    app.setFont(font)
 
 
 def build_stylesheet() -> str:
