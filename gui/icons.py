@@ -83,6 +83,13 @@ def _draw(name: str, painter: QPainter, scale: float) -> None:
         painter.drawLine(pt(9, 10), pt(9, 20))
         painter.drawLine(pt(15, 10), pt(15, 20))
 
+    elif name == "bar_chart":
+        painter.drawLine(pt(4, 20), pt(20, 20))
+        painter.drawLine(pt(5, 20), pt(5, 5))
+        painter.drawRoundedRect(rect(8, 12, 2.8, 6), 0.8 * s, 0.8 * s)
+        painter.drawRoundedRect(rect(12, 8, 2.8, 10), 0.8 * s, 0.8 * s)
+        painter.drawRoundedRect(rect(16, 4, 2.8, 14), 0.8 * s, 0.8 * s)
+
     elif name == "gear":
         painter.drawEllipse(pt(12, 12), 3 * s, 3 * s)
         for dx, dy in ((0, -1), (0, 1), (-1, 0), (1, 0)):

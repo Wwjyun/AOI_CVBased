@@ -7,13 +7,14 @@ from gui import icons
 from gui.theme import COLORS, RAIL_W
 
 # ============================================================
-# AOI Console — left navigation rail
+# AOI Console left navigation rail
 # ============================================================
 
 NAV_ITEMS = [
-    ("run", "play", "檢測執行"),
+    ("run", "play", "執行檢測"),
     ("designer", "designer", "Recipe 設計"),
     ("results", "table", "檢測結果"),
+    ("batch_dashboard", "bar_chart", "批量數據圖表"),
 ]
 
 
@@ -31,7 +32,7 @@ class NavRail(QWidget):
         layout.setSpacing(6)
         layout.setAlignment(Qt.AlignmentFlag.AlignHCenter)
 
-        logo = QLabel("A·I")
+        logo = QLabel("AOI")
         logo.setObjectName("railLogo")
         logo.setFixedSize(34, 34)
         logo.setAlignment(Qt.AlignmentFlag.AlignCenter)

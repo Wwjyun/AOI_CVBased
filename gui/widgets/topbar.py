@@ -7,16 +7,17 @@ from gui.theme import COLORS, TOPBAR_H
 from gui.widgets.common import Chip, ProgressBar, Segmented
 
 # ============================================================
-# AOI Console — top bar (title / chips / progress / mode switch)
+# AOI Console top bar
 # ============================================================
 
 SCREEN_TITLES = {
-    "run": "檢測執行",
+    "run": "執行檢測",
     "designer": "Recipe 設計",
     "results": "檢測結果",
+    "batch_dashboard": "批量數據圖表",
 }
 
-MODE_OPTIONS = [("op", "操作員 OP"), ("eng", "工程師")]
+MODE_OPTIONS = [("op", "OP"), ("eng", "工程")]
 
 
 class TopBar(QWidget):
@@ -42,7 +43,7 @@ class TopBar(QWidget):
         divider.setFixedHeight(20)
         layout.addWidget(divider)
 
-        self.image_chip = Chip("image", "影像")
+        self.image_chip = Chip("image", "圖片")
         self.image_chip.clicked.connect(self.image_chip_clicked.emit)
         layout.addWidget(self.image_chip)
 

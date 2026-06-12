@@ -556,6 +556,7 @@ output:
 - [x] 2026-06-12 GUI run-page Pattern Match overlay uses match_bbox status frames for each matched unit
 - [x] 2026-06-12 GUI run-page image viewer zoom/fit buttons restored with visible dark-toolbar icons
 - [x] 2026-06-12 GUI batch folder inspection panel and batch data summary wired through OOP batch processor
+- [x] 2026-06-12 GUI left-nav Batch Data Dashboard with OOP chart statistics model
 - [ ] debug image export per detector
 - [x] editable recipe saving from GUI
 - [ ] validation dataset

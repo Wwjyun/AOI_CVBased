@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 
 from core.recipe_manager import RecipeError, RecipeManager
 from gui import theme
+from gui.screens.batch_dashboard_screen import BatchDashboardScreen
 from gui.screens.designer_screen import DesignerScreen
 from gui.screens.results_screen import ResultsScreen, flatten_defects, flatten_viewer_overlays
 from gui.screens.run_screen import RunScreen
@@ -35,7 +36,7 @@ from gui.workers import BatchInspectionWorker, ImagePreviewWorker, InspectionWor
 # AOI Console — main window shell (rail + topbar + screens + status bar)
 # ============================================================
 
-SCREEN_INDEX = {"run": 0, "designer": 1, "results": 2}
+SCREEN_INDEX = {"run": 0, "designer": 1, "results": 2, "batch_dashboard": 3}
 HISTORY_LIMIT = 6
 
 OUTPUT_TOGGLE_LABELS = {
@@ -148,11 +149,13 @@ class MainWindow(QMainWindow):
         self.run_screen = RunScreen()
         self.designer_screen = DesignerScreen()
         self.results_screen = ResultsScreen()
+        self.batch_dashboard_screen = BatchDashboardScreen()
 
         self.stack = QStackedWidget()
         self.stack.addWidget(self.run_screen)
         self.stack.addWidget(self.designer_screen)
         self.stack.addWidget(self.results_screen)
+        self.stack.addWidget(self.batch_dashboard_screen)
 
         content_wrap = QWidget()
         content_layout = QVBoxLayout(content_wrap)
@@ -247,6 +250,7 @@ class MainWindow(QMainWindow):
         self.results_screen.defect_selected.connect(self._on_defect_selected)
         self.results_screen.view_requested.connect(self._on_view_defect)
         self.results_screen.go_to_run_requested.connect(lambda: self._set_screen("run"))
+        self.batch_dashboard_screen.go_to_run_requested.connect(lambda: self._set_screen("run"))
 
     # ------------------------------------------------------------------
     # screen / mode switching
@@ -309,6 +313,7 @@ class MainWindow(QMainWindow):
         self.batch_result = None
         self.run_screen.set_batch_folder(str(self.batch_dir))
         self.run_screen.set_batch_result(None)
+        self.batch_dashboard_screen.set_batch_result(None)
         self.run_screen.set_batch_progress(0, "")
         self._update_batch_ready()
 
@@ -360,6 +365,7 @@ class MainWindow(QMainWindow):
     def _on_batch_finished(self, result: dict) -> None:
         self.batch_result = result
         self.run_screen.set_batch_result(result)
+        self.batch_dashboard_screen.set_batch_result(result)
         summary = result.get("summary", {})
         message = (
             f"Batch complete: total {summary.get('total', 0)}, "
