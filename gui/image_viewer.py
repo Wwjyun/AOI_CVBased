@@ -169,6 +169,13 @@ class ImageViewer(QWidget):
         self.zoom_out_btn = IconButton("zoom_out", "縮小", dark=True, size=16)
         self.zoom_in_btn = IconButton("zoom_in", "放大", dark=True, size=16)
         self.fit_btn = IconButton("fit", "符合視窗", dark=True, size=16)
+        viewer_tool_style = (
+            "QToolButton { background: rgba(255,255,255,0.08); border: none; border-radius: 4px; }"
+            "QToolButton:hover { background: rgba(255,255,255,0.16); }"
+            "QToolButton:pressed { background: rgba(255,255,255,0.22); }"
+        )
+        for button in (self.zoom_out_btn, self.zoom_in_btn, self.fit_btn):
+            button.setStyleSheet(viewer_tool_style)
         self.zoom_out_btn.clicked.connect(lambda: self._zoom_by(1 / 1.25))
         self.zoom_in_btn.clicked.connect(lambda: self._zoom_by(1.25))
         self.fit_btn.clicked.connect(self.fit_to_view)

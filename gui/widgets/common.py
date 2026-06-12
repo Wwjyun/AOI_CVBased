@@ -156,8 +156,8 @@ class IconButton(QToolButton):
         self._refresh_icon()
 
     def _refresh_icon(self) -> None:
-        color = "rgba(255,255,255,0.75)" if self._dark else COLORS["text_2"]
-        self.setIcon(icons.icon(self._icon_name, size=self._size, color=color if self._dark else COLORS["text_2"]))
+        color = "#dfe7ea" if self._dark else COLORS["text_2"]
+        self.setIcon(icons.icon(self._icon_name, size=self._size, color=color))
         self.setIconSize(self.iconSize().__class__(self._size, self._size))
 
 

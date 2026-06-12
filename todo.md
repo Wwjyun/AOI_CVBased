@@ -554,6 +554,7 @@ output:
 - [x] 2026-06-12 GUI tile preview QFont point-size warning fixed, app font stabilized, and preview matching bounded
 - [x] 2026-06-12 Pattern Match preview crash fixed by painting preview pixmap without QLabel resize recursion
 - [x] 2026-06-12 GUI run-page Pattern Match overlay uses match_bbox status frames for each matched unit
+- [x] 2026-06-12 GUI run-page image viewer zoom/fit buttons restored with visible dark-toolbar icons
 - [ ] debug image export per detector
 - [x] editable recipe saving from GUI
 - [ ] validation dataset
