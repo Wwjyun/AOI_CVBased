@@ -3,6 +3,9 @@ product_id: "PRODUCT_A"
 machine_id: "AOI_01"
 version: "0.1.0"
 
+assets:
+  template_picture: ""
+
 tile:
   mode: "pattern_match"
   pattern_match:

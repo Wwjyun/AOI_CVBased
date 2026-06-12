@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.detector_manager import DetectorManager
+from core.recipe_builder import RecipeTemplatePathSync
 from gui import icons
 from gui.detector_labels import detector_zh_name
 from gui.theme import COLORS, R_MD
@@ -576,7 +577,7 @@ class DesignerScreen(QWidget):
 
     def build_recipe(self) -> dict:
         detectors = self._selected_detectors()
-        return {
+        recipe = {
             "recipe_name": self.recipe_name_edit.text() or "PRODUCT_A_PATTERN_MATCH_000_AOI_01",
             "product_id": self.product_id_edit.text() or "PRODUCT_A",
             "machine_id": self.machine_id_edit.text() or "AOI_01",
@@ -595,6 +596,7 @@ class DesignerScreen(QWidget):
                 "save_json": True,
             },
         }
+        return RecipeTemplatePathSync(self.template_path_edit.text()).apply(recipe)
 
     def _emit_preview(self) -> None:
         self.preview_requested.emit(self.build_tile_config())
