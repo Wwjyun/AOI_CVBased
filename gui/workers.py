@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 
 from core.image_loader import ImageLoader
+from core.batch_processor import BatchInspectionProcessor
 from core.pipeline import AOIPipeline
 from core.tiler import create_tiler
 
@@ -67,6 +68,45 @@ class InspectionWorker(QObject):
                 output_overrides=self.output_overrides,
             )
             result = pipeline.run(self.image_path)
+        except Exception as exc:
+            self.failed.emit(str(exc))
+            return
+
+        self.finished.emit(result)
+
+
+class BatchInspectionWorker(QObject):
+    finished = Signal(dict)
+    failed = Signal(str)
+    progress = Signal(int, str)
+
+    def __init__(
+        self,
+        input_dir: Path,
+        recipe_path: Path,
+        output_dir: Path,
+        output_overrides: dict | None = None,
+        recursive: bool = False,
+    ):
+        super().__init__()
+        self.input_dir = Path(input_dir)
+        self.recipe_path = Path(recipe_path)
+        self.output_dir = Path(output_dir)
+        self.output_overrides = output_overrides
+        self.recursive = recursive
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            processor = BatchInspectionProcessor(
+                input_dir=self.input_dir,
+                recipe_path=self.recipe_path,
+                output_dir=self.output_dir,
+                output_overrides=self.output_overrides,
+                recursive=self.recursive,
+                progress_callback=self.progress.emit,
+            )
+            result = processor.run()
         except Exception as exc:
             self.failed.emit(str(exc))
             return

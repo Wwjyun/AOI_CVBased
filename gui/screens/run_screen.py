@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QCheckBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -307,6 +308,159 @@ class RunControlPanel(Panel):
         self._result_card.setVisible(False)
 
 
+class BatchFolderPanel(Panel):
+    choose_folder_requested = Signal()
+    start_batch_requested = Signal()
+
+    def __init__(self, parent=None):
+        super().__init__(title="Batch Folder", parent=parent)
+
+        self.folder_label = QLabel("No folder selected")
+        self.folder_label.setProperty("mono", "true")
+        self.folder_label.setWordWrap(True)
+        self.folder_label.setStyleSheet(f"color: {COLORS['text_3']}; font-size: 11px;")
+        self.add_widget(self.folder_label)
+
+        button_row = QWidget()
+        button_layout = QHBoxLayout(button_row)
+        button_layout.setContentsMargins(0, 0, 0, 0)
+        button_layout.setSpacing(8)
+
+        self.choose_button = QPushButton("Folder")
+        self.choose_button.setProperty("variant", "secondary")
+        self.choose_button.setProperty("size", "sm")
+        self.choose_button.setIcon(icons.icon("folder", size=14, color=COLORS["text_2"]))
+        self.choose_button.clicked.connect(self.choose_folder_requested.emit)
+        button_layout.addWidget(self.choose_button)
+
+        self.recursive_check = QCheckBox("Recursive")
+        self.recursive_check.setStyleSheet(f"color: {COLORS['text_2']}; font-size: 12px;")
+        button_layout.addWidget(self.recursive_check)
+        button_layout.addStretch(1)
+        self.add_widget(button_row)
+
+        self.start_button = QPushButton("Start Batch")
+        self.start_button.setProperty("variant", "primary")
+        self.start_button.setProperty("size", "lg")
+        self.start_button.setIcon(icons.icon("play", size=17, color="#ffffff"))
+        self.start_button.setEnabled(False)
+        self.start_button.clicked.connect(self.start_batch_requested.emit)
+        self.add_widget(self.start_button)
+
+        progress_row = QWidget()
+        progress_layout = QHBoxLayout(progress_row)
+        progress_layout.setContentsMargins(0, 0, 0, 0)
+        progress_layout.setSpacing(10)
+        self.progress_bar = ProgressBar()
+        progress_layout.addWidget(self.progress_bar, 1)
+        self.progress_pct_label = QLabel("0%")
+        self.progress_pct_label.setProperty("mono", "true")
+        self.progress_pct_label.setFixedWidth(38)
+        self.progress_pct_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        progress_layout.addWidget(self.progress_pct_label)
+        self.add_widget(progress_row)
+
+        self.message_label = QLabel("")
+        self.message_label.setProperty("mono", "true")
+        self.message_label.setWordWrap(True)
+        self.message_label.setStyleSheet(f"color: {COLORS['text_2']}; font-size: 11px;")
+        self.add_widget(self.message_label)
+
+    def set_folder(self, folder: str | None) -> None:
+        self.folder_label.setText(folder or "No folder selected")
+        self.folder_label.setStyleSheet(
+            f"color: {COLORS['text_2'] if folder else COLORS['text_3']}; font-size: 11px;"
+        )
+
+    def set_ready(self, ready: bool, running: bool) -> None:
+        self.choose_button.setEnabled(not running)
+        self.recursive_check.setEnabled(not running)
+        self.start_button.setEnabled(ready and not running)
+        self.start_button.setText("Batch Running" if running else "Start Batch")
+
+    def set_progress(self, pct: int, message: str) -> None:
+        pct = max(0, min(100, int(pct)))
+        self.progress_bar.setValue(pct)
+        self.progress_pct_label.setText(f"{pct}%")
+        self.message_label.setText(message)
+
+    def recursive(self) -> bool:
+        return self.recursive_check.isChecked()
+
+
+class BatchDataPanel(Panel):
+    def __init__(self, parent=None):
+        super().__init__(title="Batch Data", flush=True, parent=parent)
+
+        stats = QWidget()
+        stats_layout = QHBoxLayout(stats)
+        stats_layout.setContentsMargins(12, 10, 12, 10)
+        stats_layout.setSpacing(6)
+        self._stat_labels: dict[str, QLabel] = {}
+        for key, label in (("total", "Total"), ("pass", "PASS"), ("ng", "NG"), ("error", "ERR")):
+            cell = QWidget()
+            cell_layout = QVBoxLayout(cell)
+            cell_layout.setContentsMargins(0, 0, 0, 0)
+            cell_layout.setSpacing(2)
+            value_label = QLabel("0")
+            value_label.setProperty("mono", "true")
+            value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            value_label.setStyleSheet("font-size: 15px; font-weight: 700;")
+            name_label = QLabel(label)
+            name_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+            name_label.setStyleSheet(f"color: {COLORS['text_3']}; font-size: 10px;")
+            cell_layout.addWidget(value_label)
+            cell_layout.addWidget(name_label)
+            stats_layout.addWidget(cell, 1)
+            self._stat_labels[key] = value_label
+        self.add_widget(stats)
+
+        self.output_label = QLabel("")
+        self.output_label.setProperty("mono", "true")
+        self.output_label.setWordWrap(True)
+        self.output_label.setStyleSheet(f"color: {COLORS['text_3']}; font-size: 10px; padding: 0 12px 8px;")
+        self.add_widget(self.output_label)
+
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["Image", "Result", "Def", "NG"])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setShowGrid(False)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setMinimumHeight(170)
+        self.add_widget(self.table, 1)
+
+    def set_batch_result(self, result: dict | None) -> None:
+        if result is None:
+            summary = {}
+            items = []
+            output_dir = ""
+        else:
+            summary = result.get("summary", {})
+            items = result.get("items", [])
+            output_dir = result.get("output_dir", "")
+
+        for key in ("total", "pass", "ng", "error"):
+            self._stat_labels[key].setText(str(summary.get(key, 0)))
+        self.output_label.setText(output_dir)
+
+        self.table.setRowCount(len(items))
+        for row, item in enumerate(items):
+            name_item = QTableWidgetItem(str(item.get("image_name", "")))
+            name_item.setToolTip(str(item.get("image_path", "")))
+            result_item = QTableWidgetItem(str(item.get("final_result", "")))
+            defects_item = QTableWidgetItem(str(item.get("defect_count", 0)))
+            ng_item = QTableWidgetItem(str(item.get("ng_count", 0)))
+            for table_item in (name_item, result_item, defects_item, ng_item):
+                table_item.setFlags(table_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+            self.table.setItem(row, 0, name_item)
+            self.table.setItem(row, 1, result_item)
+            self.table.setItem(row, 2, defects_item)
+            self.table.setItem(row, 3, ng_item)
+        self.table.resizeColumnsToContents()
+        self.table.horizontalHeader().setStretchLastSection(True)
+
+
 class OpModePanel(QWidget):
     start_requested = Signal()
 
@@ -411,6 +565,8 @@ class RunScreen(QWidget):
     start_requested = Signal()
     open_recipe_requested = Signal()
     view_results_requested = Signal()
+    choose_batch_folder_requested = Signal()
+    start_batch_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -441,10 +597,14 @@ class RunScreen(QWidget):
 
         self.op_panel = OpModePanel()
         self.run_control_panel = RunControlPanel()
+        self.batch_folder_panel = BatchFolderPanel()
+        self.batch_data_panel = BatchDataPanel()
         self.recipe_info_panel = RecipeInfoPanel()
 
         self._sidebar_layout.addWidget(self.op_panel)
         self._sidebar_layout.addWidget(self.run_control_panel)
+        self._sidebar_layout.addWidget(self.batch_folder_panel)
+        self._sidebar_layout.addWidget(self.batch_data_panel)
         self._sidebar_layout.addWidget(self.recipe_info_panel)
         self._sidebar_layout.addStretch(1)
 
@@ -455,6 +615,8 @@ class RunScreen(QWidget):
         self.op_panel.start_requested.connect(self.start_requested.emit)
         self.run_control_panel.view_results_requested.connect(self.view_results_requested.emit)
         self.recipe_info_panel.open_recipe_requested.connect(self.open_recipe_requested.emit)
+        self.batch_folder_panel.choose_folder_requested.connect(self.choose_batch_folder_requested.emit)
+        self.batch_folder_panel.start_batch_requested.connect(self.start_batch_requested.emit)
 
         self.set_mode("eng")
 
@@ -462,4 +624,21 @@ class RunScreen(QWidget):
         is_op = mode == "op"
         self.op_panel.setVisible(is_op)
         self.run_control_panel.setVisible(not is_op)
+        self.batch_folder_panel.setVisible(not is_op)
+        self.batch_data_panel.setVisible(not is_op)
         self.recipe_info_panel.setVisible(not is_op)
+
+    def set_batch_folder(self, folder: str | None) -> None:
+        self.batch_folder_panel.set_folder(folder)
+
+    def set_batch_ready(self, ready: bool, running: bool) -> None:
+        self.batch_folder_panel.set_ready(ready, running)
+
+    def set_batch_progress(self, pct: int, message: str) -> None:
+        self.batch_folder_panel.set_progress(pct, message)
+
+    def set_batch_result(self, result: dict | None) -> None:
+        self.batch_data_panel.set_batch_result(result)
+
+    def batch_recursive(self) -> bool:
+        return self.batch_folder_panel.recursive()

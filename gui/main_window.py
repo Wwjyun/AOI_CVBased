@@ -29,7 +29,7 @@ from gui.widgets.common import Toggle
 from gui.widgets.drawer import Drawer
 from gui.widgets.rail import NavRail
 from gui.widgets.topbar import TopBar
-from gui.workers import ImagePreviewWorker, InspectionWorker, TilePreviewWorker
+from gui.workers import BatchInspectionWorker, ImagePreviewWorker, InspectionWorker, TilePreviewWorker
 
 # ============================================================
 # AOI Console — main window shell (rail + topbar + screens + status bar)
@@ -90,16 +90,22 @@ class MainWindow(QMainWindow):
         self.output_dir = "outputs"
         self.output_opts = {"save_overlay": True, "save_ng_tiles": True, "save_csv": True, "save_json": True}
         self.history: list[dict] = []
+        self.batch_dir: Path | None = None
+        self.batch_running = False
+        self.batch_result: dict | None = None
 
         self._defects: list[dict] = []
         self._current_image = None
         self._run_started_at: datetime.datetime | None = None
+        self._batch_started_at: datetime.datetime | None = None
 
         self._preview_thread: QThread | None = None
         self._preview_worker: ImagePreviewWorker | None = None
         self._preview_updates_current_image = False
         self._inspection_thread: QThread | None = None
         self._inspection_worker: InspectionWorker | None = None
+        self._batch_thread: QThread | None = None
+        self._batch_worker: BatchInspectionWorker | None = None
         self._tile_preview_thread: QThread | None = None
         self._tile_preview_worker: TilePreviewWorker | None = None
 
@@ -232,6 +238,8 @@ class MainWindow(QMainWindow):
         self.run_screen.view_results_requested.connect(lambda: self._set_screen("results"))
         self.run_screen.image_viewer.defect_clicked.connect(self._on_defect_selected)
         self.run_screen.image_viewer.overlay_toggled.connect(self._on_overlay_toggled)
+        self.run_screen.choose_batch_folder_requested.connect(self._choose_batch_folder)
+        self.run_screen.start_batch_requested.connect(self._run_batch_inspection)
 
         self.designer_screen.preview_requested.connect(self._preview_contour_tiles)
         self.designer_screen.recipe_saved.connect(self._on_designed_recipe_saved)
@@ -287,6 +295,89 @@ class MainWindow(QMainWindow):
         if path:
             self.output_dir_edit.setText(path)
             self.output_dir = path
+
+    # ------------------------------------------------------------------
+    # batch inspection
+    # ------------------------------------------------------------------
+    def _choose_batch_folder(self) -> None:
+        if self.batch_running:
+            return
+        path = QFileDialog.getExistingDirectory(self, "選擇批量圖片資料夾", str(self.batch_dir or Path.cwd()))
+        if not path:
+            return
+        self.batch_dir = Path(path)
+        self.batch_result = None
+        self.run_screen.set_batch_folder(str(self.batch_dir))
+        self.run_screen.set_batch_result(None)
+        self.run_screen.set_batch_progress(0, "")
+        self._update_batch_ready()
+
+    def _update_batch_ready(self) -> None:
+        ready = self.batch_dir is not None and self.recipe_path is not None and not self.batch_running
+        self.run_screen.set_batch_ready(ready, self.batch_running)
+
+    def _run_batch_inspection(self) -> None:
+        if not self.batch_dir:
+            QMessageBox.warning(self, "批量檢測", "請先選擇批量圖片資料夾。")
+            return
+        if not self.recipe_path:
+            QMessageBox.warning(self, "批量檢測", "請先載入 Recipe。")
+            return
+        if self._batch_thread and self._batch_thread.isRunning():
+            QMessageBox.information(self, "批量檢測", "批量檢測執行中，請稍候。")
+            return
+
+        self.batch_running = True
+        self._batch_started_at = datetime.datetime.now()
+        self._update_batch_ready()
+        self.run_screen.set_batch_progress(0, "Batch inspection starting")
+        self.statusBar().showMessage("批量檢測執行中...")
+
+        self._batch_thread = QThread(self)
+        self._batch_worker = BatchInspectionWorker(
+            input_dir=self.batch_dir,
+            recipe_path=self.recipe_path,
+            output_dir=Path(self.output_dir or "outputs"),
+            output_overrides=dict(self.output_opts),
+            recursive=self.run_screen.batch_recursive(),
+        )
+        self._batch_worker.moveToThread(self._batch_thread)
+        self._batch_thread.started.connect(self._batch_worker.run)
+        self._batch_worker.progress.connect(self._on_batch_progress)
+        self._batch_worker.finished.connect(self._on_batch_finished)
+        self._batch_worker.failed.connect(self._on_batch_failed)
+        self._batch_worker.finished.connect(self._batch_thread.quit)
+        self._batch_worker.failed.connect(self._batch_thread.quit)
+        self._batch_thread.finished.connect(self._batch_worker.deleteLater)
+        self._batch_thread.finished.connect(self._on_batch_thread_finished)
+        self._batch_thread.start()
+
+    def _on_batch_progress(self, percent: int, message: str) -> None:
+        percent = max(0, min(100, int(percent)))
+        self.run_screen.set_batch_progress(percent, message)
+        self.statusBar().showMessage(f"{message} ({percent}%)")
+
+    def _on_batch_finished(self, result: dict) -> None:
+        self.batch_result = result
+        self.run_screen.set_batch_result(result)
+        summary = result.get("summary", {})
+        message = (
+            f"Batch complete: total {summary.get('total', 0)}, "
+            f"PASS {summary.get('pass', 0)}, NG {summary.get('ng', 0)}, ERR {summary.get('error', 0)}"
+        )
+        self.run_screen.set_batch_progress(100, message)
+        self.statusBar().showMessage(message)
+
+    def _on_batch_failed(self, message: str) -> None:
+        QMessageBox.critical(self, "批量檢測", message)
+        self.run_screen.set_batch_progress(0, "Batch inspection failed")
+        self.statusBar().showMessage("批量檢測失敗")
+
+    def _on_batch_thread_finished(self) -> None:
+        self.batch_running = False
+        self._batch_thread = None
+        self._batch_worker = None
+        self._update_batch_ready()
 
     # ------------------------------------------------------------------
     # image loading
@@ -385,6 +476,7 @@ class MainWindow(QMainWindow):
         self.run_screen.recipe_info_panel.set_recipe(recipe)
         self.statusBar().showMessage(f"Recipe 已載入：{path}")
         self._update_run_ready()
+        self._update_batch_ready()
 
     def _on_designed_recipe_saved(self, path: Path) -> None:
         self._load_recipe(path)
@@ -404,6 +496,7 @@ class MainWindow(QMainWindow):
         ready = has_image and has_recipe
         self.run_screen.run_control_panel.set_ready(ready, has_image, has_recipe, False)
         self.run_screen.op_panel.set_state(ready, False, 0, "", self.result)
+        self._update_batch_ready()
 
     def _run_inspection(self) -> None:
         if not self.image_path:
@@ -562,6 +655,10 @@ class MainWindow(QMainWindow):
             return
         if self._tile_preview_thread and self._tile_preview_thread.isRunning():
             QMessageBox.information(self, "背景作業", "切圖預覽仍在執行中，請等待完成後再關閉。")
+            event.ignore()
+            return
+        if self._batch_thread and self._batch_thread.isRunning():
+            QMessageBox.information(self, "背景作業", "批量檢測仍在執行中，請等待完成後再關閉。")
             event.ignore()
             return
         super().closeEvent(event)
