@@ -552,6 +552,7 @@ output:
 - [x] 2026-06-11 GUI output toggles wired to reporter `save_*` options and validated with no-output pipeline smoke
 - [x] OP mode
 - [x] 2026-06-12 GUI tile preview QFont point-size warning fixed, app font stabilized, and preview matching bounded
+- [x] 2026-06-12 Pattern Match preview crash fixed by painting preview pixmap without QLabel resize recursion
 - [ ] debug image export per detector
 - [x] editable recipe saving from GUI
 - [ ] validation dataset

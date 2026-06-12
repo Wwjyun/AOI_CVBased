@@ -75,7 +75,7 @@ class InspectionWorker(QObject):
 
 
 class TilePreviewWorker(QObject):
-    finished = Signal(object, int, dict)
+    finished = Signal(bytes, int, int, int, int, dict)
     failed = Signal(str)
     progress = Signal(int, str)
     MAX_PREVIEW_SIDE = 2200
@@ -99,14 +99,10 @@ class TilePreviewWorker(QObject):
             preview = self._resize_preview(preview)
             rgb = cv2.cvtColor(preview, cv2.COLOR_BGR2RGB)
             self.progress.emit(80, "Converting tile preview")
+            rgb = np.ascontiguousarray(rgb)
             height, width, channels = rgb.shape
-            qimage = QImage(
-                rgb.data,
-                width,
-                height,
-                channels * width,
-                QImage.Format.Format_RGB888,
-            ).copy()
+            image_bytes = rgb.tobytes()
+            bytes_per_line = channels * width
             shape_counts: dict[str, int] = {}
             best_score = None
             for tile in tiles:
@@ -123,7 +119,7 @@ class TilePreviewWorker(QObject):
             return
 
         self.progress.emit(100, "Tile preview ready")
-        self.finished.emit(qimage, len(tiles), shape_counts)
+        self.finished.emit(image_bytes, width, height, bytes_per_line, len(tiles), shape_counts)
 
     @staticmethod
     def _draw_tiles(image, tiles):

@@ -520,16 +520,21 @@ class MainWindow(QMainWindow):
         self._tile_preview_worker.progress.connect(self._on_status_progress)
         self._tile_preview_worker.finished.connect(self._on_tile_preview_finished)
         self._tile_preview_worker.failed.connect(self._on_tile_preview_failed)
-        self._tile_preview_worker.finished.connect(self._tile_preview_worker.deleteLater)
-        self._tile_preview_worker.failed.connect(self._tile_preview_worker.deleteLater)
         self._tile_preview_worker.finished.connect(self._tile_preview_thread.quit)
         self._tile_preview_worker.failed.connect(self._tile_preview_thread.quit)
         self._tile_preview_thread.finished.connect(self._on_tile_preview_thread_finished)
-        self._tile_preview_thread.finished.connect(self._tile_preview_thread.deleteLater)
         self._tile_preview_thread.start()
 
-    def _on_tile_preview_finished(self, image, tile_count: int, shape_counts: dict) -> None:
-        self.designer_screen.show_preview_result(image, tile_count, shape_counts)
+    def _on_tile_preview_finished(
+        self,
+        image_bytes: bytes,
+        width: int,
+        height: int,
+        bytes_per_line: int,
+        tile_count: int,
+        shape_counts: dict,
+    ) -> None:
+        self.designer_screen.show_preview_result(image_bytes, width, height, bytes_per_line, tile_count, shape_counts)
         self.statusBar().showMessage(f"切圖預覽完成：{tile_count} 張")
 
     def _on_tile_preview_failed(self, message: str) -> None:

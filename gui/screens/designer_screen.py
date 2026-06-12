@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QImage, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
@@ -106,22 +106,38 @@ class TilePreviewLabel(QLabel):
     def set_image(self, image) -> None:
         self._pixmap = QPixmap.fromImage(image)
         self.setText("")
-        self._refresh()
+        self.update()
+
+    def set_rgb_bytes(self, image_bytes: bytes, width: int, height: int, bytes_per_line: int) -> None:
+        image = QImage(
+            image_bytes,
+            width,
+            height,
+            bytes_per_line,
+            QImage.Format.Format_RGB888,
+        ).copy()
+        self.set_image(image)
 
     def _refresh(self) -> None:
-        if self._pixmap is None:
-            return
-        self.setPixmap(
-            self._pixmap.scaled(
-                self.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
-                Qt.TransformationMode.SmoothTransformation,
-            )
-        )
+        self.update()
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
         self._refresh()
+
+    def paintEvent(self, event) -> None:
+        super().paintEvent(event)
+        if self._pixmap is None or self._pixmap.isNull():
+            return
+        scaled = self._pixmap.scaled(
+            self.size(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        x = (self.width() - scaled.width()) // 2
+        y = (self.height() - scaled.height()) // 2
+        painter = QPainter(self)
+        painter.drawPixmap(x, y, scaled)
 
 
 class DesignerScreen(QWidget):
@@ -309,8 +325,16 @@ class DesignerScreen(QWidget):
             self.preview_status.setText("切圖預覽執行中…")
             self.preview_status.setStyleSheet(f"color: {COLORS['text_3']}; font-size: 9pt;")
 
-    def show_preview_result(self, image, tile_count: int, shape_counts: dict) -> None:
-        self.preview_label.set_image(image)
+    def show_preview_result(
+        self,
+        image_bytes: bytes,
+        width: int,
+        height: int,
+        bytes_per_line: int,
+        tile_count: int,
+        shape_counts: dict,
+    ) -> None:
+        self.preview_label.set_rgb_bytes(image_bytes, width, height, bytes_per_line)
         score_text = ""
         best_score = shape_counts.get("best_score")
         if best_score is not None:
