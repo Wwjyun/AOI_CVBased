@@ -301,12 +301,7 @@ class PatternMatcher:
             raise ValueError("Pattern match template is larger than the input image.")
 
         result = cv2.matchTemplate(image_gray, template_gray, cv2.TM_CCOEFF_NORMED)
-        ys, xs = np.where(result >= self.config.match_threshold)
-        if len(xs) > self.config.max_candidates:
-            scores = result[ys, xs]
-            keep = np.argpartition(scores, -self.config.max_candidates)[-self.config.max_candidates :]
-            ys = ys[keep]
-            xs = xs[keep]
+        ys, xs = self._local_peak_points(result, template_width, template_height)
         candidates = [
             {
                 "x": int(x),
@@ -317,10 +312,23 @@ class PatternMatcher:
             }
             for x, y in zip(xs, ys)
         ]
-        candidates.sort(key=lambda item: item["score"], reverse=True)
+        candidates.sort(key=lambda item: (-item["score"], item["y"], item["x"]))
+        if self.config.max_candidates > 0:
+            candidates = candidates[: self.config.max_candidates]
         selected = self._nms(candidates)
         selected.sort(key=lambda item: (self._row_bucket(item["y"]), item["x"]))
         return selected
+
+    def _local_peak_points(self, result, template_width: int, template_height: int) -> tuple[np.ndarray, np.ndarray]:
+        threshold_mask = result >= self.config.match_threshold
+        if not np.any(threshold_mask):
+            return np.array([], dtype=np.int64), np.array([], dtype=np.int64)
+
+        kernel_width = max(3, min(template_width, result.shape[1]))
+        kernel_height = max(3, min(template_height, result.shape[0]))
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_width, kernel_height))
+        local_max = result == cv2.dilate(result, kernel)
+        return np.where(threshold_mask & local_max)
 
     def _nms(self, candidates: list[dict]) -> list[dict]:
         selected: list[dict] = []
