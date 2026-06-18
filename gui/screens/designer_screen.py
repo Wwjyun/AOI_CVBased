@@ -151,9 +151,9 @@ class DesignerScreen(QWidget):
         self.detector_definitions = DetectorManager().definitions()
         self._param_widgets: dict[str, dict[str, QWidget]] = {}
         self._enabled: dict[str, bool] = {detector_id: False for detector_id in self.detector_definitions}
-        self._enabled["000"] = True
+        self._enabled["401-1"] = True
         self._row_widgets: dict[str, dict] = {}
-        self._active_detector = "000"
+        self._active_detector = "401-1"
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -196,7 +196,7 @@ class DesignerScreen(QWidget):
         panel = Panel(title="Recipe 資訊")
         form = _form_grid()
 
-        self.recipe_name_edit = QLineEdit("PRODUCT_A_PATTERN_MATCH_000_AOI_01")
+        self.recipe_name_edit = QLineEdit("PRODUCT_A_CIRCLE_401_1_AOI_01")
         self.recipe_name_edit.setProperty("mono", "true")
         self.product_id_edit = QLineEdit("PRODUCT_A")
         self.product_id_edit.setProperty("mono", "true")
@@ -387,7 +387,7 @@ class DesignerScreen(QWidget):
 
         header_row = QHBoxLayout()
         header_row.setSpacing(8)
-        self.active_id_label = QLabel("000")
+        self.active_id_label = QLabel("401-1")
         self.active_id_label.setProperty("mono", "true")
         self.active_id_label.setStyleSheet("font-weight: 700; font-size: 14px;")
         self.active_zh_label = QLabel("")
@@ -410,7 +410,7 @@ class DesignerScreen(QWidget):
         body_layout.addWidget(params_scroll, 1)
 
         panel.add_widget(body, 1)
-        self._select_detector("000")
+        self._select_detector("401-1")
         return panel
 
     def _build_detector_row(self, detector_id: str) -> QWidget:
@@ -578,7 +578,7 @@ class DesignerScreen(QWidget):
     def build_recipe(self) -> dict:
         detectors = self._selected_detectors()
         recipe = {
-            "recipe_name": self.recipe_name_edit.text() or "PRODUCT_A_PATTERN_MATCH_000_AOI_01",
+            "recipe_name": self.recipe_name_edit.text() or "PRODUCT_A_CIRCLE_401_1_AOI_01",
             "product_id": self.product_id_edit.text() or "PRODUCT_A",
             "machine_id": self.machine_id_edit.text() or "AOI_01",
             "version": self.version_edit.text() or "0.1.0",
@@ -610,7 +610,7 @@ class DesignerScreen(QWidget):
         path, _ = QFileDialog.getSaveFileName(
             self,
             "儲存 Recipe",
-            f"recipes/{self.recipe_name_edit.text() or 'PRODUCT_A_PATTERN_MATCH_000_AOI_01'}.yaml",
+            f"recipes/{self.recipe_name_edit.text() or 'PRODUCT_A_CIRCLE_401_1_AOI_01'}.yaml",
             "YAML 檔案 (*.yaml *.yml)",
         )
         if not path:

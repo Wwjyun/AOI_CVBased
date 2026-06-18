@@ -560,6 +560,7 @@ output:
 - [x] 2026-06-12 Recipe designer saves template picture path into recipe assets, tiling config, and detector 777 params
 - [x] 2026-06-18 Detector401-1 adaptive mean circular contour NG detector and recipe
 - [x] 2026-06-18 Detector401-1 contour list alias and 100px inset ROI
+- [x] 2026-06-18 Removed legacy test detectors and recipes, leaving Detector401-1
 - [ ] debug image export per detector
 - [x] editable recipe saving from GUI
 - [ ] validation dataset

@@ -29,7 +29,7 @@ Recipe based AOI computer vision framework. The current MVP focuses on a command
 |   `-- reporter.py
 |-- detectors/
 |   |-- base_detector.py
-|   `-- detector_999.py
+|   `-- detector_401_1.py
 `-- outputs/
     |-- overlay/
     |-- ng_tiles/
@@ -94,20 +94,27 @@ tile:
 decision:
   mode: "all_detectors_must_pass"
   important_detectors:
-    - "999"
+    - "401-1"
   max_ng_count: 0
 
 detectors:
-  "999":
+  "401-1":
     enabled: true
-    display_name: "Dark / bright blob detector"
+    display_name: "401-1 adaptive circle contour detector"
     params:
-      threshold: 45
-      min_area: 20
-      max_area: 5000
-      blur_size: 3
+      threshold_method: "adaptive_mean"
+      max_value: 255
       invert: false
-      clahe_enabled: true
+      blur_size: 45
+      adaptive_block_size: 33
+      adaptive_c: -2.0
+      roi_inset_px: 100
+      contour_mode: "list"
+      min_area: 100
+      max_area: 1000
+      min_circularity: 0.70
+      min_fill_ratio: 0.55
+      max_fill_ratio: 1.20
 
 output:
   save_overlay: true
@@ -116,28 +123,30 @@ output:
   save_json: true
 ```
 
-## Detector 999
+## Detector 401-1
 
-`detector_999` is a threshold and contour based blob detector. It supports:
+`detector_401_1` is an adaptive mean threshold and circular contour NG detector. Finding a matching circle produces NG; finding none produces PASS. It supports:
 
-- `threshold`: binary threshold value.
-- `min_area`: minimum contour area.
-- `max_area`: maximum contour area.
-- `blur_size`: Gaussian blur kernel size. Use `0` or `1` to disable.
-- `invert`: use inverse binary threshold when `true`.
-- `clahe_enabled`: apply CLAHE before thresholding.
+- `blur_size`: Gaussian blur kernel size, default `45`.
+- `adaptive_block_size`: adaptive mean block size, default `33`.
+- `adaptive_c`: adaptive threshold C value, default `-2.0`.
+- `roi_inset_px`: pixels to inset from each edge before detection, default `100`.
+- `contour_mode`: `external`, `list` / `all`, or `tree`.
+- `min_area` / `max_area`: contour area range.
+- `min_circularity`: minimum circularity.
+- `min_fill_ratio` / `max_fill_ratio`: contour fill ratio range.
 
 Detector output follows the shared detector result format:
 
 ```python
 {
-    "detector_id": "999",
-    "display_name": "Dark / bright blob detector",
+    "detector_id": "401-1",
+    "display_name": "401-1 adaptive circle contour detector",
     "pass": False,
     "score": 0.92,
     "defects": [
         {
-            "type": "blob",
+            "type": "401_1_circle_detected_ng",
             "bbox_local": [x, y, w, h],
             "area": 120,
             "confidence": 0.92,
@@ -149,13 +158,9 @@ Detector output follows the shared detector result format:
 
 ## Available Detectors
 
-- `999`: threshold and contour based blob detector.
-- `102`: Canny and morphology based scratch / thin line detector.
-- `305`: cell based brightness and uniformity detector.
-- `777`: template matching detector for missing or excessive pattern counts.
-- `888`: local texture / blur detector using Laplacian variance and local standard deviation.
+- `401-1`: adaptive mean circular contour NG detector.
 
-The sample recipe includes all detector parameter blocks. Only `999` is enabled by default so the CLI example remains predictable before recipe tuning.
+The sample recipe enables `401-1` by default.
 
 ## Outputs
 
@@ -176,7 +181,7 @@ Implemented MVP scope:
 - Tiler
 - Base detector API
 - Detector manager
-- Detector 999
+- Detector 401-1
 - Recipe loader and validator
 - Result mapper
 - Aggregator
