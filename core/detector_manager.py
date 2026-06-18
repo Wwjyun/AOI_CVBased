@@ -6,6 +6,7 @@ from detectors.detector_000 import Detector000
 from detectors.detector_001 import Detector001
 from detectors.detector_102 import Detector102
 from detectors.detector_305 import Detector305
+from detectors.detector_401_1 import Detector401_1
 from detectors.detector_777 import Detector777
 from detectors.detector_888 import Detector888
 from detectors.detector_999 import Detector999
@@ -18,6 +19,7 @@ class DetectorManager:
             Detector001.detector_id: Detector001,
             Detector102.detector_id: Detector102,
             Detector305.detector_id: Detector305,
+            Detector401_1.detector_id: Detector401_1,
             Detector777.detector_id: Detector777,
             Detector888.detector_id: Detector888,
             Detector999.detector_id: Detector999,

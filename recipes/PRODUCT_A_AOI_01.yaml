@@ -17,6 +17,7 @@ decision:
     - "999"
     - "102"
     - "305"
+    - "401-1"
     - "777"
     - "888"
   max_ng_count: 0
@@ -80,6 +81,27 @@ detectors:
       percentile_low: 1
       percentile_high: 99
       cell_size: 128
+
+  "401-1":
+    enabled: false
+    display_name: "401-1 adaptive circle contour detector"
+    params:
+      threshold_method: "adaptive_mean"
+      max_value: 255
+      invert: false
+      blur_size: 45
+      adaptive_block_size: 33
+      adaptive_c: -2.0
+      contour_mode: "external"
+      morph_operation: "none"
+      morph_kernel: 3
+      morph_iterations: 1
+      process_scale: 1.0
+      min_area: 100
+      max_area: 1000
+      min_circularity: 0.70
+      min_fill_ratio: 0.55
+      max_fill_ratio: 1.20
 
   "777":
     enabled: false

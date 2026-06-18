@@ -558,6 +558,7 @@ output:
 - [x] 2026-06-12 GUI batch folder inspection panel and batch data summary wired through OOP batch processor
 - [x] 2026-06-12 GUI left-nav Batch Data Dashboard with OOP chart statistics model
 - [x] 2026-06-12 Recipe designer saves template picture path into recipe assets, tiling config, and detector 777 params
+- [x] 2026-06-18 Detector401-1 adaptive mean circular contour NG detector and recipe
 - [ ] debug image export per detector
 - [x] editable recipe saving from GUI
 - [ ] validation dataset
