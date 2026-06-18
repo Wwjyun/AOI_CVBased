@@ -563,6 +563,7 @@ output:
 - [x] 2026-06-18 Removed legacy test detectors and recipes, leaving Detector401-1
 - [x] 2026-06-18 Batch dashboard tile PASS/NG statistics and selected-image detail sidebar
 - [x] 2026-06-18 Pattern match tiler uses deterministic local-peak candidates to avoid random missed matches
+- [x] 2026-06-18 Reporter PNG output uses checked memory encoding and Python file writes to avoid silent batch write failures
 - [ ] debug image export per detector
 - [x] editable recipe saving from GUI
 - [ ] validation dataset

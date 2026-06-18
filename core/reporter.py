@@ -27,7 +27,7 @@ class Reporter:
 
         if self.output_config.get("save_overlay", True):
             overlay_path = self.overlay_dir / f"{base_name}_overlay.png"
-            cv2.imwrite(str(overlay_path), self._make_overlay(image, result))
+            self._write_png(overlay_path, self._make_overlay(image, result))
             outputs["overlay"] = str(overlay_path)
 
         if self.output_config.get("save_ng_tiles", True):
@@ -122,7 +122,22 @@ class Reporter:
             if tile_image is None:
                 continue
             path = self.ng_tiles_dir / f"{base_name}_{tile['tile_id']}.png"
-            cv2.imwrite(str(path), tile_image)
+            self._write_png(path, tile_image)
+
+    @staticmethod
+    def _write_png(path: Path, image) -> None:
+        if image is None or getattr(image, "size", 0) == 0:
+            raise ValueError(f"Cannot write empty PNG image: {path}")
+
+        ok, encoded = cv2.imencode(".png", image)
+        if not ok:
+            raise OSError(f"OpenCV failed to encode PNG image: {path}")
+
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            path.write_bytes(encoded.tobytes())
+        except OSError as exc:
+            raise OSError(f"Failed to write PNG image to {path}: {exc}") from exc
 
     @staticmethod
     def _write_csv(path: Path, result: dict) -> None:
