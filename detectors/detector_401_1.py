@@ -17,7 +17,8 @@ class Detector401_1(BaseDetector):
         "blur_size": 45,
         "adaptive_block_size": 33,
         "adaptive_c": -2.0,
-        "contour_mode": "external",
+        "roi_inset_px": 100,
+        "contour_mode": "list",
         "morph_operation": "none",
         "morph_kernel": 3,
         "morph_iterations": 1,
@@ -33,7 +34,8 @@ class Detector401_1(BaseDetector):
         return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image.copy()
 
     def detect(self, image) -> list[dict]:
-        binary, process_scale = self._make_binary(image)
+        roi, offset_x, offset_y = self._roi_image(image)
+        binary, process_scale = self._make_binary(roi)
         contours, _ = cv2.findContours(binary, self._contour_mode(), cv2.CHAIN_APPROX_SIMPLE)
         image_area = max(float(image.shape[0] * image.shape[1]), 1.0)
         defects = []
@@ -58,10 +60,10 @@ class Detector401_1(BaseDetector):
                 continue
 
             radius = float(radius_scaled * inv_scale)
-            cx = float(cx_scaled * inv_scale)
-            cy = float(cy_scaled * inv_scale)
-            x = max(0, int(round((cx_scaled - radius_scaled) * inv_scale)))
-            y = max(0, int(round((cy_scaled - radius_scaled) * inv_scale)))
+            cx = float(cx_scaled * inv_scale + offset_x)
+            cy = float(cy_scaled * inv_scale + offset_y)
+            x = max(0, int(round((cx_scaled - radius_scaled) * inv_scale + offset_x)))
+            y = max(0, int(round((cy_scaled - radius_scaled) * inv_scale + offset_y)))
             diameter = max(1, int(round(radius * 2.0)))
             confidence = min(1.0, area / image_area * 20.0)
 
@@ -79,6 +81,8 @@ class Detector401_1(BaseDetector):
                         "circularity": float(np.round(circularity, 4)),
                         "fill_ratio": float(np.round(fill_ratio, 4)),
                         "threshold_method": "adaptive_mean",
+                        "roi_inset_px": int(self.params.get("roi_inset_px", 100)),
+                        "roi_offset_local": [int(offset_x), int(offset_y)],
                         "blur_size": int(self.params.get("blur_size", 45)),
                         "adaptive_block_size": int(self.params.get("adaptive_block_size", 33)),
                         "adaptive_c": float(self.params.get("adaptive_c", -2.0)),
@@ -89,6 +93,17 @@ class Detector401_1(BaseDetector):
 
         defects.sort(key=lambda item: item["area"], reverse=True)
         return defects
+
+    def _roi_image(self, gray):
+        inset = max(0, int(self.params.get("roi_inset_px", 100)))
+        if inset <= 0:
+            return gray, 0, 0
+
+        height, width = gray.shape[:2]
+        if width <= inset * 2 or height <= inset * 2:
+            return gray, 0, 0
+
+        return gray[inset : height - inset, inset : width - inset], inset, inset
 
     def _make_binary(self, gray):
         process_scale = min(max(float(self.params.get("process_scale", 1.0)), 0.05), 1.0)
@@ -159,7 +174,7 @@ class Detector401_1(BaseDetector):
 
     def _contour_mode(self) -> int:
         mode = str(self.params.get("contour_mode", "external")).lower()
-        if mode == "all":
+        if mode in {"all", "list"}:
             return cv2.RETR_LIST
         if mode == "tree":
             return cv2.RETR_TREE

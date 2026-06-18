@@ -27,7 +27,8 @@ detectors:
       blur_size: 45
       adaptive_block_size: 33
       adaptive_c: -2.0
-      contour_mode: "external"
+      roi_inset_px: 100
+      contour_mode: "list"
       morph_operation: "none"
       morph_kernel: 3
       morph_iterations: 1
