@@ -10,11 +10,17 @@ class BatchDashboardModel:
     ng_count: int
     error_count: int
     defect_count: int
+    tile_count: int
+    pass_tile_count: int
+    ng_tile_count: int
     duration_sec: float
     output_dir: str
     pass_rate: float
     ng_rate: float
+    tile_pass_rate: float
+    tile_ng_rate: float
     avg_defects: float
+    avg_tiles: float
     result_distribution: list[tuple[str, int]]
     top_defect_images: list[dict]
     rows: list[dict]
@@ -34,7 +40,11 @@ class BatchDashboardBuilder:
         ng_count = int(summary.get("ng", self._count_result(rows, "NG")) or 0)
         error_count = int(summary.get("error", self._count_result(rows, "ERROR")) or 0)
         defect_count = int(summary.get("defects", sum(int(row.get("defect_count", 0) or 0) for row in rows)) or 0)
+        tile_count = int(summary.get("tiles", sum(int(row.get("tile_count", 0) or 0) for row in rows)) or 0)
+        ng_tile_count = int(summary.get("ng_tiles", sum(int(row.get("ng_count", 0) or 0) for row in rows)) or 0)
+        pass_tile_count = max(0, tile_count - ng_tile_count)
         duration_sec = float(self.batch_result.get("duration_sec", 0) or 0)
+        dashboard_rows = [self._enrich_row(row) for row in rows]
 
         return BatchDashboardModel(
             total=total,
@@ -42,18 +52,24 @@ class BatchDashboardBuilder:
             ng_count=ng_count,
             error_count=error_count,
             defect_count=defect_count,
+            tile_count=tile_count,
+            pass_tile_count=pass_tile_count,
+            ng_tile_count=ng_tile_count,
             duration_sec=duration_sec,
             output_dir=str(self.batch_result.get("output_dir", "")),
             pass_rate=self._rate(pass_count, total),
             ng_rate=self._rate(ng_count, total),
+            tile_pass_rate=self._rate(pass_tile_count, tile_count),
+            tile_ng_rate=self._rate(ng_tile_count, tile_count),
             avg_defects=round(defect_count / total, 2) if total else 0.0,
+            avg_tiles=round(tile_count / total, 2) if total else 0.0,
             result_distribution=[
                 ("PASS", pass_count),
                 ("NG", ng_count),
                 ("ERROR", error_count),
             ],
-            top_defect_images=self._top_defect_images(rows),
-            rows=rows,
+            top_defect_images=self._top_defect_images(dashboard_rows),
+            rows=dashboard_rows,
         )
 
     @staticmethod
@@ -74,3 +90,14 @@ class BatchDashboardBuilder:
             reverse=True,
         )
         return ranked[:limit]
+
+    @staticmethod
+    def _enrich_row(row: dict) -> dict:
+        enriched = dict(row)
+        tile_count = int(enriched.get("tile_count", 0) or 0)
+        ng_count = int(enriched.get("ng_count", 0) or 0)
+        pass_tile_count = max(0, tile_count - ng_count)
+        enriched["pass_tile_count"] = pass_tile_count
+        enriched["tile_pass_rate"] = BatchDashboardBuilder._rate(pass_tile_count, tile_count)
+        enriched["tile_ng_rate"] = BatchDashboardBuilder._rate(ng_count, tile_count)
+        return enriched

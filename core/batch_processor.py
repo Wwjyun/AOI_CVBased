@@ -20,6 +20,7 @@ class BatchImageResult:
     ng_count: int
     tile_count: int
     outputs: dict
+    detail: dict
     error: str = ""
 
     def to_dict(self) -> dict:
@@ -31,6 +32,7 @@ class BatchImageResult:
             "ng_count": self.ng_count,
             "tile_count": self.tile_count,
             "outputs": dict(self.outputs),
+            "detail": dict(self.detail),
             "error": self.error,
         }
 
@@ -84,6 +86,7 @@ class BatchInspectionProcessor:
                         ng_count=int(summary.get("ng_count", 0)),
                         tile_count=int(summary.get("tile_count", 0)),
                         outputs=result.get("outputs", {}),
+                        detail=result,
                     )
                 )
             except Exception as exc:
@@ -95,6 +98,7 @@ class BatchInspectionProcessor:
                         ng_count=0,
                         tile_count=0,
                         outputs={},
+                        detail={},
                         error=str(exc),
                     )
                 )
@@ -142,6 +146,8 @@ class BatchInspectionProcessor:
                 "ng": ng_count,
                 "error": error_count,
                 "defects": sum(int(row.get("defect_count", 0)) for row in rows),
+                "tiles": sum(int(row.get("tile_count", 0)) for row in rows),
+                "ng_tiles": sum(int(row.get("ng_count", 0)) for row in rows),
             },
             "items": rows,
         }

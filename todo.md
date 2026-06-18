@@ -561,6 +561,7 @@ output:
 - [x] 2026-06-18 Detector401-1 adaptive mean circular contour NG detector and recipe
 - [x] 2026-06-18 Detector401-1 contour list alias and 100px inset ROI
 - [x] 2026-06-18 Removed legacy test detectors and recipes, leaving Detector401-1
+- [x] 2026-06-18 Batch dashboard tile PASS/NG statistics and selected-image detail sidebar
 - [ ] debug image export per detector
 - [x] editable recipe saving from GUI
 - [ ] validation dataset
