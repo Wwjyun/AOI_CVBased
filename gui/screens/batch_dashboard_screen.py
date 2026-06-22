@@ -31,6 +31,16 @@ RESULT_COLORS = {
 }
 
 
+def _format_duration(value: object) -> str:
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return "-"
+    if seconds <= 0:
+        return "-"
+    return f"{seconds:.2f}s" if seconds < 10 else f"{seconds:.1f}s"
+
+
 class ResultDonutChart(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -218,9 +228,9 @@ class BatchDashboardScreen(QWidget):
         data_splitter.setChildrenCollapsible(False)
 
         table_panel = Panel(title="Batch Image Data", flush=True)
-        self.table = QTableWidget(0, 8)
+        self.table = QTableWidget(0, 9)
         self.table.setHorizontalHeaderLabels(
-            ["Image", "Result", "Tiles", "PASS Tiles", "NG Tiles", "Tile Pass", "Defects", "Error"]
+            ["Image", "Result", "Tiles", "PASS Tiles", "NG Tiles", "Tile Pass", "Defects", "Time", "Error"]
         )
         self.table.verticalHeader().setVisible(False)
         self.table.setShowGrid(False)
@@ -279,7 +289,7 @@ class BatchDashboardScreen(QWidget):
         self._render_model(self._model)
 
     def _render_model(self, model: BatchDashboardModel) -> None:
-        self.output_label.setText(model.output_dir)
+        self.output_label.setText(f"{model.output_dir}\nTotal time: {_format_duration(model.duration_sec)}")
         self.total_value.setText(str(model.total))
         self.pass_rate_value.setText(f"{model.pass_rate:.1f}%")
         self.tile_pass_rate_value.setText(f"{model.tile_pass_rate:.1f}%")
@@ -304,11 +314,12 @@ class BatchDashboardScreen(QWidget):
                 str(row.get("ng_count", 0)),
                 f"{float(row.get('tile_pass_rate', 0) or 0):.1f}%",
                 str(row.get("defect_count", 0)),
+                _format_duration(row.get("duration_sec")),
                 str(row.get("error", "")),
             ]
             for col, value in enumerate(values):
                 item = QTableWidgetItem(value)
-                if col in (2, 3, 4, 5, 6):
+                if col in (2, 3, 4, 5, 6, 7):
                     item.setTextAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
                 if col == 0:
                     item.setToolTip(str(row.get("image_path", "")))
@@ -337,9 +348,10 @@ class BatchDashboardScreen(QWidget):
 
         self.detail_title.setText(str(row.get("image_name", "-")))
         self.detail_summary.setText(
-            "Result {result} | Tiles {tiles} | PASS {pass_tiles} | NG {ng_tiles} | "
+            "Result {result} | Time {duration} | Tiles {tiles} | PASS {pass_tiles} | NG {ng_tiles} | "
             "Tile pass {tile_pass:.1f}% | Defects {defects}".format(
                 result=row.get("final_result", "-"),
+                duration=_format_duration(row.get("duration_sec")),
                 tiles=int(row.get("tile_count", 0) or 0),
                 pass_tiles=int(row.get("pass_tile_count", 0) or 0),
                 ng_tiles=int(row.get("ng_count", 0) or 0),

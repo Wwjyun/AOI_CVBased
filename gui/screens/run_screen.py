@@ -28,6 +28,16 @@ from gui.widgets.panel import Panel
 # ============================================================
 
 
+def _format_duration(value: object) -> str:
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return "-"
+    if seconds <= 0:
+        return "-"
+    return f"{seconds:.2f}s" if seconds < 10 else f"{seconds:.1f}s"
+
+
 class DetectorRow(QWidget):
     def __init__(self, detector_id: str, display_name: str, params: dict, enabled: bool, parent=None):
         super().__init__(parent)
@@ -421,8 +431,8 @@ class BatchDataPanel(Panel):
         self.output_label.setStyleSheet(f"color: {COLORS['text_3']}; font-size: 10px; padding: 0 12px 8px;")
         self.add_widget(self.output_label)
 
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["Image", "Result", "Def", "NG"])
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["Image", "Result", "Def", "NG", "Time"])
         self.table.verticalHeader().setVisible(False)
         self.table.setShowGrid(False)
         self.table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
@@ -442,7 +452,8 @@ class BatchDataPanel(Panel):
 
         for key in ("total", "pass", "ng", "error"):
             self._stat_labels[key].setText(str(summary.get(key, 0)))
-        self.output_label.setText(output_dir)
+        batch_duration = _format_duration(result.get("duration_sec") if result else None)
+        self.output_label.setText(f"{output_dir}\nTotal time: {batch_duration}" if output_dir else "")
 
         self.table.setRowCount(len(items))
         for row, item in enumerate(items):
@@ -451,12 +462,14 @@ class BatchDataPanel(Panel):
             result_item = QTableWidgetItem(str(item.get("final_result", "")))
             defects_item = QTableWidgetItem(str(item.get("defect_count", 0)))
             ng_item = QTableWidgetItem(str(item.get("ng_count", 0)))
-            for table_item in (name_item, result_item, defects_item, ng_item):
+            time_item = QTableWidgetItem(_format_duration(item.get("duration_sec")))
+            for table_item in (name_item, result_item, defects_item, ng_item, time_item):
                 table_item.setFlags(table_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
             self.table.setItem(row, 0, name_item)
             self.table.setItem(row, 1, result_item)
             self.table.setItem(row, 2, defects_item)
             self.table.setItem(row, 3, ng_item)
+            self.table.setItem(row, 4, time_item)
         self.table.resizeColumnsToContents()
         self.table.horizontalHeader().setStretchLastSection(True)
 

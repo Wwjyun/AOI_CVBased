@@ -40,6 +40,7 @@ def main() -> int:
         "final_result": result["final_result"],
         "ng_count": result["summary"]["ng_count"],
         "defect_count": result["summary"]["defect_count"],
+        "duration_sec": result.get("duration_sec", 0),
         "outputs": result["outputs"],
     }
     print(json.dumps(summary, ensure_ascii=False, indent=2))

@@ -21,6 +21,7 @@ class BatchImageResult:
     defect_count: int
     ng_count: int
     tile_count: int
+    duration_sec: float
     outputs: dict
     detail: dict
     error: str = ""
@@ -33,6 +34,7 @@ class BatchImageResult:
             "defect_count": self.defect_count,
             "ng_count": self.ng_count,
             "tile_count": self.tile_count,
+            "duration_sec": self.duration_sec,
             "outputs": dict(self.outputs),
             "detail": dict(self.detail),
             "error": self.error,
@@ -92,6 +94,7 @@ class BatchInspectionProcessor:
                         defect_count=0,
                         ng_count=0,
                         tile_count=0,
+                        duration_sec=0.0,
                         outputs={},
                         detail={},
                         error=str(exc),
@@ -120,6 +123,7 @@ class BatchInspectionProcessor:
             defect_count=int(summary.get("defect_count", 0)),
             ng_count=int(summary.get("ng_count", 0)),
             tile_count=int(summary.get("tile_count", 0)),
+            duration_sec=float(result.get("duration_sec", 0) or 0),
             outputs=result.get("outputs", {}),
             detail=result,
         )

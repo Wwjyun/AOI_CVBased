@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import time
 from pathlib import Path
 from typing import Callable
 
@@ -31,6 +32,7 @@ class AOIPipeline:
         self.detector_manager = DetectorManager()
 
     def run(self, image_path: Path) -> dict:
+        started = time.perf_counter()
         self._progress(0, "Starting inspection")
         recipe = self.recipe_manager.load(self.recipe_path)
         if self.output_overrides:
@@ -96,6 +98,7 @@ class AOIPipeline:
             "summary": aggregate["summary"],
             "tiles": tile_results,
             "outputs": {},
+            "duration_sec": round(time.perf_counter() - started, 3),
         }
 
         serializable_result = self._without_runtime_images(result)

@@ -47,6 +47,16 @@ OUTPUT_TOGGLE_LABELS = {
 }
 
 
+def _format_duration(value: object) -> str:
+    try:
+        seconds = float(value)
+    except (TypeError, ValueError):
+        return ""
+    if seconds <= 0:
+        return ""
+    return f"{seconds:.2f}s" if seconds < 10 else f"{seconds:.1f}s"
+
+
 def _section_label(text: str) -> QLabel:
     label = QLabel(text)
     label.setProperty("role", "panel-title")
@@ -556,8 +566,8 @@ class MainWindow(QMainWindow):
         self.run_screen.image_viewer.set_defects(viewer_overlays)
         self.run_screen.image_viewer.set_selected_defect(None)
 
-        duration = ""
-        if self._run_started_at is not None:
+        duration = _format_duration(result.get("duration_sec"))
+        if not duration and self._run_started_at is not None:
             elapsed = (datetime.datetime.now() - self._run_started_at).total_seconds()
             duration = f"{elapsed:.1f}s"
 
