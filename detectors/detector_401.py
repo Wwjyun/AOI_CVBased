@@ -18,6 +18,7 @@ class Detector401(BaseDetector):
         "morph_iterations": 10,
         "adaptive_block_size": 29,
         "adaptive_c": 5,
+        "binary_inv": True,
         "max_value": 255,
         "contour_mode": "list",
         "min_area": 25,
@@ -76,7 +77,10 @@ class Detector401(BaseDetector):
                         "morph_iterations": int(self.params.get("morph_iterations", 10)),
                         "adaptive_block_size": int(self.params.get("adaptive_block_size", 29)),
                         "adaptive_c": float(self.params.get("adaptive_c", 5)),
-                        "threshold_type": "adaptive_mean_inv",
+                        "binary_inv": bool(self.params.get("binary_inv", True)),
+                        "threshold_type": "adaptive_mean_inv"
+                        if self.params.get("binary_inv", True)
+                        else "adaptive_mean",
                         "contour_mode": str(self.params.get("contour_mode", "list")),
                     },
                 }
@@ -102,11 +106,12 @@ class Detector401(BaseDetector):
         morphed = self._morph(blurred)
         gray = cv2.cvtColor(morphed, cv2.COLOR_BGR2GRAY) if morphed.ndim == 3 else morphed
         block_size = self._odd_at_least(int(self.params.get("adaptive_block_size", 29)), 3)
+        threshold_type = cv2.THRESH_BINARY_INV if self.params.get("binary_inv", True) else cv2.THRESH_BINARY
         return cv2.adaptiveThreshold(
             gray,
             int(self.params.get("max_value", 255)),
             cv2.ADAPTIVE_THRESH_MEAN_C,
-            cv2.THRESH_BINARY_INV,
+            threshold_type,
             block_size,
             float(self.params.get("adaptive_c", 5)),
         )

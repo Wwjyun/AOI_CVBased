@@ -28,6 +28,7 @@ detectors:
       morph_iterations: 10
       adaptive_block_size: 29
       adaptive_c: 5
+      binary_inv: true
       max_value: 255
       contour_mode: "list"
       min_area: 25

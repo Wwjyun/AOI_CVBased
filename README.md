@@ -159,9 +159,11 @@ Detector output follows the shared detector result format:
 
 ## Detector 401
 
-`detector_401` is displayed as `401_ negative`. It is a negative-pole rotated rectangle NG detector. The image is inset by `roi_inset_px` pixels, then processed with Gaussian blur kernel `15`, morphology open kernel `5` for `10` iterations, grayscale conversion, adaptive mean inverted threshold block `29` C `5`, then contour list retrieval. Matching rotated rectangles with area from `25` to `10000` produce NG; finding none produces PASS.
+`detector_401` is displayed as `401_ negative`. It is a negative-pole rotated rectangle NG detector. The image is inset by `roi_inset_px` pixels, then processed with Gaussian blur kernel `15`, morphology open kernel `5` for `10` iterations, grayscale conversion, adaptive mean threshold block `29` C `5`, then contour list retrieval. Matching rotated rectangles with area from `25` to `10000` produce NG; finding none produces PASS.
 
 `roi_inset_px` defaults to `100` and is part of the detector parameters, so it can be edited from the GUI recipe designer.
+
+`binary_inv` defaults to `true` and is exposed as a GUI toggle for switching adaptive mean binary INV on or off.
 
 The sample recipe is `recipes/PRODUCT_A_NEGATIVE_401_AOI_01.yaml`.
 
