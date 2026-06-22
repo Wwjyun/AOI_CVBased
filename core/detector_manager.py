@@ -2,12 +2,14 @@ from __future__ import annotations
 
 from copy import deepcopy
 
+from detectors.detector_401 import Detector401
 from detectors.detector_401_1 import Detector401_1
 
 
 class DetectorManager:
     def __init__(self):
         self._registry = {
+            Detector401.detector_id: Detector401,
             Detector401_1.detector_id: Detector401_1,
         }
 

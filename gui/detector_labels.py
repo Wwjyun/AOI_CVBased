@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-# detector_id -> 中文名稱對照（design_handoff_aoi_gui/app/data.js DETECTOR_DEFS.zh）
+# detector_id -> Chinese display label.
 DETECTOR_ZH = {
+    "401": "401 負極矩形 NG 檢測",
     "401-1": "401-1 圓形 NG 檢測",
 }
 
