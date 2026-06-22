@@ -19,8 +19,9 @@ decision:
 detectors:
   "401":
     enabled: true
-    display_name: "401 negative rotated rectangle detector"
+    display_name: "401_ negative"
     params:
+      roi_inset_px: 100
       blur_size: 15
       morph_operation: "open"
       morph_kernel: 5

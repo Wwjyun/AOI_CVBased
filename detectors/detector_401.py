@@ -8,9 +8,10 @@ from detectors.base_detector import BaseDetector
 
 class Detector401(BaseDetector):
     detector_id = "401"
-    detector_name = "negative_rotated_rect_detector"
-    display_name = "401 negative rotated rectangle detector"
+    detector_name = "401_negative"
+    display_name = "401_ negative"
     default_params = {
+        "roi_inset_px": 100,
         "blur_size": 15,
         "morph_operation": "open",
         "morph_kernel": 5,
@@ -27,7 +28,8 @@ class Detector401(BaseDetector):
         return image.copy()
 
     def detect(self, image) -> list[dict]:
-        binary = self._make_binary(image)
+        roi, offset_x, offset_y = self._roi_image(image)
+        binary = self._make_binary(roi)
         contours, _ = cv2.findContours(binary, self._contour_mode(), cv2.CHAIN_APPROX_SIMPLE)
         image_area = max(float(image.shape[0] * image.shape[1]), 1.0)
         defects = []
@@ -45,6 +47,10 @@ class Detector401(BaseDetector):
             box = cv2.boxPoints(rect)
             box = np.round(box).astype(int)
             x, y, w, h = cv2.boundingRect(box.reshape(-1, 1, 2))
+            x += offset_x
+            y += offset_y
+            box[:, 0] += offset_x
+            box[:, 1] += offset_y
             confidence = min(1.0, rect_area / image_area * 20.0)
 
             defects.append(
@@ -55,10 +61,15 @@ class Detector401(BaseDetector):
                     "confidence": float(np.round(confidence, 4)),
                     "metadata": {
                         "shape": "rotated_rectangle",
-                        "center_local": [float(np.round(center_x, 3)), float(np.round(center_y, 3))],
+                        "center_local": [
+                            float(np.round(center_x + offset_x, 3)),
+                            float(np.round(center_y + offset_y, 3)),
+                        ],
                         "size": [float(np.round(width, 3)), float(np.round(height, 3))],
                         "angle": float(np.round(angle, 3)),
                         "box_points_local": box.astype(int).tolist(),
+                        "roi_inset_px": int(self.params.get("roi_inset_px", 100)),
+                        "roi_offset_local": [int(offset_x), int(offset_y)],
                         "blur_size": int(self.params.get("blur_size", 15)),
                         "morph_operation": str(self.params.get("morph_operation", "open")),
                         "morph_kernel": int(self.params.get("morph_kernel", 5)),
@@ -73,6 +84,17 @@ class Detector401(BaseDetector):
 
         defects.sort(key=lambda item: item["area"], reverse=True)
         return defects
+
+    def _roi_image(self, image):
+        inset = max(0, int(self.params.get("roi_inset_px", 100)))
+        if inset <= 0:
+            return image, 0, 0
+
+        height, width = image.shape[:2]
+        if width <= inset * 2 or height <= inset * 2:
+            return image, 0, 0
+
+        return image[inset : height - inset, inset : width - inset], inset, inset
 
     def _make_binary(self, image):
         blur_size = self._odd_at_least(int(self.params.get("blur_size", 15)), 3)

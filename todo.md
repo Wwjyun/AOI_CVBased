@@ -565,6 +565,7 @@ output:
 - [x] 2026-06-18 Pattern match tiler uses deterministic local-peak candidates to avoid random missed matches
 - [x] 2026-06-18 Reporter PNG output uses checked memory encoding and Python file writes to avoid silent batch write failures
 - [x] 2026-06-22 Detector401 negative-pole rotated rectangle NG detector and recipe
+- [x] 2026-06-22 Detector401 renamed to 401_ negative with editable 100px ROI inset
 - [ ] debug image export per detector
 - [x] editable recipe saving from GUI
 - [ ] validation dataset

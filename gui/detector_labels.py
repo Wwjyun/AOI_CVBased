@@ -2,7 +2,7 @@ from __future__ import annotations
 
 # detector_id -> Chinese display label.
 DETECTOR_ZH = {
-    "401": "401 負極矩形 NG 檢測",
+    "401": "401_ negative",
     "401-1": "401-1 圓形 NG 檢測",
 }
 
