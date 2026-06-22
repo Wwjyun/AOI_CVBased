@@ -567,6 +567,7 @@ output:
 - [x] 2026-06-22 Detector401 negative-pole rotated rectangle NG detector and recipe
 - [x] 2026-06-22 Detector401 renamed to 401_ negative with editable 100px ROI inset
 - [x] 2026-06-22 Batch folder inspection runs images in parallel workers with collision-safe report filenames
+- [x] 2026-06-22 Contour tiling GUI exposes threshold method, inverse binary, rectangle-only min/max area, and original-image ROI crops
 - [ ] debug image export per detector
 - [x] editable recipe saving from GUI
 - [ ] validation dataset

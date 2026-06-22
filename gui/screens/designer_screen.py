@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QComboBox,
     QPushButton,
     QScrollArea,
     QStackedWidget,
@@ -43,7 +44,7 @@ CONTOUR_DEFAULTS = {
         "method": "adaptive_gaussian",
         "threshold": 128,
         "max_value": 255,
-        "invert": True,
+        "invert": False,
         "adaptive_block_size": 31,
         "adaptive_c": 5,
         "blur_size": 3,
@@ -53,7 +54,7 @@ CONTOUR_DEFAULTS = {
         "morph_close_iterations": 1,
     },
     "shapes": {
-        "enabled_shapes": ["rectangle", "circle", "polygon"],
+        "enabled_shapes": ["rectangle"],
         "min_area": 4000,
         "max_area": 200000,
         "min_width": 10,
@@ -286,11 +287,32 @@ class DesignerScreen(QWidget):
         widget = QWidget()
         form = _form_grid()
 
+        self.contour_threshold_method = QComboBox()
+        self.contour_threshold_method.addItem("Global binary", "global")
+        self.contour_threshold_method.addItem("Otsu binary", "otsu")
+        self.contour_threshold_method.addItem("Adaptive mean", "adaptive_mean")
+        self.contour_threshold_method.addItem("Adaptive gaussian", "adaptive_gaussian")
+        self.contour_threshold_method.setCurrentIndex(3)
+        self.contour_invert = Toggle(checked=False)
+        self.contour_threshold = NumStepper(128, minimum=0, maximum=255, step=1, decimals=0)
+        self.contour_adaptive_block_size = NumStepper(31, minimum=3, maximum=999, step=2, decimals=0)
+        self.contour_adaptive_c = NumStepper(5, minimum=-255, maximum=255, step=0.5, decimals=1)
+        self.contour_blur_size = NumStepper(3, minimum=0, maximum=999, step=2, decimals=0)
         self.contour_min_area = NumStepper(4000, minimum=0, maximum=10_000_000, step=1, decimals=0)
+        self.contour_max_area = NumStepper(200000, minimum=0, maximum=100_000_000, step=1, decimals=0)
         self.contour_approx_epsilon = NumStepper(0.01, minimum=0, maximum=1, step=0.005, decimals=3)
+        self.contour_crop_padding = NumStepper(8, minimum=0, maximum=10000, step=1, decimals=0)
 
+        form.addRow(_label("二值化方法"), self.contour_threshold_method)
+        form.addRow(_label("反向二值化"), self.contour_invert)
+        form.addRow(_label("固定門檻"), self.contour_threshold)
+        form.addRow(_label("自適應區塊"), self.contour_adaptive_block_size)
+        form.addRow(_label("自適應 C"), self.contour_adaptive_c)
+        form.addRow(_label("模糊 kernel"), self.contour_blur_size)
         form.addRow(_label("最小面積"), self.contour_min_area)
+        form.addRow(_label("最大面積"), self.contour_max_area)
         form.addRow(_label("近似 ε"), self.contour_approx_epsilon)
+        form.addRow(_label("裁切外擴 px"), self.contour_crop_padding)
 
         widget.setLayout(form)
         return widget
@@ -538,8 +560,17 @@ class DesignerScreen(QWidget):
             }
         if mode == "contour":
             config = deepcopy(CONTOUR_DEFAULTS)
+            config["threshold"]["method"] = str(self.contour_threshold_method.currentData())
+            config["threshold"]["threshold"] = int(self.contour_threshold.value())
+            config["threshold"]["invert"] = bool(self.contour_invert.isChecked())
+            config["threshold"]["adaptive_block_size"] = int(self.contour_adaptive_block_size.value())
+            config["threshold"]["adaptive_c"] = float(self.contour_adaptive_c.value())
+            config["threshold"]["blur_size"] = int(self.contour_blur_size.value())
+            config["shapes"]["enabled_shapes"] = ["rectangle"]
             config["shapes"]["min_area"] = int(self.contour_min_area.value())
+            config["shapes"]["max_area"] = int(self.contour_max_area.value())
             config["shapes"]["approx_epsilon_ratio"] = float(self.contour_approx_epsilon.value())
+            config["shapes"]["crop_padding"] = int(self.contour_crop_padding.value())
             return {"mode": "contour", **config}
         return {
             "mode": "pattern_match",
