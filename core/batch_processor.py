@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import datetime
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -48,6 +50,7 @@ class BatchInspectionProcessor:
         output_overrides: dict | None = None,
         recursive: bool = False,
         progress_callback: BatchProgressCallback | None = None,
+        max_workers: int | None = None,
     ):
         self.input_dir = Path(input_dir)
         self.recipe_path = Path(recipe_path)
@@ -55,6 +58,7 @@ class BatchInspectionProcessor:
         self.output_overrides = output_overrides
         self.recursive = recursive
         self.progress_callback = progress_callback
+        self.max_workers = max_workers
 
     def run(self) -> dict:
         image_paths = self.discover_images()
@@ -65,33 +69,24 @@ class BatchInspectionProcessor:
         if not image_paths:
             return self._build_summary(started_at, batch_output_dir, [])
 
-        results: list[BatchImageResult] = []
         total = len(image_paths)
-        for index, image_path in enumerate(image_paths, start=1):
-            self._progress_for_image(index, total, 0, f"Batch {index}/{total}: starting {image_path.name}")
-            try:
-                pipeline = AOIPipeline(
-                    recipe_path=self.recipe_path,
-                    output_dir=batch_output_dir,
-                    progress_callback=lambda pct, msg, i=index, t=total: self._progress_for_image(i, t, pct, msg),
-                    output_overrides=self.output_overrides,
-                )
-                result = pipeline.run(image_path)
-                summary = result.get("summary", {})
-                results.append(
-                    BatchImageResult(
-                        image_path=image_path,
-                        final_result=str(result.get("final_result", "-")),
-                        defect_count=int(summary.get("defect_count", 0)),
-                        ng_count=int(summary.get("ng_count", 0)),
-                        tile_count=int(summary.get("tile_count", 0)),
-                        outputs=result.get("outputs", {}),
-                        detail=result,
-                    )
-                )
-            except Exception as exc:
-                results.append(
-                    BatchImageResult(
+        results_by_index: dict[int, BatchImageResult] = {}
+        completed = 0
+        worker_count = self._worker_count(total)
+        self._progress(0, f"Batch inspection running with {worker_count} workers")
+
+        with ThreadPoolExecutor(max_workers=worker_count) as executor:
+            futures = {
+                executor.submit(self._process_image, image_path, batch_output_dir): index
+                for index, image_path in enumerate(image_paths)
+            }
+            for future in as_completed(futures):
+                index = futures[future]
+                image_path = image_paths[index]
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    result = BatchImageResult(
                         image_path=image_path,
                         final_result="ERROR",
                         defect_count=0,
@@ -101,10 +96,33 @@ class BatchInspectionProcessor:
                         detail={},
                         error=str(exc),
                     )
+                results_by_index[index] = result
+                completed += 1
+                self._progress(
+                    int(completed / total * 100),
+                    f"Batch {completed}/{total}: finished {image_path.name}",
                 )
-            self._progress_for_image(index, total, 100, f"Batch {index}/{total}: finished {image_path.name}")
 
+        results = [results_by_index[index] for index in range(total)]
         return self._build_summary(started_at, batch_output_dir, results)
+
+    def _process_image(self, image_path: Path, batch_output_dir: Path) -> BatchImageResult:
+        pipeline = AOIPipeline(
+            recipe_path=self.recipe_path,
+            output_dir=batch_output_dir,
+            output_overrides=self.output_overrides,
+        )
+        result = pipeline.run(image_path)
+        summary = result.get("summary", {})
+        return BatchImageResult(
+            image_path=image_path,
+            final_result=str(result.get("final_result", "-")),
+            defect_count=int(summary.get("defect_count", 0)),
+            ng_count=int(summary.get("ng_count", 0)),
+            tile_count=int(summary.get("tile_count", 0)),
+            outputs=result.get("outputs", {}),
+            detail=result,
+        )
 
     def discover_images(self) -> list[Path]:
         if not self.input_dir.exists():
@@ -126,6 +144,25 @@ class BatchInspectionProcessor:
         image_percent = max(0, min(100, int(image_percent)))
         overall = int(((image_index - 1) + image_percent / 100.0) / total_images * 100)
         self.progress_callback(max(0, min(100, overall)), message)
+
+    def _progress(self, percent: int, message: str) -> None:
+        if self.progress_callback is None:
+            return
+        self.progress_callback(max(0, min(100, int(percent))), message)
+
+    def _worker_count(self, image_count: int) -> int:
+        if self.max_workers is not None:
+            return max(1, min(int(self.max_workers), image_count))
+
+        configured = os.getenv("AOI_BATCH_WORKERS")
+        if configured:
+            try:
+                return max(1, min(int(configured), image_count))
+            except ValueError:
+                pass
+
+        cpu_count = os.cpu_count() or 1
+        return max(1, min(4, cpu_count, image_count))
 
     @staticmethod
     def _build_summary(started_at: datetime.datetime, batch_output_dir: Path, results: list[BatchImageResult]) -> dict:

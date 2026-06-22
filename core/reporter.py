@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import uuid
 from datetime import datetime
 from pathlib import Path
 
@@ -21,8 +22,8 @@ class Reporter:
 
     def write(self, image, result: dict) -> dict[str, str]:
         stem = Path(result["image_name"]).stem
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        base_name = f"{stem}_{result['recipe_name']}_{timestamp}"
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+        base_name = f"{stem}_{result['recipe_name']}_{timestamp}_{uuid.uuid4().hex[:8]}"
         outputs: dict[str, str] = {}
 
         if self.output_config.get("save_overlay", True):
