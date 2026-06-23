@@ -243,7 +243,7 @@ class DesignerScreen(QWidget):
         template_button.setProperty("variant", "secondary")
         template_button.setProperty("size", "sm")
         template_button.setIcon(icons.icon("folder", size=13, color=COLORS["text_2"]))
-        template_button.clicked.connect(self._choose_template)
+        template_button.clicked.connect(lambda: self._choose_template(self.template_path_edit))
 
         template_row = QHBoxLayout()
         template_row.setSpacing(6)
@@ -270,6 +270,19 @@ class DesignerScreen(QWidget):
         widget = QWidget()
         form = _form_grid()
 
+        self.grid_template_path_edit = QLineEdit("outputs_validation/pattern_template.png")
+        self.grid_template_path_edit.setProperty("mono", "true")
+        grid_template_button = QPushButton("?豢?")
+        grid_template_button.setProperty("variant", "secondary")
+        grid_template_button.setProperty("size", "sm")
+        grid_template_button.setIcon(icons.icon("folder", size=13, color=COLORS["text_2"]))
+        grid_template_button.clicked.connect(lambda: self._choose_template(self.grid_template_path_edit))
+
+        grid_template_row = QHBoxLayout()
+        grid_template_row.setSpacing(6)
+        grid_template_row.addWidget(self.grid_template_path_edit, 1)
+        grid_template_row.addWidget(grid_template_button)
+
         self.grid_search_x = NumStepper(0, minimum=0, maximum=100000, step=1, decimals=0)
         self.grid_search_y = NumStepper(0, minimum=0, maximum=100000, step=1, decimals=0)
         self.grid_search_w = NumStepper(0, minimum=0, maximum=100000, step=1, decimals=0)
@@ -286,6 +299,7 @@ class DesignerScreen(QWidget):
         self.grid_overlap_x = NumStepper(0, minimum=0, maximum=100000, step=1, decimals=0)
         self.grid_overlap_y = NumStepper(0, minimum=0, maximum=100000, step=1, decimals=0)
 
+        form.addRow(_label("Template"), _wrap_layout(grid_template_row))
         form.addRow(_label("Search X"), self.grid_search_x)
         form.addRow(_label("Search Y"), self.grid_search_y)
         form.addRow(_label("Search W"), self.grid_search_w)
@@ -339,12 +353,12 @@ class DesignerScreen(QWidget):
         widget.setLayout(form)
         return widget
 
-    def _choose_template(self) -> None:
+    def _choose_template(self, target: QLineEdit) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self, "選擇 Template", "", "圖片檔案 (*.jpg *.jpeg *.png *.bmp *.tif *.tiff)"
         )
         if path:
-            self.template_path_edit.setText(path)
+            target.setText(path)
 
     # ------------------------------------------------------------------
     # tile preview
@@ -385,6 +399,7 @@ class DesignerScreen(QWidget):
         pattern_match = tile.get("pattern_match", {})
         template_path = pattern_match.get("template_path") or tile.get("template_path") or assets.get("template_picture") or ""
         self.template_path_edit.setText(str(template_path))
+        self.grid_template_path_edit.setText(str(template_path))
         _set_widget_value(self.match_threshold, pattern_match.get("match_threshold", 0.8))
         _set_widget_value(self.max_count, pattern_match.get("max_count", 999))
         _set_widget_value(self.nms_threshold, pattern_match.get("nms_threshold", 0.3))
@@ -668,7 +683,7 @@ class DesignerScreen(QWidget):
         if mode == "grid":
             return {
                 "mode": "grid",
-                "template_path": self.template_path_edit.text().strip(),
+                "template_path": self.grid_template_path_edit.text().strip(),
                 "search_x": int(self.grid_search_x.value()),
                 "search_y": int(self.grid_search_y.value()),
                 "search_w": int(self.grid_search_w.value()),
@@ -755,7 +770,12 @@ class DesignerScreen(QWidget):
                 "save_json": True,
             },
         }
-        return RecipeTemplatePathSync(self.template_path_edit.text()).apply(recipe)
+        return RecipeTemplatePathSync(self._active_template_path()).apply(recipe)
+
+    def _active_template_path(self) -> str:
+        if self.tile_mode.value() == "grid":
+            return self.grid_template_path_edit.text().strip()
+        return self.template_path_edit.text().strip()
 
     def _emit_preview(self) -> None:
         self.preview_requested.emit(self.build_tile_config())
