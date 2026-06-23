@@ -12,7 +12,8 @@ class RecipeTemplatePathSync:
     @classmethod
     def from_recipe(cls, recipe: dict) -> "RecipeTemplatePathSync":
         assets_path = recipe.get("assets", {}).get("template_picture", "")
-        tile_path = recipe.get("tile", {}).get("pattern_match", {}).get("template_path", "")
+        tile = recipe.get("tile", {})
+        tile_path = tile.get("pattern_match", {}).get("template_path", "") or tile.get("template_path", "")
         return cls(assets_path or tile_path)
 
     def apply(self, recipe: dict) -> dict:
@@ -25,5 +26,7 @@ class RecipeTemplatePathSync:
         tile = synced.setdefault("tile", {})
         if tile.get("mode") == "pattern_match":
             tile.setdefault("pattern_match", {})["template_path"] = self.template_path
+        elif tile.get("mode") == "grid" and str(tile.get("template_path", "")).strip():
+            tile["template_path"] = self.template_path
 
         return synced

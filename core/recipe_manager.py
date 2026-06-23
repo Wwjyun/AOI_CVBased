@@ -33,7 +33,24 @@ class RecipeManager:
         tile = recipe["tile"]
         mode = str(tile.get("mode", "grid")).lower()
         if mode == "grid":
-            for key in ("width", "height", "overlap_x", "overlap_y"):
+            required = ("width", "height", "overlap_x", "overlap_y")
+            if str(tile.get("template_path", "")).strip():
+                required = (
+                    "template_path",
+                    "search_x",
+                    "search_y",
+                    "search_w",
+                    "search_h",
+                    "offset_x",
+                    "offset_y",
+                    "rows",
+                    "cols",
+                    "roi_w",
+                    "roi_h",
+                    "gap_x",
+                    "gap_y",
+                )
+            for key in required:
                 if key not in tile:
                     raise RecipeError(f"Recipe tile section missing: {key}")
         elif mode not in {"contour", "pattern_match"}:

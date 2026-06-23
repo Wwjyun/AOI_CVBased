@@ -168,9 +168,11 @@ class TilePreviewWorker(QObject):
             "rectangle": (0, 180, 0),
             "circle": (255, 120, 0),
             "polygon": (180, 0, 180),
+            "grid": (80, 220, 80),
             "pattern_match": (0, 180, 255),
             "unknown": (0, 0, 255),
         }
+        drawn_grid_guides = False
         for tile in tiles:
             metadata = tile.metadata or {}
             shape = metadata.get("shape", metadata.get("mode", "unknown"))
@@ -184,6 +186,17 @@ class TilePreviewWorker(QObject):
             if match_bbox:
                 x, y, width, height = match_bbox
                 cv2.rectangle(preview, (x, y), (x + width, y + height), (0, 255, 255), 3)
+
+            if not drawn_grid_guides and metadata.get("grid_anchor") == "template_match":
+                search_roi = metadata.get("search_roi") or []
+                if len(search_roi) == 4:
+                    x, y, width, height = [int(value) for value in search_roi]
+                    cv2.rectangle(preview, (x, y), (x + width, y + height), (255, 180, 0), 3)
+                base_roi = metadata.get("base_roi") or []
+                if len(base_roi) == 4:
+                    x, y, width, height = [int(value) for value in base_roi]
+                    cv2.rectangle(preview, (x, y), (x + width, y + height), (255, 255, 255), 3)
+                drawn_grid_guides = True
 
             vertices = metadata.get("vertices") or []
             if vertices:

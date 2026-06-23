@@ -571,6 +571,7 @@ output:
 - [x] 2026-06-22 Inspection duration is recorded in results and shown in single/batch views
 - [x] 2026-06-22 Contour tiling GUI exposes threshold method, inverse binary, rectangle-only min/max area, and original-image ROI crops
 - [x] 2026-06-23 GUI Recipe designer reflects the currently loaded recipe metadata, tile settings, detector toggles, and detector params
+- [x] 2026-06-23 Grid tiling supports Search ROI template anchor, offset base ROI, rows/cols ROI sizing, and gap-based layout
 - [ ] debug image export per detector
 - [x] editable recipe saving from GUI
 - [ ] validation dataset

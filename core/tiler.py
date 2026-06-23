@@ -363,8 +363,53 @@ class PatternMatcher:
         return float(intersection / union) if union > 0 else 0.0
 
 
+@dataclass(frozen=True)
+class GridAnchorConfig:
+    template_path: str = ""
+    search_x: int = 0
+    search_y: int = 0
+    search_w: int = 0
+    search_h: int = 0
+    offset_x: int = 0
+    offset_y: int = 0
+    rows: int = 1
+    cols: int = 1
+    roi_w: int = 512
+    roi_h: int = 512
+    gap_x: int = 0
+    gap_y: int = 0
+    match_threshold: float = 0.0
+
+    @classmethod
+    def from_dict(cls, config: dict | None) -> "GridAnchorConfig":
+        config = config or {}
+        return cls(
+            template_path=str(config.get("template_path", "")),
+            search_x=int(config.get("search_x", 0)),
+            search_y=int(config.get("search_y", 0)),
+            search_w=int(config.get("search_w", 0)),
+            search_h=int(config.get("search_h", 0)),
+            offset_x=int(config.get("offset_x", 0)),
+            offset_y=int(config.get("offset_y", 0)),
+            rows=int(config.get("rows", 1)),
+            cols=int(config.get("cols", 1)),
+            roi_w=int(config.get("roi_w", config.get("width", 512))),
+            roi_h=int(config.get("roi_h", config.get("height", 512))),
+            gap_x=int(config.get("gap_x", 0)),
+            gap_y=int(config.get("gap_y", 0)),
+            match_threshold=float(config.get("match_threshold", 0.0)),
+        )
+
+
 class Tiler:
-    def __init__(self, width: int, height: int, overlap_x: int = 0, overlap_y: int = 0):
+    def __init__(
+        self,
+        width: int,
+        height: int,
+        overlap_x: int = 0,
+        overlap_y: int = 0,
+        anchor_config: GridAnchorConfig | None = None,
+    ):
         if width <= 0 or height <= 0:
             raise ValueError("Tile width and height must be positive.")
         if overlap_x < 0 or overlap_y < 0:
@@ -376,8 +421,27 @@ class Tiler:
         self.height = height
         self.step_x = width - overlap_x
         self.step_y = height - overlap_y
+        self.anchor_config = anchor_config
+        self.image_loader = ImageLoader()
+
+    @classmethod
+    def from_config(cls, config: dict) -> "Tiler":
+        anchor_config = GridAnchorConfig.from_dict(config) if str(config.get("template_path", "")).strip() else None
+        width = int(config.get("width", config.get("roi_w", 512)))
+        height = int(config.get("height", config.get("roi_h", 512)))
+        return cls(
+            width=width,
+            height=height,
+            overlap_x=int(config.get("overlap_x", 0)),
+            overlap_y=int(config.get("overlap_y", 0)),
+            anchor_config=anchor_config,
+        )
 
     def iter_tiles(self, image) -> Iterator[Tile]:
+        if self.anchor_config is not None:
+            yield from self._iter_anchor_grid_tiles(image)
+            return
+
         image_height, image_width = image.shape[:2]
         y_positions = self._positions(image_height, self.height, self.step_y)
         x_positions = self._positions(image_width, self.width, self.step_x)
@@ -398,6 +462,103 @@ class Tiler:
                     image=tile_image,
                     metadata={"mode": "grid"},
                 )
+
+    def _iter_anchor_grid_tiles(self, image) -> Iterator[Tile]:
+        config = self.anchor_config
+        if config is None:
+            return
+        if config.rows <= 0 or config.cols <= 0:
+            raise ValueError("Grid rows and cols must be positive.")
+        if config.roi_w <= 0 or config.roi_h <= 0:
+            raise ValueError("Grid ROI width and height must be positive.")
+        if config.gap_x < 0 or config.gap_y < 0:
+            raise ValueError("Grid gaps cannot be negative.")
+
+        image_height, image_width = image.shape[:2]
+        anchor = self._find_grid_anchor(image, config)
+        base_x = anchor["x"] + config.offset_x
+        base_y = anchor["y"] + config.offset_y
+
+        for row in range(config.rows):
+            for col in range(config.cols):
+                x = int(base_x + col * (config.roi_w + config.gap_x))
+                y = int(base_y + row * (config.roi_h + config.gap_y))
+                x1 = max(0, x)
+                y1 = max(0, y)
+                x2 = min(image_width, x + config.roi_w)
+                y2 = min(image_height, y + config.roi_h)
+                if x2 <= x1 or y2 <= y1:
+                    continue
+                tile_image = image[y1:y2, x1:x2].copy()
+                yield Tile(
+                    tile_id=f"r{row:04d}_c{col:04d}",
+                    x=x1,
+                    y=y1,
+                    width=x2 - x1,
+                    height=y2 - y1,
+                    row=row,
+                    col=col,
+                    image=tile_image,
+                    metadata={
+                        "mode": "grid",
+                        "grid_anchor": "template_match",
+                        "search_roi": anchor["search_roi"],
+                        "match_bbox": [anchor["x"], anchor["y"], anchor["width"], anchor["height"]],
+                        "score": float(anchor["score"]),
+                        "base_roi": [
+                            int(base_x),
+                            int(base_y),
+                            int(config.cols * config.roi_w + max(0, config.cols - 1) * config.gap_x),
+                            int(config.rows * config.roi_h + max(0, config.rows - 1) * config.gap_y),
+                        ],
+                        "template_path": config.template_path,
+                    },
+                )
+
+    def _find_grid_anchor(self, image, config: GridAnchorConfig) -> dict:
+        template_path = config.template_path.strip()
+        if not template_path:
+            raise ValueError("Grid template_path is required for anchored grid mode.")
+
+        image_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image.copy()
+        template = self.image_loader.load_bgr(template_path)
+        template_gray = cv2.cvtColor(template, cv2.COLOR_BGR2GRAY) if template.ndim == 3 else template.copy()
+        template_height, template_width = template_gray.shape[:2]
+        image_height, image_width = image_gray.shape[:2]
+
+        search_x = max(0, int(config.search_x))
+        search_y = max(0, int(config.search_y))
+        search_w = int(config.search_w) if config.search_w > 0 else image_width - search_x
+        search_h = int(config.search_h) if config.search_h > 0 else image_height - search_y
+        search_x2 = min(image_width, search_x + search_w)
+        search_y2 = min(image_height, search_y + search_h)
+        if search_x2 <= search_x or search_y2 <= search_y:
+            raise ValueError("Grid search ROI is outside the input image.")
+
+        search_roi = image_gray[search_y:search_y2, search_x:search_x2]
+        if template_width > search_roi.shape[1] or template_height > search_roi.shape[0]:
+            raise ValueError("Grid template is larger than the search ROI.")
+
+        if float(np.std(template_gray)) <= 1e-6:
+            result = cv2.matchTemplate(search_roi, template_gray, cv2.TM_SQDIFF_NORMED)
+            min_score, _, min_loc, _ = cv2.minMaxLoc(result)
+            max_score = 1.0 - float(min_score)
+            max_loc = min_loc
+        else:
+            result = cv2.matchTemplate(search_roi, template_gray, cv2.TM_CCOEFF_NORMED)
+            _, max_score, _, max_loc = cv2.minMaxLoc(result)
+        if config.match_threshold > 0 and max_score < config.match_threshold:
+            raise ValueError(
+                f"Grid template match score {max_score:.4f} is below threshold {config.match_threshold:.4f}."
+            )
+        return {
+            "x": int(search_x + max_loc[0]),
+            "y": int(search_y + max_loc[1]),
+            "width": int(template_width),
+            "height": int(template_height),
+            "score": float(max_score),
+            "search_roi": [int(search_x), int(search_y), int(search_x2 - search_x), int(search_y2 - search_y)],
+        }
 
     @staticmethod
     def _positions(total: int, size: int, step: int) -> list[int]:
@@ -513,12 +674,7 @@ class PatternMatchTiler:
 def create_tiler(tile_config: dict):
     mode = str(tile_config.get("mode", "grid")).lower()
     if mode == "grid":
-        return Tiler(
-            width=int(tile_config["width"]),
-            height=int(tile_config["height"]),
-            overlap_x=int(tile_config.get("overlap_x", 0)),
-            overlap_y=int(tile_config.get("overlap_y", 0)),
-        )
+        return Tiler.from_config(tile_config)
     if mode == "contour":
         return ContourTiler.from_config(tile_config)
     if mode == "pattern_match":

@@ -270,15 +270,37 @@ class DesignerScreen(QWidget):
         widget = QWidget()
         form = _form_grid()
 
-        self.grid_width = NumStepper(512, minimum=32, maximum=100000, step=1, decimals=0)
-        self.grid_height = NumStepper(512, minimum=32, maximum=100000, step=1, decimals=0)
-        self.grid_overlap_x = NumStepper(64, minimum=0, maximum=100000, step=1, decimals=0)
-        self.grid_overlap_y = NumStepper(64, minimum=0, maximum=100000, step=1, decimals=0)
+        self.grid_search_x = NumStepper(0, minimum=0, maximum=100000, step=1, decimals=0)
+        self.grid_search_y = NumStepper(0, minimum=0, maximum=100000, step=1, decimals=0)
+        self.grid_search_w = NumStepper(0, minimum=0, maximum=100000, step=1, decimals=0)
+        self.grid_search_h = NumStepper(0, minimum=0, maximum=100000, step=1, decimals=0)
+        self.grid_match_threshold = NumStepper(0.0, minimum=0, maximum=1, step=0.01, decimals=3)
+        self.grid_offset_x = NumStepper(0, minimum=-100000, maximum=100000, step=1, decimals=0)
+        self.grid_offset_y = NumStepper(0, minimum=-100000, maximum=100000, step=1, decimals=0)
+        self.grid_rows = NumStepper(1, minimum=1, maximum=10000, step=1, decimals=0)
+        self.grid_cols = NumStepper(1, minimum=1, maximum=10000, step=1, decimals=0)
+        self.grid_width = NumStepper(512, minimum=1, maximum=100000, step=1, decimals=0)
+        self.grid_height = NumStepper(512, minimum=1, maximum=100000, step=1, decimals=0)
+        self.grid_gap_x = NumStepper(0, minimum=0, maximum=100000, step=1, decimals=0)
+        self.grid_gap_y = NumStepper(0, minimum=0, maximum=100000, step=1, decimals=0)
+        self.grid_overlap_x = NumStepper(0, minimum=0, maximum=100000, step=1, decimals=0)
+        self.grid_overlap_y = NumStepper(0, minimum=0, maximum=100000, step=1, decimals=0)
 
-        form.addRow(_label("Tile 寬"), self.grid_width)
-        form.addRow(_label("Tile 高"), self.grid_height)
-        form.addRow(_label("重疊 X"), self.grid_overlap_x)
-        form.addRow(_label("重疊 Y"), self.grid_overlap_y)
+        form.addRow(_label("Search X"), self.grid_search_x)
+        form.addRow(_label("Search Y"), self.grid_search_y)
+        form.addRow(_label("Search W"), self.grid_search_w)
+        form.addRow(_label("Search H"), self.grid_search_h)
+        form.addRow(_label("Match threshold"), self.grid_match_threshold)
+        form.addRow(_label("Offset X"), self.grid_offset_x)
+        form.addRow(_label("Offset Y"), self.grid_offset_y)
+        form.addRow(_label("Rows"), self.grid_rows)
+        form.addRow(_label("Cols"), self.grid_cols)
+        form.addRow(_label("ROI W"), self.grid_width)
+        form.addRow(_label("ROI H"), self.grid_height)
+        form.addRow(_label("Gap X"), self.grid_gap_x)
+        form.addRow(_label("Gap Y"), self.grid_gap_y)
+        form.addRow(_label("Legacy overlap X"), self.grid_overlap_x)
+        form.addRow(_label("Legacy overlap Y"), self.grid_overlap_y)
 
         widget.setLayout(form)
         return widget
@@ -361,7 +383,7 @@ class DesignerScreen(QWidget):
         self._on_tile_mode_changed(mode)
 
         pattern_match = tile.get("pattern_match", {})
-        template_path = pattern_match.get("template_path") or assets.get("template_picture") or ""
+        template_path = pattern_match.get("template_path") or tile.get("template_path") or assets.get("template_picture") or ""
         self.template_path_edit.setText(str(template_path))
         _set_widget_value(self.match_threshold, pattern_match.get("match_threshold", 0.8))
         _set_widget_value(self.max_count, pattern_match.get("max_count", 999))
@@ -369,10 +391,21 @@ class DesignerScreen(QWidget):
         _set_widget_value(self.crop_padding, pattern_match.get("crop_padding", 8))
         _set_widget_value(self.sort_row_tolerance, pattern_match.get("sort_row_tolerance", 20))
 
-        _set_widget_value(self.grid_width, tile.get("width", 512))
-        _set_widget_value(self.grid_height, tile.get("height", 512))
-        _set_widget_value(self.grid_overlap_x, tile.get("overlap_x", 64))
-        _set_widget_value(self.grid_overlap_y, tile.get("overlap_y", 64))
+        _set_widget_value(self.grid_search_x, tile.get("search_x", 0))
+        _set_widget_value(self.grid_search_y, tile.get("search_y", 0))
+        _set_widget_value(self.grid_search_w, tile.get("search_w", 0))
+        _set_widget_value(self.grid_search_h, tile.get("search_h", 0))
+        _set_widget_value(self.grid_match_threshold, tile.get("match_threshold", 0.0))
+        _set_widget_value(self.grid_offset_x, tile.get("offset_x", 0))
+        _set_widget_value(self.grid_offset_y, tile.get("offset_y", 0))
+        _set_widget_value(self.grid_rows, tile.get("rows", 1))
+        _set_widget_value(self.grid_cols, tile.get("cols", 1))
+        _set_widget_value(self.grid_width, tile.get("roi_w", tile.get("width", 512)))
+        _set_widget_value(self.grid_height, tile.get("roi_h", tile.get("height", 512)))
+        _set_widget_value(self.grid_gap_x, tile.get("gap_x", 0))
+        _set_widget_value(self.grid_gap_y, tile.get("gap_y", 0))
+        _set_widget_value(self.grid_overlap_x, tile.get("overlap_x", 0))
+        _set_widget_value(self.grid_overlap_y, tile.get("overlap_y", 0))
 
         threshold = tile.get("threshold", {})
         shapes = tile.get("shapes", {})
@@ -635,6 +668,20 @@ class DesignerScreen(QWidget):
         if mode == "grid":
             return {
                 "mode": "grid",
+                "template_path": self.template_path_edit.text().strip(),
+                "search_x": int(self.grid_search_x.value()),
+                "search_y": int(self.grid_search_y.value()),
+                "search_w": int(self.grid_search_w.value()),
+                "search_h": int(self.grid_search_h.value()),
+                "match_threshold": float(self.grid_match_threshold.value()),
+                "offset_x": int(self.grid_offset_x.value()),
+                "offset_y": int(self.grid_offset_y.value()),
+                "rows": int(self.grid_rows.value()),
+                "cols": int(self.grid_cols.value()),
+                "roi_w": int(self.grid_width.value()),
+                "roi_h": int(self.grid_height.value()),
+                "gap_x": int(self.grid_gap_x.value()),
+                "gap_y": int(self.grid_gap_y.value()),
                 "width": int(self.grid_width.value()),
                 "height": int(self.grid_height.value()),
                 "overlap_x": int(self.grid_overlap_x.value()),
