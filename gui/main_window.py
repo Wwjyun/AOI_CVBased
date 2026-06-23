@@ -490,6 +490,7 @@ class MainWindow(QMainWindow):
         self.recipe = recipe
         self.topbar.recipe_chip.set_value(path.name)
         self.run_screen.recipe_info_panel.set_recipe(recipe)
+        self.designer_screen.set_recipe(recipe)
         self.statusBar().showMessage(f"Recipe 已載入：{path}")
         self._update_run_ready()
         self._update_batch_ready()

@@ -341,6 +341,81 @@ class DesignerScreen(QWidget):
     def set_image_path(self, path: Path | None) -> None:
         self.image_path = Path(path) if path else None
 
+    def set_recipe(self, recipe: dict | None) -> None:
+        if recipe is None:
+            return
+
+        self.recipe_name_edit.setText(str(recipe.get("recipe_name", "")))
+        self.product_id_edit.setText(str(recipe.get("product_id", "")))
+        self.machine_id_edit.setText(str(recipe.get("machine_id", "")))
+        self.version_edit.setText(str(recipe.get("version", "")))
+
+        self._set_tile_config(recipe.get("tile", {}), recipe.get("assets", {}))
+        self._set_detector_config(recipe.get("detectors", {}))
+
+    def _set_tile_config(self, tile: dict, assets: dict) -> None:
+        mode = str(tile.get("mode", "pattern_match"))
+        if mode not in {"pattern_match", "grid", "contour"}:
+            mode = "pattern_match"
+        self.tile_mode.setCurrent(mode)
+        self._on_tile_mode_changed(mode)
+
+        pattern_match = tile.get("pattern_match", {})
+        template_path = pattern_match.get("template_path") or assets.get("template_picture") or ""
+        self.template_path_edit.setText(str(template_path))
+        _set_widget_value(self.match_threshold, pattern_match.get("match_threshold", 0.8))
+        _set_widget_value(self.max_count, pattern_match.get("max_count", 999))
+        _set_widget_value(self.nms_threshold, pattern_match.get("nms_threshold", 0.3))
+        _set_widget_value(self.crop_padding, pattern_match.get("crop_padding", 8))
+        _set_widget_value(self.sort_row_tolerance, pattern_match.get("sort_row_tolerance", 20))
+
+        _set_widget_value(self.grid_width, tile.get("width", 512))
+        _set_widget_value(self.grid_height, tile.get("height", 512))
+        _set_widget_value(self.grid_overlap_x, tile.get("overlap_x", 64))
+        _set_widget_value(self.grid_overlap_y, tile.get("overlap_y", 64))
+
+        threshold = tile.get("threshold", {})
+        shapes = tile.get("shapes", {})
+        _set_combo_data(self.contour_threshold_method, threshold.get("method", "adaptive_gaussian"))
+        _set_widget_value(self.contour_invert, threshold.get("invert", False))
+        _set_widget_value(self.contour_threshold, threshold.get("threshold", 128))
+        _set_widget_value(self.contour_adaptive_block_size, threshold.get("adaptive_block_size", 31))
+        _set_widget_value(self.contour_adaptive_c, threshold.get("adaptive_c", 5))
+        _set_widget_value(self.contour_blur_size, threshold.get("blur_size", 3))
+        _set_widget_value(self.contour_min_area, shapes.get("min_area", 4000))
+        _set_widget_value(self.contour_max_area, shapes.get("max_area", 200000))
+        _set_widget_value(self.contour_approx_epsilon, shapes.get("approx_epsilon_ratio", 0.01))
+        _set_widget_value(self.contour_crop_padding, shapes.get("crop_padding", 8))
+
+    def _set_detector_config(self, detectors: dict) -> None:
+        for detector_id in self.detector_definitions:
+            self._enabled[detector_id] = False
+        self._param_widgets = {}
+
+        for detector_id, config in detectors.items():
+            detector_id = str(detector_id)
+            if detector_id not in self.detector_definitions:
+                continue
+            self._enabled[detector_id] = bool(config.get("enabled", True))
+            values = deepcopy(self.detector_definitions[detector_id]["default_params"])
+            values.update(config.get("params", {}) or {})
+            widgets = self._param_widgets.setdefault(detector_id, {})
+            for key, value in values.items():
+                widget = widgets.get(key)
+                if widget is None:
+                    widget = make_param_widget(value)
+                    widgets[key] = widget
+                else:
+                    _set_widget_value(widget, value)
+
+        for detector_id, widgets in self._row_widgets.items():
+            widgets["toggle"].setChecked(self._enabled.get(detector_id, False))
+
+        if self._active_detector not in self.detector_definitions:
+            self._active_detector = next(iter(self.detector_definitions))
+        self._select_detector(self._active_detector)
+        self._refresh_enabled_count()
+
     def set_preview_running(self, running: bool) -> None:
         self.preview_button.setEnabled(not running)
         self.save_button.setEnabled(not running)
@@ -497,12 +572,19 @@ class DesignerScreen(QWidget):
 
         self._clear_param_form()
         widgets = self._param_widgets.setdefault(detector_id, {})
-        for key, default_value in definition["default_params"].items():
+        for key, default_value in self._param_values_for_detector(detector_id).items():
             widget = widgets.get(key)
             if widget is None:
                 widget = make_param_widget(default_value)
                 widgets[key] = widget
             self.param_form.addRow(_label(key, mono=True), widget)
+
+    def _param_values_for_detector(self, detector_id: str) -> dict:
+        values = deepcopy(self.detector_definitions[detector_id]["default_params"])
+        for key, widget in self._param_widgets.get(detector_id, {}).items():
+            if key not in values:
+                values[key] = param_value(widget)
+        return values
 
     def _clear_param_form(self) -> None:
         while self.param_form.rowCount():
@@ -598,10 +680,9 @@ class DesignerScreen(QWidget):
         return selected
 
     def _params_for_detector(self, detector_id: str) -> dict:
-        definition = self.detector_definitions[detector_id]
         widgets = self._param_widgets.get(detector_id, {})
         params = {}
-        for key, default_value in definition["default_params"].items():
+        for key, default_value in self._param_values_for_detector(detector_id).items():
             widget = widgets.get(key)
             params[key] = default_value if widget is None else param_value(widget)
         return params
@@ -658,3 +739,18 @@ def _wrap_layout(layout) -> QWidget:
     widget = QWidget()
     widget.setLayout(layout)
     return widget
+
+
+def _set_widget_value(widget: QWidget, value) -> None:
+    if isinstance(widget, Toggle):
+        widget.setChecked(bool(value))
+    elif isinstance(widget, NumStepper):
+        widget.setValue(float(value))
+    elif isinstance(widget, QLineEdit):
+        widget.setText(str(value))
+
+
+def _set_combo_data(combo: QComboBox, value) -> None:
+    index = combo.findData(value)
+    if index >= 0:
+        combo.setCurrentIndex(index)
