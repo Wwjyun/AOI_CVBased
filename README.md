@@ -185,6 +185,16 @@ The pipeline can write:
 
 CSV fields include image name, recipe name, machine ID, product ID, final result, detector ID, defect type, global and local bounding boxes, tile ID, score, and area.
 
+## Build GUI EXE
+
+Build the Windows GUI package from the project virtual environment:
+
+```powershell
+.\build_exe.ps1
+```
+
+The launcher executable is created at `dist\AOI_GUI\AOI_GUI.exe`. For a machine-transfer smoke test, copy the whole `dist\AOI_GUI` folder because the exe depends on the `_internal` runtime directory next to it. Double-clicking `AOI_GUI.exe` starts the GUI directly.
+
 ## Current Scope
 
 Implemented MVP scope:

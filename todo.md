@@ -574,6 +574,7 @@ output:
 - [x] 2026-06-23 Grid tiling supports Search ROI template anchor, offset base ROI, rows/cols ROI sizing, and gap-based layout
 - [x] 2026-06-23 Grid tiling GUI exposes its own template picker for Search ROI matching
 - [x] 2026-06-23 Grid inspection overlays show per-ROI OK/NG frames like Pattern Match mode
+- [x] 2026-06-23 GUI exe packaging entry point and PyInstaller build script
 - [ ] debug image export per detector
 - [x] editable recipe saving from GUI
 - [ ] validation dataset

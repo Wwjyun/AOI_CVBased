@@ -11,3 +11,6 @@ outputs_validation/
 tmp_validation_input.png
 tmp_validation_pass.png
 tmp_validation_gui.png
+
+build/
+dist/
