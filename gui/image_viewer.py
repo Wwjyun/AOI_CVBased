@@ -37,7 +37,7 @@ class _DefectItem(QGraphicsRectItem):
         self.defect_id = defect.get("id")
         self._defect = defect
         self._on_click = on_click
-        self._is_pattern_status = defect.get("overlay_role") == "pattern_match_status"
+        self._is_status_overlay = defect.get("overlay_role") in {"pattern_match_status", "tile_status"}
         self._color = self._overlay_color(defect)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
         self.setZValue(2)
@@ -57,7 +57,7 @@ class _DefectItem(QGraphicsRectItem):
 
     @staticmethod
     def _overlay_color(defect: dict) -> QColor:
-        if defect.get("overlay_role") == "pattern_match_status":
+        if defect.get("overlay_role") in {"pattern_match_status", "tile_status"}:
             return QColor(COLORS["ng"] if defect.get("status") == "NG" else COLORS["pass"])
         return QColor(DEFECT_COLORS.get(defect.get("type", ""), DEFECT_COLOR_FALLBACK))
 
@@ -72,19 +72,19 @@ class _DefectItem(QGraphicsRectItem):
         return font
 
     def set_selected(self, selected: bool) -> None:
-        width = 3.0 if self._is_pattern_status else (2.5 if selected else 1.5)
+        width = 3.0 if self._is_status_overlay else (2.5 if selected else 1.5)
         pen = QPen(self._color, width)
         pen.setCosmetic(True)
         self.setPen(pen)
         self.setBrush(QBrush(Qt.BrushStyle.NoBrush))
         self.setZValue(3 if selected else 2)
 
-        show_label = selected or self._is_pattern_status
+        show_label = selected or self._is_status_overlay
         self._label.setVisible(show_label)
         self._label_bg.setVisible(show_label)
         if show_label:
             score = self._defect.get("score", 0.0)
-            if self._is_pattern_status:
+            if self._is_status_overlay:
                 text = f"{self._defect.get('tile_id', self.defect_id)} {self._defect.get('status', '')} {score:.2f}"
             else:
                 text = f"#{self.defect_id} {self._defect.get('type', '')} {score:.2f}"

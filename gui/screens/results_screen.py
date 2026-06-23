@@ -61,7 +61,7 @@ def flatten_defects(result: dict) -> list[dict]:
 
 def flatten_viewer_overlays(result: dict) -> list[dict]:
     if not any(
-        tile_result.get("tile", {}).get("metadata", {}).get("mode") == "pattern_match"
+        _is_status_tile(tile_result.get("tile", {}))
         for tile_result in result.get("tiles", [])
     ):
         return flatten_defects(result)
@@ -70,15 +70,10 @@ def flatten_viewer_overlays(result: dict) -> list[dict]:
     for tile_result in result.get("tiles", []):
         tile_info = tile_result.get("tile", {})
         metadata = tile_info.get("metadata", {})
-        if metadata.get("mode") != "pattern_match":
+        if not _is_status_tile(tile_info):
             continue
 
-        bbox = metadata.get("match_bbox") or [
-            tile_info.get("x", 0),
-            tile_info.get("y", 0),
-            tile_info.get("width", 0),
-            tile_info.get("height", 0),
-        ]
+        bbox = _status_tile_bbox(tile_info)
         status = "NG" if tile_result.get("result") == "NG" else "OK"
         overlays.append(
             {
@@ -90,14 +85,32 @@ def flatten_viewer_overlays(result: dict) -> list[dict]:
                     if not detector_result.get("pass", True)
                 )
                 or "-",
-                "type": "pattern_match_status",
+                "type": f"{metadata.get('mode', 'tile')}_status",
                 "bbox_global": bbox,
                 "score": metadata.get("score", 0.0),
                 "status": status,
-                "overlay_role": "pattern_match_status",
+                "overlay_role": "tile_status",
             }
         )
     return overlays
+
+
+def _is_status_tile(tile_info: dict) -> bool:
+    metadata = tile_info.get("metadata", {})
+    mode = metadata.get("mode")
+    return mode == "pattern_match" or mode == "grid"
+
+
+def _status_tile_bbox(tile_info: dict) -> list:
+    metadata = tile_info.get("metadata", {})
+    if metadata.get("mode") == "pattern_match" and metadata.get("match_bbox"):
+        return metadata["match_bbox"]
+    return [
+        tile_info.get("x", 0),
+        tile_info.get("y", 0),
+        tile_info.get("width", 0),
+        tile_info.get("height", 0),
+    ]
 
 
 def _make_thumb_pixmap(image: QImage, defect: dict, size: int = 104) -> QPixmap:

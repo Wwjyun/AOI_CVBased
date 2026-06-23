@@ -62,8 +62,8 @@ class Reporter:
     @staticmethod
     def _make_overlay(image, result: dict):
         overlay = image.copy()
-        if Reporter._has_pattern_match_tiles(result):
-            Reporter._draw_pattern_match_status_overlay(overlay, result)
+        if Reporter._has_status_tiles(result):
+            Reporter._draw_tile_status_overlay(overlay, result)
             return overlay
 
         for tile_result in result["tiles"]:
@@ -76,21 +76,26 @@ class Reporter:
         return overlay
 
     @staticmethod
-    def _has_pattern_match_tiles(result: dict) -> bool:
+    def _has_status_tiles(result: dict) -> bool:
         return any(
-            tile_result.get("tile", {}).get("metadata", {}).get("mode") == "pattern_match"
+            Reporter._is_status_tile(tile_result.get("tile", {}))
             for tile_result in result.get("tiles", [])
         )
 
     @staticmethod
-    def _draw_pattern_match_status_overlay(overlay, result: dict) -> None:
+    def _is_status_tile(tile: dict) -> bool:
+        metadata = tile.get("metadata", {})
+        return metadata.get("mode") in {"pattern_match", "grid"}
+
+    @staticmethod
+    def _draw_tile_status_overlay(overlay, result: dict) -> None:
         for tile_result in result.get("tiles", []):
             tile = tile_result.get("tile", {})
             metadata = tile.get("metadata", {})
-            if metadata.get("mode") != "pattern_match":
+            if not Reporter._is_status_tile(tile):
                 continue
 
-            bbox = metadata.get("match_bbox") or [tile.get("x", 0), tile.get("y", 0), tile.get("width", 0), tile.get("height", 0)]
+            bbox = Reporter._status_tile_bbox(tile)
             x, y, width, height = [int(round(value)) for value in bbox]
             is_ng = tile_result.get("result") == "NG"
             color = (0, 0, 255) if is_ng else (0, 180, 0)
@@ -101,6 +106,13 @@ class Reporter:
             cv2.rectangle(overlay, (x, y), (x + width, y + height), color, 4)
             label_y = y - 8 if y >= 18 else y + height + 22
             cv2.putText(overlay, label, (x, max(18, label_y)), cv2.FONT_HERSHEY_SIMPLEX, 0.65, color, 2)
+
+    @staticmethod
+    def _status_tile_bbox(tile: dict) -> list:
+        metadata = tile.get("metadata", {})
+        if metadata.get("mode") == "pattern_match" and metadata.get("match_bbox"):
+            return metadata["match_bbox"]
+        return [tile.get("x", 0), tile.get("y", 0), tile.get("width", 0), tile.get("height", 0)]
 
     @staticmethod
     def _draw_defect(overlay, defect: dict) -> None:
