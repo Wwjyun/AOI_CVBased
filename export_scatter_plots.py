@@ -195,10 +195,21 @@ def export_record(record: ScatterRecord, output_dir: Path, suffix: str = "") -> 
     return output_path
 
 
-def export_folder(input_dir: Path, output_dir: Path, recursive: bool) -> tuple[int, list[str]]:
-    json_pattern = "**/*.json" if recursive else "*.json"
-    csv_pattern = "**/*.csv" if recursive else "*.csv"
-    report_paths = sorted([*input_dir.glob(json_pattern), *input_dir.glob(csv_pattern)])
+def export_folder(
+    input_dir: Path,
+    output_dir: Path,
+    recursive: bool,
+    include_json: bool = True,
+    include_csv: bool = True,
+) -> tuple[int, list[str]]:
+    report_paths: list[Path] = []
+    if include_json:
+        json_pattern = "**/*.json" if recursive else "*.json"
+        report_paths.extend(input_dir.glob(json_pattern))
+    if include_csv:
+        csv_pattern = "**/*.csv" if recursive else "*.csv"
+        report_paths.extend(input_dir.glob(csv_pattern))
+    report_paths = sorted(report_paths)
     exported = 0
     errors: list[str] = []
 
@@ -228,6 +239,8 @@ class ScatterExportApp:
         self.input_dir = StringVar()
         self.output_dir = StringVar()
         self.recursive = BooleanVar(value=True)
+        self.include_json = BooleanVar(value=True)
+        self.include_csv = BooleanVar(value=True)
         self.status = StringVar(value="Select a folder that contains AOI JSON or CSV reports.")
         self._build()
 
@@ -251,12 +264,17 @@ class ScatterExportApp:
             row=2, column=1, sticky="w", pady=8
         )
 
+        source_frame = ttk.Frame(frame)
+        source_frame.grid(row=3, column=1, sticky="w", padx=8, pady=4)
+        ttk.Checkbutton(source_frame, text="JSON", variable=self.include_json).pack(side="left", padx=(0, 18))
+        ttk.Checkbutton(source_frame, text="CSV", variable=self.include_csv).pack(side="left")
+
         ttk.Button(frame, text="Export Scatter Plots", command=self._export).grid(
-            row=3, column=1, sticky="ew", padx=8, pady=18
+            row=4, column=1, sticky="ew", padx=8, pady=18
         )
 
         status_box = ttk.Label(frame, textvariable=self.status, wraplength=620, foreground="#344054")
-        status_box.grid(row=4, column=0, columnspan=3, sticky="ew", pady=8)
+        status_box.grid(row=5, column=0, columnspan=3, sticky="ew", pady=8)
 
     def _choose_input(self) -> None:
         folder = filedialog.askdirectory(title="Select AOI report folder")
@@ -275,13 +293,22 @@ class ScatterExportApp:
         input_dir = Path(self.input_dir.get())
         output_dir = Path(self.output_dir.get() or input_dir / "scatter_plots")
         if not input_dir.is_dir():
-            messagebox.showerror("Folder not found", "Please select a valid JSON report folder.")
+            messagebox.showerror("Folder not found", "Please select a valid report folder.")
+            return
+        if not self.include_json.get() and not self.include_csv.get():
+            messagebox.showerror("No report type selected", "Please select JSON, CSV, or both.")
             return
 
         self.status.set("Exporting...")
         self.root.update_idletasks()
         try:
-            exported, errors = export_folder(input_dir, output_dir, self.recursive.get())
+            exported, errors = export_folder(
+                input_dir,
+                output_dir,
+                self.recursive.get(),
+                include_json=self.include_json.get(),
+                include_csv=self.include_csv.get(),
+            )
         except Exception:
             messagebox.showerror("Export failed", traceback.format_exc())
             self.status.set("Export failed.")
