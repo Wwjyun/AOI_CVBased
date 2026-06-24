@@ -62,6 +62,26 @@ python main.py --image C:\path\to\image.png --recipe recipes\PRODUCT_A_AOI_01.ya
 
 The command prints the final PASS / NG result and report file paths.
 
+## Logging
+
+The app uses the OOP logging facade in `core/logging_system.py`. CLI and GUI runs write rotating logs to:
+
+- CLI default: `<output>\logs\aoi.log`
+- GUI default: `outputs\logs\aoi.log`
+
+CLI logging can be adjusted with:
+
+```powershell
+python main.py --image C:\path\to\image.png --recipe recipes\PRODUCT_A_AOI_01.yaml --output outputs --log-level DEBUG --log-dir outputs\logs
+```
+
+Environment overrides are also supported:
+
+```powershell
+$env:AOI_LOG_LEVEL='DEBUG'
+$env:AOI_LOG_DIR='outputs\logs'
+```
+
 ## Run GUI
 
 ```powershell

@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Callable
 
 from core.image_loader import SUPPORTED_EXTENSIONS
+from core.logging_system import LogMixin
 from core.pipeline import AOIPipeline
 
 
@@ -41,7 +42,7 @@ class BatchImageResult:
         }
 
 
-class BatchInspectionProcessor:
+class BatchInspectionProcessor(LogMixin):
     """Run the existing AOI pipeline over every supported image in a folder."""
 
     def __init__(
@@ -67,8 +68,17 @@ class BatchInspectionProcessor:
         started_at = datetime.datetime.now()
         batch_output_dir = self.output_dir / "batch" / started_at.strftime("%Y%m%d_%H%M%S")
         batch_output_dir.mkdir(parents=True, exist_ok=True)
+        self.logger.info(
+            "Batch inspection started: input=%s recipe=%s output=%s images=%s recursive=%s",
+            self.input_dir,
+            self.recipe_path,
+            batch_output_dir,
+            len(image_paths),
+            self.recursive,
+        )
 
         if not image_paths:
+            self.logger.warning("Batch inspection found no supported images: input=%s", self.input_dir)
             return self._build_summary(started_at, batch_output_dir, [])
 
         total = len(image_paths)
@@ -88,6 +98,7 @@ class BatchInspectionProcessor:
                 try:
                     result = future.result()
                 except Exception as exc:
+                    self.logger.exception("Batch image failed: image=%s", image_path)
                     result = BatchImageResult(
                         image_path=image_path,
                         final_result="ERROR",
@@ -107,9 +118,12 @@ class BatchInspectionProcessor:
                 )
 
         results = [results_by_index[index] for index in range(total)]
-        return self._build_summary(started_at, batch_output_dir, results)
+        summary = self._build_summary(started_at, batch_output_dir, results)
+        self.logger.info("Batch inspection completed: summary=%s", summary["summary"])
+        return summary
 
     def _process_image(self, image_path: Path, batch_output_dir: Path) -> BatchImageResult:
+        self.logger.info("Batch image started: image=%s", image_path)
         pipeline = AOIPipeline(
             recipe_path=self.recipe_path,
             output_dir=batch_output_dir,
@@ -117,6 +131,13 @@ class BatchInspectionProcessor:
         )
         result = pipeline.run(image_path)
         summary = result.get("summary", {})
+        self.logger.info(
+            "Batch image completed: image=%s final=%s defects=%s duration=%s",
+            image_path.name,
+            result.get("final_result", "-"),
+            summary.get("defect_count", 0),
+            result.get("duration_sec", 0),
+        )
         return BatchImageResult(
             image_path=image_path,
             final_result=str(result.get("final_result", "-")),

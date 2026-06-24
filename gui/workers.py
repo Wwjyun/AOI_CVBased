@@ -10,11 +10,12 @@ import numpy as np
 
 from core.image_loader import ImageLoader
 from core.batch_processor import BatchInspectionProcessor
+from core.logging_system import LogMixin
 from core.pipeline import AOIPipeline
 from core.tiler import create_tiler
 
 
-class ImagePreviewWorker(QObject):
+class ImagePreviewWorker(QObject, LogMixin):
     loaded = Signal(Path, object)
     failed = Signal(Path, str)
     progress = Signal(int, str)
@@ -27,6 +28,7 @@ class ImagePreviewWorker(QObject):
     @Slot()
     def run(self) -> None:
         try:
+            self.logger.info("Preview load started: image=%s", self.path)
             self.progress.emit(0, "Loading image")
             image = self.image_loader.load_rgb(self.path)
             self.progress.emit(60, "Converting preview")
@@ -39,14 +41,16 @@ class ImagePreviewWorker(QObject):
                 QImage.Format.Format_RGB888,
             ).copy()
         except Exception as exc:
+            self.logger.exception("Preview load failed: image=%s", self.path)
             self.failed.emit(self.path, str(exc))
             return
 
         self.progress.emit(100, "Preview ready")
+        self.logger.info("Preview load completed: image=%s size=%sx%s", self.path, width, height)
         self.loaded.emit(self.path, qimage)
 
 
-class InspectionWorker(QObject):
+class InspectionWorker(QObject, LogMixin):
     finished = Signal(dict)
     failed = Signal(str)
     progress = Signal(int, str)
@@ -61,6 +65,7 @@ class InspectionWorker(QObject):
     @Slot()
     def run(self) -> None:
         try:
+            self.logger.info("GUI inspection worker started: image=%s recipe=%s", self.image_path, self.recipe_path)
             pipeline = AOIPipeline(
                 recipe_path=self.recipe_path,
                 output_dir=self.output_dir,
@@ -69,13 +74,15 @@ class InspectionWorker(QObject):
             )
             result = pipeline.run(self.image_path)
         except Exception as exc:
+            self.logger.exception("GUI inspection worker failed: image=%s recipe=%s", self.image_path, self.recipe_path)
             self.failed.emit(str(exc))
             return
 
+        self.logger.info("GUI inspection worker completed: image=%s final=%s", self.image_path, result.get("final_result"))
         self.finished.emit(result)
 
 
-class BatchInspectionWorker(QObject):
+class BatchInspectionWorker(QObject, LogMixin):
     finished = Signal(dict)
     failed = Signal(str)
     progress = Signal(int, str)
@@ -98,6 +105,7 @@ class BatchInspectionWorker(QObject):
     @Slot()
     def run(self) -> None:
         try:
+            self.logger.info("GUI batch worker started: input=%s recipe=%s", self.input_dir, self.recipe_path)
             processor = BatchInspectionProcessor(
                 input_dir=self.input_dir,
                 recipe_path=self.recipe_path,
@@ -108,13 +116,15 @@ class BatchInspectionWorker(QObject):
             )
             result = processor.run()
         except Exception as exc:
+            self.logger.exception("GUI batch worker failed: input=%s recipe=%s", self.input_dir, self.recipe_path)
             self.failed.emit(str(exc))
             return
 
+        self.logger.info("GUI batch worker completed: summary=%s", result.get("summary", {}))
         self.finished.emit(result)
 
 
-class TilePreviewWorker(QObject):
+class TilePreviewWorker(QObject, LogMixin):
     finished = Signal(bytes, int, int, int, int, dict)
     failed = Signal(str)
     progress = Signal(int, str)
@@ -129,6 +139,7 @@ class TilePreviewWorker(QObject):
     @Slot()
     def run(self) -> None:
         try:
+            self.logger.info("Tile preview started: image=%s config=%s", self.image_path, self.tile_config)
             self.progress.emit(0, "Loading image for tile preview")
             image = self.image_loader.load_bgr(self.image_path)
             self.progress.emit(20, "Creating tiler")
@@ -155,10 +166,12 @@ class TilePreviewWorker(QObject):
                     best_score = score if best_score is None else max(best_score, score)
             shape_counts["best_score"] = best_score
         except Exception as exc:
+            self.logger.exception("Tile preview failed: image=%s", self.image_path)
             self.failed.emit(str(exc))
             return
 
         self.progress.emit(100, "Tile preview ready")
+        self.logger.info("Tile preview completed: image=%s tiles=%s", self.image_path, len(tiles))
         self.finished.emit(image_bytes, width, height, bytes_per_line, len(tiles), shape_counts)
 
     @staticmethod

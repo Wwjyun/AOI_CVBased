@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QApplication,
 )
 
+from core.logging_system import LogMixin, configure_logging
 from core.recipe_manager import RecipeError, RecipeManager
 from gui import theme
 from gui.screens.batch_dashboard_screen import BatchDashboardScreen
@@ -80,7 +81,7 @@ class _RecipePanelCompatibility:
         self._window._load_recipe(path)
 
 
-class MainWindow(QMainWindow):
+class MainWindow(QMainWindow, LogMixin):
     def __init__(self):
         super().__init__()
         app = QApplication.instance()
@@ -125,6 +126,7 @@ class MainWindow(QMainWindow):
 
         self._build_ui()
         self._connect_signals()
+        self.logger.info("MainWindow initialized")
 
         self._set_screen("run")
         self.topbar.set_mode(self.mode)
@@ -684,6 +686,7 @@ class MainWindow(QMainWindow):
 def run_app() -> int:
     from PySide6.QtWidgets import QApplication
 
+    configure_logging()
     app = QApplication.instance() or QApplication([])
     theme.install_application_font(app)
     app.setStyleSheet(theme.build_stylesheet())

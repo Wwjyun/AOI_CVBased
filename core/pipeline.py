@@ -7,6 +7,7 @@ from typing import Callable
 from core.aggregator import Aggregator
 from core.detector_manager import DetectorManager
 from core.image_loader import load_image
+from core.logging_system import LogMixin
 from core.recipe_manager import RecipeManager
 from core.recipe_builder import RecipeTemplatePathSync
 from core.reporter import Reporter
@@ -14,7 +15,7 @@ from core.result_mapper import map_tile_result_to_global
 from core.tiler import create_tiler
 
 
-class AOIPipeline:
+class AOIPipeline(LogMixin):
     def __init__(
         self,
         recipe_path: Path,
@@ -33,20 +34,31 @@ class AOIPipeline:
 
     def run(self, image_path: Path) -> dict:
         started = time.perf_counter()
+        self.logger.info(
+            "Inspection started: image=%s recipe=%s output=%s debug=%s",
+            image_path,
+            self.recipe_path,
+            self.output_dir,
+            self.debug,
+        )
         self._progress(0, "Starting inspection")
         recipe = self.recipe_manager.load(self.recipe_path)
         if self.output_overrides:
             recipe["output"] = {**recipe.get("output", {}), **self.output_overrides}
         recipe = RecipeTemplatePathSync.from_recipe(recipe).apply(recipe)
+        self.logger.info("Recipe loaded: name=%s version=%s", recipe.get("recipe_name"), recipe.get("version"))
         self._progress(5, "Recipe loaded")
         image = load_image(image_path)
+        self.logger.info("Image loaded: image=%s shape=%s", image_path, getattr(image, "shape", None))
         self._progress(10, "Image loaded")
         tile_config = recipe["tile"]
         tiler = create_tiler(tile_config)
         detectors = self.detector_manager.create_enabled(self.recipe_manager.enabled_detectors(recipe))
+        self.logger.info("Detectors initialized: count=%s ids=%s", len(detectors), [d.detector_id for d in detectors])
         self._progress(15, "Detectors initialized")
 
         tiles = list(tiler.iter_tiles(image))
+        self.logger.info("Tiles prepared: count=%s mode=%s", len(tiles), tile_config.get("mode", "grid"))
         self._progress(20, f"Tiles prepared: {len(tiles)}")
 
         tile_results = []
@@ -105,6 +117,14 @@ class AOIPipeline:
         self._progress(92, "Writing overlay, CSV, and JSON")
         outputs = Reporter(self.output_dir, recipe["output"]).write(image, result)
         serializable_result["outputs"] = outputs
+        self.logger.info(
+            "Inspection completed: image=%s final=%s defects=%s ng_tiles=%s duration=%.3fs",
+            Path(image_path).name,
+            serializable_result["final_result"],
+            serializable_result["summary"].get("defect_count", 0),
+            serializable_result["summary"].get("ng_count", 0),
+            serializable_result["duration_sec"],
+        )
         self._progress(100, "Inspection complete")
         return serializable_result
 

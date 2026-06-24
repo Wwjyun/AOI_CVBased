@@ -575,6 +575,7 @@ output:
 - [x] 2026-06-23 Grid tiling GUI exposes its own template picker for Search ROI matching
 - [x] 2026-06-23 Grid inspection overlays show per-ROI OK/NG frames like Pattern Match mode
 - [x] 2026-06-23 GUI exe packaging entry point and PyInstaller build script
+- [x] 2026-06-24 OOP global logging system with rotating file logs for CLI, GUI workers, pipeline, batch processing, image loading, and reporter output
 - [ ] debug image export per detector
 - [x] editable recipe saving from GUI
 - [ ] validation dataset

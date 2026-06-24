@@ -8,8 +8,10 @@ from pathlib import Path
 
 import cv2
 
+from core.logging_system import LogMixin
 
-class Reporter:
+
+class Reporter(LogMixin):
     def __init__(self, output_dir: Path, output_config: dict):
         self.output_dir = Path(output_dir)
         self.output_config = output_config or {}
@@ -25,6 +27,7 @@ class Reporter:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         base_name = f"{stem}_{result['recipe_name']}_{timestamp}_{uuid.uuid4().hex[:8]}"
         outputs: dict[str, str] = {}
+        self.logger.info("Writing report outputs: image=%s base=%s", result.get("image_name"), base_name)
 
         if self.output_config.get("save_overlay", True):
             overlay_path = self.overlay_dir / f"{base_name}_overlay.png"
@@ -46,6 +49,7 @@ class Reporter:
                 json.dump(self._json_safe_result(result, outputs), handle, ensure_ascii=False, indent=2)
             outputs["json"] = str(json_path)
 
+        self.logger.info("Report outputs written: outputs=%s", outputs)
         return outputs
 
     @staticmethod

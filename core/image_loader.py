@@ -6,6 +6,8 @@ import cv2
 import numpy as np
 from PIL import Image, ImageOps
 
+from core.logging_system import LogMixin
+
 
 SUPPORTED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff"}
 
@@ -14,7 +16,7 @@ class ImageLoadError(RuntimeError):
     pass
 
 
-class ImageLoader:
+class ImageLoader(LogMixin):
     def __init__(self, supported_extensions: set[str] | None = None):
         self.supported_extensions = supported_extensions or SUPPORTED_EXTENSIONS
         Image.MAX_IMAGE_PIXELS = None
@@ -26,10 +28,14 @@ class ImageLoader:
     def load_rgb(self, path: Path):
         image_path = self._validate_path(path)
         try:
+            self.logger.debug("Reading image with Pillow: %s", image_path)
             with Image.open(image_path) as pil_image:
                 image = ImageOps.exif_transpose(pil_image).convert("RGB")
-                return np.array(image)
+                array = np.array(image)
+                self.logger.debug("Image read completed: %s shape=%s", image_path, array.shape)
+                return array
         except Exception as exc:
+            self.logger.exception("Image read failed: %s", image_path)
             raise ImageLoadError(f"Pillow failed to read image: {image_path}") from exc
 
     def _validate_path(self, path: Path) -> Path:
