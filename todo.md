@@ -583,6 +583,7 @@ output:
 - [x] 2026-06-24 Standalone scatter plot exporter for folder-selected JSON tile data and CSV defect data
 - [x] 2026-06-24 Scatter exporter GUI can filter JSON-only, CSV-only, or both report types
 - [x] 2026-06-24 JSON scatter export uses row/column axis labels with cleaner report styling
+- [x] 2026-06-24 JSON scatter export hides source text and rotates the Row axis label away from tick labels
 - [ ] debug image export per detector
 - [x] editable recipe saving from GUI
 - [ ] validation dataset

@@ -199,7 +199,7 @@ def export_record(record: ScatterRecord, output_dir: Path, suffix: str = "") -> 
     x_label = "Column" if record.kind == "json" else "tile x"
     y_label = "Row" if record.kind == "json" else "tile y"
     draw.text(((left + right) / 2 - 28, bottom + 42), x_label, fill=COLORS["muted"], font=label_font)
-    draw.text((30, (top + bottom) / 2), y_label, fill=COLORS["muted"], font=label_font)
+    _draw_rotated_axis_label(image, y_label, (18, (top + bottom) / 2), label_font, COLORS["muted"])
     _draw_legend(draw, right - 270, top + 16, small_font)
 
     safe_name = _safe_filename(Path(record.image_name).stem or record.source_path.stem)
@@ -349,6 +349,25 @@ def _draw_legend(draw: ImageDraw.ImageDraw, x: int, y: int, font: ImageFont.Imag
         draw.text((item_x + 18, y - 2), status, fill=COLORS["text"], font=font)
 
 
+def _draw_rotated_axis_label(
+    image: Image.Image,
+    text: str,
+    center: tuple[float, float],
+    font: ImageFont.ImageFont,
+    color: str,
+) -> None:
+    bbox = font.getbbox(text)
+    width = max(1, bbox[2] - bbox[0] + 8)
+    height = max(1, bbox[3] - bbox[1] + 8)
+    label = Image.new("RGBA", (width, height), (255, 255, 255, 0))
+    label_draw = ImageDraw.Draw(label)
+    label_draw.text((4 - bbox[0], 4 - bbox[1]), text, fill=color, font=font)
+    rotated = label.rotate(90, expand=True)
+    x = int(center[0] - rotated.width / 2)
+    y = int(center[1] - rotated.height / 2)
+    image.paste(rotated, (x, y), rotated)
+
+
 def _draw_status_cards(
     draw: ImageDraw.ImageDraw,
     x: int,
@@ -455,14 +474,14 @@ def _sample_axis_keys(keys: list[int], limit: int = 14) -> list[int]:
 
 
 def _subtitle(record: ScatterRecord) -> str:
-    source = f"source: {record.source_path.name}"
     if record.kind == "json":
         rows = {point.row for point in record.points if point.row is not None}
         cols = {point.col for point in record.points if point.col is not None}
         grid = ""
         if rows and cols:
             grid = f" | grid: {len(rows)} rows x {len(cols)} cols"
-        return f"{source} | tiles: {len(record.points)} | NG tiles: {_count_status(record, 'NG')}{grid}"
+        return f"tiles: {len(record.points)} | NG tiles: {_count_status(record, 'NG')}{grid}"
+    source = f"source: {record.source_path.name}"
     return f"{source} | defect points: {len(record.points)} | CSV bbox center plot"
 
 
