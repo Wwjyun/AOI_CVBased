@@ -19,14 +19,16 @@ except ImportError as exc:
 CANVAS_SIZE = (1000, 760)
 PLOT_BOX = (82, 92, 940, 650)
 COLORS = {
-    "bg": "#f7f8fa",
+    "bg": "#f5f7fb",
+    "panel": "#ffffff",
     "plot": "#ffffff",
-    "border": "#c9ced6",
-    "grid": "#e4e7ec",
-    "text": "#1d2433",
+    "border": "#cfd6e3",
+    "grid": "#e7ebf2",
+    "text": "#172033",
     "muted": "#667085",
+    "soft": "#eef2f7",
     "PASS": "#20a464",
-    "NG": "#dc3545",
+    "NG": "#d92d20",
     "ERROR": "#f59e0b",
     "UNKNOWN": "#7a8699",
 }
@@ -39,6 +41,8 @@ class ScatterPoint:
     y: float
     status: str
     defect_count: int
+    row: int | None = None
+    col: int | None = None
 
 
 @dataclass(frozen=True)
@@ -48,6 +52,7 @@ class ScatterRecord:
     width: float
     height: float
     points: list[ScatterPoint]
+    kind: str = "json"
 
 
 def load_scatter_records(json_path: Path) -> list[ScatterRecord]:
@@ -105,6 +110,7 @@ def load_csv_records(csv_path: Path) -> list[ScatterRecord]:
                 width=max(width, 1.0),
                 height=max(height, 1.0),
                 points=points,
+                kind="csv",
             )
         )
     return records
@@ -138,6 +144,8 @@ def _record_from_result(result: dict, source_path: Path, fallback_name: str = ""
                 y=y + height / 2.0,
                 status=status if status in {"PASS", "NG", "ERROR"} else "UNKNOWN",
                 defect_count=defect_count,
+                row=_int_or_none(tile.get("row")),
+                col=_int_or_none(tile.get("col")),
             )
         )
 
@@ -148,6 +156,7 @@ def _record_from_result(result: dict, source_path: Path, fallback_name: str = ""
         width=max(max_right, 1.0),
         height=max(max_bottom, 1.0),
         points=points,
+        kind="json",
     )
 
 
@@ -158,33 +167,39 @@ def export_record(record: ScatterRecord, output_dir: Path, suffix: str = "") -> 
     title_font = _font(24, bold=True)
     label_font = _font(15)
     small_font = _font(12)
+    metric_font = _font(13, bold=True)
 
     title = record.image_name
     draw.text((40, 26), title, fill=COLORS["text"], font=title_font)
     draw.text(
         (40, 58),
-        f"source: {record.source_path.name} | points: {len(record.points)} | NG points: {_count_status(record, 'NG')}",
+        _subtitle(record),
         fill=COLORS["muted"],
         font=small_font,
     )
 
     left, top, right, bottom = PLOT_BOX
-    draw.rectangle(PLOT_BOX, fill=COLORS["plot"], outline=COLORS["border"], width=2)
-    for index in range(1, 5):
-        x = left + (right - left) * index / 5
-        y = top + (bottom - top) * index / 5
-        draw.line((x, top, x, bottom), fill=COLORS["grid"], width=1)
-        draw.line((left, y, right, y), fill=COLORS["grid"], width=1)
+    _draw_status_cards(draw, right - 360, 24, record, metric_font, small_font)
+    draw.rounded_rectangle(PLOT_BOX, radius=14, fill=COLORS["plot"], outline=COLORS["border"], width=2)
+    if record.kind == "json":
+        _draw_json_grid(draw, record, small_font)
+    else:
+        _draw_coordinate_grid(draw, record, small_font)
 
     for point in record.points:
         px = left + point.x / record.width * (right - left)
         py = top + point.y / record.height * (bottom - top)
-        radius = 6 + min(12, max(0, point.defect_count) * 2)
+        radius = 7 + min(12, max(0, point.defect_count) * 2)
         color = COLORS.get(point.status, COLORS["UNKNOWN"])
         draw.ellipse((px - radius, py - radius, px + radius, py + radius), fill=color, outline="#ffffff", width=2)
+        if record.kind == "json" and point.status != "PASS":
+            label = _point_grid_label(point)
+            draw.text((px + radius + 4, py - 7), label, fill=COLORS["text"], font=small_font)
 
-    draw.text(((left + right) / 2 - 20, bottom + 30), "tile x", fill=COLORS["muted"], font=label_font)
-    draw.text((28, (top + bottom) / 2), "tile y", fill=COLORS["muted"], font=label_font)
+    x_label = "Column" if record.kind == "json" else "tile x"
+    y_label = "Row" if record.kind == "json" else "tile y"
+    draw.text(((left + right) / 2 - 28, bottom + 42), x_label, fill=COLORS["muted"], font=label_font)
+    draw.text((30, (top + bottom) / 2), y_label, fill=COLORS["muted"], font=label_font)
     _draw_legend(draw, right - 270, top + 16, small_font)
 
     safe_name = _safe_filename(Path(record.image_name).stem or record.source_path.stem)
@@ -334,6 +349,131 @@ def _draw_legend(draw: ImageDraw.ImageDraw, x: int, y: int, font: ImageFont.Imag
         draw.text((item_x + 18, y - 2), status, fill=COLORS["text"], font=font)
 
 
+def _draw_status_cards(
+    draw: ImageDraw.ImageDraw,
+    x: int,
+    y: int,
+    record: ScatterRecord,
+    metric_font: ImageFont.ImageFont,
+    small_font: ImageFont.ImageFont,
+) -> None:
+    cards = [
+        ("PASS", _count_status(record, "PASS")),
+        ("NG", _count_status(record, "NG")),
+        ("ERROR", _count_status(record, "ERROR")),
+    ]
+    for index, (status, count) in enumerate(cards):
+        card_x = x + index * 116
+        draw.rounded_rectangle(
+            (card_x, y, card_x + 102, y + 46),
+            radius=10,
+            fill=COLORS["panel"],
+            outline=COLORS["border"],
+            width=1,
+        )
+        draw.ellipse((card_x + 12, y + 16, card_x + 24, y + 28), fill=COLORS[status])
+        draw.text((card_x + 32, y + 8), status, fill=COLORS["muted"], font=small_font)
+        draw.text((card_x + 32, y + 24), str(count), fill=COLORS["text"], font=metric_font)
+
+
+def _draw_coordinate_grid(draw: ImageDraw.ImageDraw, record: ScatterRecord, font: ImageFont.ImageFont) -> None:
+    left, top, right, bottom = PLOT_BOX
+    for index in range(1, 5):
+        x = left + (right - left) * index / 5
+        y = top + (bottom - top) * index / 5
+        draw.line((x, top, x, bottom), fill=COLORS["grid"], width=1)
+        draw.line((left, y, right, y), fill=COLORS["grid"], width=1)
+        draw.text((x - 12, bottom + 10), str(int(record.width * index / 5)), fill=COLORS["muted"], font=font)
+        draw.text((left - 54, y - 7), str(int(record.height * index / 5)), fill=COLORS["muted"], font=font)
+
+
+def _draw_json_grid(draw: ImageDraw.ImageDraw, record: ScatterRecord, font: ImageFont.ImageFont) -> None:
+    left, top, right, bottom = PLOT_BOX
+    col_ticks = _axis_ticks(record, axis="col")
+    row_ticks = _axis_ticks(record, axis="row")
+
+    for label, px in col_ticks:
+        draw.line((px, top, px, bottom), fill=COLORS["grid"], width=1)
+        draw.text((px - 12, bottom + 12), label, fill=COLORS["muted"], font=font)
+
+    for label, py in row_ticks:
+        draw.line((left, py, right, py), fill=COLORS["grid"], width=1)
+        draw.text((left - 48, py - 7), label, fill=COLORS["muted"], font=font)
+
+    if len(col_ticks) > 14 or len(row_ticks) > 12:
+        draw.text(
+            (left + 16, bottom - 28),
+            "Dense layout: some row/column labels are sampled.",
+            fill=COLORS["muted"],
+            font=font,
+        )
+
+
+def _axis_ticks(record: ScatterRecord, axis: str) -> list[tuple[str, float]]:
+    left, top, right, bottom = PLOT_BOX
+    if axis == "col":
+        values = [(point.col, point.x) for point in record.points if point.col is not None]
+        scale = lambda position: left + position / record.width * (right - left)
+        prefix = "C"
+        fallback_positions = sorted({round(point.x, 4) for point in record.points})
+    else:
+        values = [(point.row, point.y) for point in record.points if point.row is not None]
+        scale = lambda position: top + position / record.height * (bottom - top)
+        prefix = "R"
+        fallback_positions = sorted({round(point.y, 4) for point in record.points})
+
+    ticks: list[tuple[str, float]] = []
+    if values:
+        grouped: dict[int, list[float]] = {}
+        for label_value, position in values:
+            if label_value is None:
+                continue
+            grouped.setdefault(label_value, []).append(position)
+        offset = 1 if grouped and min(grouped) == 0 else 0
+        sampled_keys = _sample_axis_keys(sorted(grouped))
+        for key in sampled_keys:
+            positions = grouped[key]
+            label = f"{prefix}{key + offset}"
+            ticks.append((label, scale(sum(positions) / len(positions))))
+        return ticks
+
+    sampled_positions = _sample_axis_keys(list(range(len(fallback_positions))))
+    for index in sampled_positions:
+        position = fallback_positions[index]
+        ticks.append((f"{prefix}{index + 1}", scale(position)))
+    return ticks
+
+
+def _sample_axis_keys(keys: list[int], limit: int = 14) -> list[int]:
+    if len(keys) <= limit:
+        return keys
+    if limit <= 1:
+        return keys[:1]
+    step = (len(keys) - 1) / (limit - 1)
+    indexes = sorted({round(index * step) for index in range(limit)})
+    return [keys[index] for index in indexes]
+
+
+def _subtitle(record: ScatterRecord) -> str:
+    source = f"source: {record.source_path.name}"
+    if record.kind == "json":
+        rows = {point.row for point in record.points if point.row is not None}
+        cols = {point.col for point in record.points if point.col is not None}
+        grid = ""
+        if rows and cols:
+            grid = f" | grid: {len(rows)} rows x {len(cols)} cols"
+        return f"{source} | tiles: {len(record.points)} | NG tiles: {_count_status(record, 'NG')}{grid}"
+    return f"{source} | defect points: {len(record.points)} | CSV bbox center plot"
+
+
+def _point_grid_label(point: ScatterPoint) -> str:
+    if point.row is None or point.col is None:
+        return point.tile_id
+    row = point.row + 1
+    col = point.col + 1
+    return f"R{row} C{col}"
+
+
 def _count_status(record: ScatterRecord, status: str) -> int:
     return sum(1 for point in record.points if point.status == status)
 
@@ -380,6 +520,13 @@ def _float_value(value: object) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _int_or_none(value: object) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _font(size: int, bold: bool = False) -> ImageFont.ImageFont:
