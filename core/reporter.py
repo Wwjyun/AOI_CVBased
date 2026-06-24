@@ -204,33 +204,42 @@ class Reporter(LogMixin):
     @staticmethod
     def _write_matrix_csv(path: Path, result: dict) -> None:
         tiles = result.get("tiles", [])
+        check_mark = "\u2713"
+        max_row = max(
+            (Reporter._safe_int(tile_result.get("tile", {}).get("row", 0)) for tile_result in tiles),
+            default=0,
+        )
         max_col = max(
-            (int(tile_result.get("tile", {}).get("col", 0) or 0) for tile_result in tiles),
+            (Reporter._safe_int(tile_result.get("tile", {}).get("col", 0)) for tile_result in tiles),
             default=0,
         )
         fields = ["id", *[f"c{col + 1}" for col in range(max_col + 1)]]
         image_stem = Path(str(result.get("image_name", ""))).stem
 
-        ng_tiles = []
+        matrix_rows: dict[int, dict[str, str]] = {
+            row: {"id": f"{image_stem}-{max_row - row + 1}", **{field: "" for field in fields[1:]}}
+            for row in range(max_row + 1)
+        }
         for tile_result in tiles:
-            if tile_result.get("result") != "NG":
-                continue
             tile = tile_result.get("tile", {})
-            try:
-                col = int(tile.get("col", 0) or 0)
-            except (TypeError, ValueError):
-                col = 0
-            ng_tiles.append((int(tile.get("row", 0) or 0), col, str(tile.get("tile_id", ""))))
-
-        ng_tiles.sort(key=lambda item: (item[0], item[1], item[2]))
+            row = Reporter._safe_int(tile.get("row", 0))
+            col = Reporter._safe_int(tile.get("col", 0))
+            if row not in matrix_rows:
+                matrix_rows[row] = {"id": f"{image_stem}-{max_row - row + 1}", **{field: "" for field in fields[1:]}}
+            if tile_result.get("result") == "NG":
+                column_name = f"c{col + 1}"
+                if column_name in matrix_rows[row]:
+                    matrix_rows[row][column_name] = check_mark
 
         with path.open("w", encoding="utf-8-sig", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=fields)
             writer.writeheader()
-            for index, (_row, col, _tile_id) in enumerate(ng_tiles, start=1):
-                row_data = {field: "" for field in fields}
-                row_data["id"] = f"{image_stem}-{index}"
-                column_name = f"c{col + 1}"
-                if column_name in row_data:
-                    row_data[column_name] = "✓"
-                writer.writerow(row_data)
+            for row in sorted(matrix_rows):
+                writer.writerow(matrix_rows[row])
+
+    @staticmethod
+    def _safe_int(value: object) -> int:
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0
