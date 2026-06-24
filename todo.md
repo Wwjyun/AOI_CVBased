@@ -576,6 +576,7 @@ output:
 - [x] 2026-06-23 Grid inspection overlays show per-ROI OK/NG frames like Pattern Match mode
 - [x] 2026-06-23 GUI exe packaging entry point and PyInstaller build script
 - [x] 2026-06-24 OOP global logging system with rotating file logs for CLI, GUI workers, pipeline, batch processing, image loading, and reporter output
+- [x] 2026-06-24 GUI monitor mode watches a folder tree and processes newly added images one by one through an OOP monitor processor
 - [ ] debug image export per detector
 - [x] editable recipe saving from GUI
 - [ ] validation dataset

@@ -25,19 +25,20 @@ from core.recipe_manager import RecipeError, RecipeManager
 from gui import theme
 from gui.screens.batch_dashboard_screen import BatchDashboardScreen
 from gui.screens.designer_screen import DesignerScreen
+from gui.screens.monitor_screen import MonitorScreen
 from gui.screens.results_screen import ResultsScreen, flatten_defects, flatten_viewer_overlays
 from gui.screens.run_screen import RunScreen
 from gui.widgets.common import Toggle
 from gui.widgets.drawer import Drawer
 from gui.widgets.rail import NavRail
 from gui.widgets.topbar import TopBar
-from gui.workers import BatchInspectionWorker, ImagePreviewWorker, InspectionWorker, TilePreviewWorker
+from gui.workers import BatchInspectionWorker, FolderMonitorWorker, ImagePreviewWorker, InspectionWorker, TilePreviewWorker
 
 # ============================================================
 # AOI Console — main window shell (rail + topbar + screens + status bar)
 # ============================================================
 
-SCREEN_INDEX = {"run": 0, "designer": 1, "results": 2, "batch_dashboard": 3}
+SCREEN_INDEX = {"run": 0, "monitor": 1, "designer": 2, "results": 3, "batch_dashboard": 4}
 HISTORY_LIMIT = 6
 
 OUTPUT_TOGGLE_LABELS = {
@@ -105,6 +106,9 @@ class MainWindow(QMainWindow, LogMixin):
         self.batch_dir: Path | None = None
         self.batch_running = False
         self.batch_result: dict | None = None
+        self.monitor_dir: Path | None = None
+        self.monitor_running = False
+        self.monitor_result: dict | None = None
 
         self._defects: list[dict] = []
         self._current_image = None
@@ -118,6 +122,8 @@ class MainWindow(QMainWindow, LogMixin):
         self._inspection_worker: InspectionWorker | None = None
         self._batch_thread: QThread | None = None
         self._batch_worker: BatchInspectionWorker | None = None
+        self._monitor_thread: QThread | None = None
+        self._monitor_worker: FolderMonitorWorker | None = None
         self._tile_preview_thread: QThread | None = None
         self._tile_preview_worker: TilePreviewWorker | None = None
 
@@ -159,12 +165,14 @@ class MainWindow(QMainWindow, LogMixin):
         main_col_layout.addWidget(self.topbar)
 
         self.run_screen = RunScreen()
+        self.monitor_screen = MonitorScreen()
         self.designer_screen = DesignerScreen()
         self.results_screen = ResultsScreen()
         self.batch_dashboard_screen = BatchDashboardScreen()
 
         self.stack = QStackedWidget()
         self.stack.addWidget(self.run_screen)
+        self.stack.addWidget(self.monitor_screen)
         self.stack.addWidget(self.designer_screen)
         self.stack.addWidget(self.results_screen)
         self.stack.addWidget(self.batch_dashboard_screen)
@@ -255,6 +263,9 @@ class MainWindow(QMainWindow, LogMixin):
         self.run_screen.image_viewer.overlay_toggled.connect(self._on_overlay_toggled)
         self.run_screen.choose_batch_folder_requested.connect(self._choose_batch_folder)
         self.run_screen.start_batch_requested.connect(self._run_batch_inspection)
+        self.monitor_screen.choose_folder_requested.connect(self._choose_monitor_folder)
+        self.monitor_screen.start_requested.connect(self._start_monitoring)
+        self.monitor_screen.stop_requested.connect(self._stop_monitoring)
 
         self.designer_screen.preview_requested.connect(self._preview_contour_tiles)
         self.designer_screen.recipe_saved.connect(self._on_designed_recipe_saved)
@@ -398,6 +409,104 @@ class MainWindow(QMainWindow, LogMixin):
         self._update_batch_ready()
 
     # ------------------------------------------------------------------
+    # folder monitor
+    # ------------------------------------------------------------------
+    def _choose_monitor_folder(self) -> None:
+        if self.monitor_running:
+            return
+        path = QFileDialog.getExistingDirectory(self, "選擇監控資料夾", str(self.monitor_dir or Path.cwd()))
+        if not path:
+            return
+        self.monitor_dir = Path(path)
+        self.monitor_result = None
+        self.monitor_screen.set_folder(str(self.monitor_dir))
+        self.monitor_screen.clear_items()
+        self.monitor_screen.set_progress(0, "Ready to monitor")
+        self._update_monitor_ready()
+
+    def _update_monitor_ready(self) -> None:
+        ready = self.monitor_dir is not None and self.recipe_path is not None and not self.monitor_running
+        self.monitor_screen.set_ready(ready, self.monitor_running)
+
+    def _start_monitoring(self) -> None:
+        if not self.monitor_dir:
+            QMessageBox.warning(self, "監控模式", "請先選擇監控資料夾。")
+            return
+        if not self.recipe_path:
+            QMessageBox.warning(self, "監控模式", "請先載入 Recipe。")
+            return
+        if self._monitor_thread and self._monitor_thread.isRunning():
+            QMessageBox.information(self, "監控模式", "監控模式已在執行中。")
+            return
+        if self.running or self.batch_running:
+            QMessageBox.information(self, "監控模式", "請先等待目前檢測作業完成。")
+            return
+
+        self.monitor_running = True
+        self.monitor_result = None
+        self.monitor_screen.clear_items()
+        self._update_monitor_ready()
+        self.monitor_screen.set_progress(0, "Starting monitor")
+        self.topbar.set_running(True, 0)
+        self.statusBar().showMessage("監控模式啟動中...")
+
+        self._monitor_thread = QThread(self)
+        self._monitor_worker = FolderMonitorWorker(
+            input_dir=self.monitor_dir,
+            recipe_path=self.recipe_path,
+            output_dir=Path(self.output_dir or "outputs"),
+            output_overrides=dict(self.output_opts),
+        )
+        self._monitor_worker.moveToThread(self._monitor_thread)
+        self._monitor_thread.started.connect(self._monitor_worker.run)
+        self._monitor_worker.progress.connect(self._on_monitor_progress)
+        self._monitor_worker.image_processed.connect(self._on_monitor_image_processed)
+        self._monitor_worker.finished.connect(self._on_monitor_finished)
+        self._monitor_worker.failed.connect(self._on_monitor_failed)
+        self._monitor_worker.finished.connect(self._monitor_thread.quit)
+        self._monitor_worker.failed.connect(self._monitor_thread.quit)
+        self._monitor_thread.finished.connect(self._monitor_worker.deleteLater)
+        self._monitor_thread.finished.connect(self._on_monitor_thread_finished)
+        self._monitor_thread.start()
+
+    def _stop_monitoring(self) -> None:
+        if self._monitor_worker is not None:
+            self._monitor_worker.stop()
+        self.monitor_screen.set_progress(0, "Stopping monitor")
+        self.statusBar().showMessage("監控模式停止中...")
+
+    def _on_monitor_progress(self, percent: int, message: str) -> None:
+        percent = max(0, min(100, int(percent)))
+        self.monitor_screen.set_progress(percent, message)
+        self.topbar.set_running(True, percent)
+        self.statusBar().showMessage(f"{message} ({percent}%)")
+
+    def _on_monitor_image_processed(self, item: dict) -> None:
+        item = dict(item)
+        item["processed_at"] = datetime.datetime.now().strftime("%H:%M:%S")
+        self.monitor_screen.add_item(item)
+        final = item.get("final_result", "-")
+        self.statusBar().showMessage(f"監控模式完成: {item.get('image_name', '')} -> {final}")
+
+    def _on_monitor_finished(self, result: dict) -> None:
+        self.monitor_result = result
+        processed = result.get("processed", 0)
+        self.monitor_screen.set_progress(0, f"Monitor stopped, processed {processed} image(s)")
+        self.statusBar().showMessage(f"監控模式已停止，處理 {processed} 張")
+
+    def _on_monitor_failed(self, message: str) -> None:
+        QMessageBox.critical(self, "監控模式", message)
+        self.monitor_screen.set_progress(0, "Monitor failed")
+        self.statusBar().showMessage("監控模式失敗")
+
+    def _on_monitor_thread_finished(self) -> None:
+        self.monitor_running = False
+        self._monitor_thread = None
+        self._monitor_worker = None
+        self.topbar.set_running(False, 0)
+        self._update_monitor_ready()
+
+    # ------------------------------------------------------------------
     # image loading
     # ------------------------------------------------------------------
     def _choose_image(self) -> None:
@@ -496,6 +605,7 @@ class MainWindow(QMainWindow, LogMixin):
         self.statusBar().showMessage(f"Recipe 已載入：{path}")
         self._update_run_ready()
         self._update_batch_ready()
+        self._update_monitor_ready()
 
     def _on_designed_recipe_saved(self, path: Path) -> None:
         self._load_recipe(path)
@@ -678,6 +788,10 @@ class MainWindow(QMainWindow, LogMixin):
             return
         if self._batch_thread and self._batch_thread.isRunning():
             QMessageBox.information(self, "背景作業", "批量檢測仍在執行中，請等待完成後再關閉。")
+            event.ignore()
+            return
+        if self._monitor_thread and self._monitor_thread.isRunning():
+            QMessageBox.information(self, "關閉視窗", "監控模式仍在執行中，請先停止監控。")
             event.ignore()
             return
         super().closeEvent(event)

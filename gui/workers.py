@@ -11,6 +11,7 @@ import numpy as np
 from core.image_loader import ImageLoader
 from core.batch_processor import BatchInspectionProcessor
 from core.logging_system import LogMixin
+from core.monitor_processor import FolderMonitorProcessor
 from core.pipeline import AOIPipeline
 from core.tiler import create_tiler
 
@@ -121,6 +122,52 @@ class BatchInspectionWorker(QObject, LogMixin):
             return
 
         self.logger.info("GUI batch worker completed: summary=%s", result.get("summary", {}))
+        self.finished.emit(result)
+
+
+class FolderMonitorWorker(QObject, LogMixin):
+    finished = Signal(dict)
+    failed = Signal(str)
+    progress = Signal(int, str)
+    image_processed = Signal(dict)
+
+    def __init__(
+        self,
+        input_dir: Path,
+        recipe_path: Path,
+        output_dir: Path,
+        output_overrides: dict | None = None,
+    ):
+        super().__init__()
+        self.input_dir = Path(input_dir)
+        self.recipe_path = Path(recipe_path)
+        self.output_dir = Path(output_dir)
+        self.output_overrides = output_overrides
+        self._stop_requested = False
+
+    def stop(self) -> None:
+        self._stop_requested = True
+
+    @Slot()
+    def run(self) -> None:
+        try:
+            self.logger.info("GUI monitor worker started: input=%s recipe=%s", self.input_dir, self.recipe_path)
+            processor = FolderMonitorProcessor(
+                input_dir=self.input_dir,
+                recipe_path=self.recipe_path,
+                output_dir=self.output_dir,
+                output_overrides=self.output_overrides,
+                progress_callback=self.progress.emit,
+                item_callback=self.image_processed.emit,
+                stop_callback=lambda: self._stop_requested,
+            )
+            result = processor.run()
+        except Exception as exc:
+            self.logger.exception("GUI monitor worker failed: input=%s recipe=%s", self.input_dir, self.recipe_path)
+            self.failed.emit(str(exc))
+            return
+
+        self.logger.info("GUI monitor worker stopped: result=%s", result)
         self.finished.emit(result)
 
 
