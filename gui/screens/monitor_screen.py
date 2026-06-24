@@ -6,16 +6,19 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSplitter,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
+from core.batch_dashboard import BatchDashboardBuilder
 from gui import icons
 from gui.theme import COLORS
 from gui.widgets.common import EmptyState, ProgressBar, result_badge
 from gui.widgets.panel import Panel
+from gui.widgets.scatter_chart import ImageScatterChart
 
 
 def _format_duration(value: object) -> str:
@@ -156,7 +159,8 @@ class MonitorTablePanel(Panel):
         self.table.setHorizontalHeaderLabels(["Time", "Image", "Result", "Def", "NG", "Duration"])
         self.table.verticalHeader().setVisible(False)
         self.table.setShowGrid(False)
-        self.table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self.add_widget(self.table, 1)
 
@@ -179,6 +183,12 @@ class MonitorTablePanel(Panel):
             self.table.setItem(row, 5, duration_item)
         self.table.resizeColumnsToContents()
         self.table.horizontalHeader().setStretchLastSection(True)
+
+    def selected_row_index(self) -> int:
+        selected = self.table.selectionModel().selectedRows()
+        if not selected:
+            return -1
+        return selected[0].row()
 
 
 class MonitorScreen(QWidget):
@@ -205,8 +215,17 @@ class MonitorScreen(QWidget):
         top_layout.addWidget(self.stats_panel, 1)
         layout.addWidget(top_row)
 
+        self.data_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self.data_splitter.setChildrenCollapsible(False)
         self.table_panel = MonitorTablePanel()
-        layout.addWidget(self.table_panel, 1)
+        self.data_splitter.addWidget(self.table_panel)
+
+        scatter_panel = Panel(title="Selected Tile Scatter")
+        self.scatter_chart = ImageScatterChart()
+        scatter_panel.add_widget(self.scatter_chart, 1)
+        self.data_splitter.addWidget(scatter_panel)
+        self.data_splitter.setSizes([620, 360])
+        layout.addWidget(self.data_splitter, 1)
 
         self.empty_state = QFrame()
         empty_layout = QVBoxLayout(self.empty_state)
@@ -217,6 +236,7 @@ class MonitorScreen(QWidget):
         self.control_panel.choose_folder_requested.connect(self.choose_folder_requested.emit)
         self.control_panel.start_requested.connect(self.start_requested.emit)
         self.control_panel.stop_requested.connect(self.stop_requested.emit)
+        self.table_panel.table.itemSelectionChanged.connect(self._on_table_selection_changed)
         self._refresh()
 
     def set_folder(self, folder: str | None) -> None:
@@ -244,5 +264,18 @@ class MonitorScreen(QWidget):
         has_items = bool(self._items)
         self.stats_panel.set_counts(self._items)
         self.table_panel.set_items(self._items)
-        self.table_panel.setVisible(has_items)
+        self.data_splitter.setVisible(has_items)
         self.empty_state.setVisible(not has_items)
+        if has_items:
+            self.table_panel.table.selectRow(0)
+            self._render_selected_scatter()
+        else:
+            self.scatter_chart.set_model(BatchDashboardBuilder.build_image_scatter(None))
+
+    def _on_table_selection_changed(self) -> None:
+        self._render_selected_scatter()
+
+    def _render_selected_scatter(self) -> None:
+        row_index = self.table_panel.selected_row_index()
+        item = self._items[row_index] if 0 <= row_index < len(self._items) else None
+        self.scatter_chart.set_model(BatchDashboardBuilder.build_image_scatter(item))

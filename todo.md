@@ -578,6 +578,7 @@ output:
 - [x] 2026-06-24 OOP global logging system with rotating file logs for CLI, GUI workers, pipeline, batch processing, image loading, and reporter output
 - [x] 2026-06-24 GUI monitor mode watches a folder tree and processes newly added images one by one through an OOP monitor processor
 - [x] 2026-06-24 Batch dashboard selected data row shows an OOP-built tile scatter plot in the right-side detail view
+- [x] 2026-06-24 Monitor mode processed data rows reuse the OOP tile scatter model and chart on the right side
 - [ ] debug image export per detector
 - [x] editable recipe saving from GUI
 - [ ] validation dataset
