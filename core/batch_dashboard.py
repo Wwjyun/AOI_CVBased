@@ -4,6 +4,23 @@ from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
+class ScatterPoint:
+    tile_id: str
+    x: float
+    y: float
+    status: str
+    defect_count: int
+
+
+@dataclass(frozen=True)
+class ImageScatterModel:
+    image_name: str
+    width: float
+    height: float
+    points: list[ScatterPoint]
+
+
+@dataclass(frozen=True)
 class BatchDashboardModel:
     total: int
     pass_count: int
@@ -101,3 +118,43 @@ class BatchDashboardBuilder:
         enriched["tile_pass_rate"] = BatchDashboardBuilder._rate(pass_tile_count, tile_count)
         enriched["tile_ng_rate"] = BatchDashboardBuilder._rate(ng_count, tile_count)
         return enriched
+
+    @staticmethod
+    def build_image_scatter(row: dict | None) -> ImageScatterModel:
+        if not row:
+            return ImageScatterModel(image_name="", width=0.0, height=0.0, points=[])
+
+        detail = row.get("detail", {}) or {}
+        points: list[ScatterPoint] = []
+        max_right = 0.0
+        max_bottom = 0.0
+
+        for tile_result in detail.get("tiles", []) or []:
+            tile = tile_result.get("tile", {}) or {}
+            x = float(tile.get("x", 0) or 0)
+            y = float(tile.get("y", 0) or 0)
+            width = float(tile.get("width", 0) or 0)
+            height = float(tile.get("height", 0) or 0)
+            max_right = max(max_right, x + width)
+            max_bottom = max(max_bottom, y + height)
+            detectors = tile_result.get("detectors", []) or []
+            defect_count = sum(len(detector.get("defects", []) or []) for detector in detectors)
+            status = str(tile_result.get("result", "") or "PASS")
+            if str(row.get("final_result", "")) == "ERROR":
+                status = "ERROR"
+            points.append(
+                ScatterPoint(
+                    tile_id=str(tile.get("tile_id", "-")),
+                    x=x + width / 2.0,
+                    y=y + height / 2.0,
+                    status=status,
+                    defect_count=defect_count,
+                )
+            )
+
+        return ImageScatterModel(
+            image_name=str(row.get("image_name", "")),
+            width=max_right,
+            height=max_bottom,
+            points=points,
+        )

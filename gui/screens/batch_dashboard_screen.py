@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PySide6.QtCore import QRectF, Qt, Signal
+from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import (
     QFrame,
@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from core.batch_dashboard import BatchDashboardBuilder, BatchDashboardModel
+from core.batch_dashboard import BatchDashboardBuilder, BatchDashboardModel, ImageScatterModel
 from gui import icons
 from gui.theme import COLORS
 from gui.widgets.common import EmptyState
@@ -147,6 +147,74 @@ class DefectBarChart(QWidget):
             )
 
 
+class ImageScatterChart(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self._model = ImageScatterModel("", 0.0, 0.0, [])
+        self.setMinimumSize(260, 260)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+
+    def set_model(self, model: ImageScatterModel) -> None:
+        self._model = model
+        self.update()
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        painter.fillRect(self.rect(), QColor(COLORS["surface"]))
+
+        if not self._model.points:
+            painter.setPen(QColor(COLORS["text_3"]))
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No tile points")
+            return
+
+        plot = QRectF(42, 18, max(1, self.width() - 64), max(1, self.height() - 52))
+        painter.setPen(QPen(QColor(COLORS["border"]), 1))
+        painter.drawRect(plot)
+
+        width = max(float(self._model.width), 1.0)
+        height = max(float(self._model.height), 1.0)
+
+        grid_pen = QPen(QColor(COLORS["surface_3"]), 1)
+        painter.setPen(grid_pen)
+        for index in range(1, 4):
+            x = plot.left() + plot.width() * index / 4
+            y = plot.top() + plot.height() * index / 4
+            painter.drawLine(QPointF(x, plot.top()), QPointF(x, plot.bottom()))
+            painter.drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y))
+
+        for point in self._model.points:
+            px = plot.left() + (float(point.x) / width) * plot.width()
+            py = plot.top() + (float(point.y) / height) * plot.height()
+            radius = 4 + min(8, int(point.defect_count))
+            color = RESULT_COLORS.get(point.status, COLORS["text_3"])
+            painter.setPen(QPen(QColor("#ffffff"), 1))
+            painter.setBrush(QColor(color))
+            painter.drawEllipse(QPointF(px, py), radius, radius)
+
+        painter.setPen(QColor(COLORS["text_3"]))
+        font = QFont("Consolas")
+        font.setPointSize(8)
+        painter.setFont(font)
+        painter.drawText(QRectF(plot.left(), plot.bottom() + 6, plot.width(), 18), Qt.AlignmentFlag.AlignCenter, "tile x")
+        painter.save()
+        painter.translate(10, plot.center().y())
+        painter.rotate(-90)
+        painter.drawText(QRectF(-plot.height() / 2, 0, plot.height(), 18), Qt.AlignmentFlag.AlignCenter, "tile y")
+        painter.restore()
+
+        legend_y = plot.top() + 6
+        legend_x = plot.right() - 126
+        for index, status in enumerate(("PASS", "NG", "ERROR")):
+            color = RESULT_COLORS.get(status, COLORS["text_3"])
+            x = legend_x + index * 44
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(color))
+            painter.drawEllipse(QPointF(x, legend_y + 6), 4, 4)
+            painter.setPen(QColor(COLORS["text_2"]))
+            painter.drawText(QRectF(x + 7, legend_y, 38, 14), Qt.AlignmentFlag.AlignVCenter, status)
+
+
 class BatchDashboardScreen(QWidget):
     go_to_run_requested = Signal()
 
@@ -264,6 +332,9 @@ class BatchDashboardScreen(QWidget):
         self.detail_outputs.setStyleSheet(f"color: {COLORS['text_3']}; font-size: 10px;")
         detail_layout.addWidget(self.detail_outputs)
 
+        detail_splitter = QSplitter(Qt.Orientation.Horizontal)
+        detail_splitter.setChildrenCollapsible(False)
+
         self.detail_table = QTableWidget(0, 7)
         self.detail_table.setHorizontalHeaderLabels(
             ["Tile", "Tile Result", "Detector", "Detector Result", "Score", "Defects", "Defect Detail"]
@@ -272,7 +343,14 @@ class BatchDashboardScreen(QWidget):
         self.detail_table.setShowGrid(False)
         self.detail_table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         self.detail_table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
-        detail_layout.addWidget(self.detail_table, 1)
+        detail_splitter.addWidget(self.detail_table)
+
+        scatter_panel = Panel(title="Selected Tile Scatter")
+        self.scatter_chart = ImageScatterChart()
+        scatter_panel.add_widget(self.scatter_chart, 1)
+        detail_splitter.addWidget(scatter_panel)
+        detail_splitter.setSizes([520, 320])
+        detail_layout.addWidget(detail_splitter, 1)
         detail_panel.add_widget(detail_body, 1)
         data_splitter.addWidget(detail_panel)
         data_splitter.setSizes([780, 420])
@@ -344,6 +422,7 @@ class BatchDashboardScreen(QWidget):
             self.detail_summary.setText("")
             self.detail_outputs.setText("")
             self.detail_table.setRowCount(0)
+            self.scatter_chart.set_model(BatchDashboardBuilder.build_image_scatter(None))
             return
 
         self.detail_title.setText(str(row.get("image_name", "-")))
@@ -365,6 +444,7 @@ class BatchDashboardScreen(QWidget):
             output_lines.insert(0, f"error: {row.get('error')}")
         self.detail_outputs.setText("\n".join(output_lines))
         self._populate_detail_table(row)
+        self.scatter_chart.set_model(BatchDashboardBuilder.build_image_scatter(row))
 
     def _populate_detail_table(self, row: dict) -> None:
         detail = row.get("detail", {}) or {}
