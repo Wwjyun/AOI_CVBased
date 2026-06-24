@@ -579,6 +579,7 @@ output:
 - [x] 2026-06-24 GUI monitor mode watches a folder tree and processes newly added images one by one through an OOP monitor processor
 - [x] 2026-06-24 Batch dashboard selected data row shows an OOP-built tile scatter plot in the right-side detail view
 - [x] 2026-06-24 Monitor mode processed data rows reuse the OOP tile scatter model and chart on the right side
+- [x] 2026-06-24 Built AOI_GUI Windows executable package and published GitHub Release v0.1.0 with `AOI_GUI-v0.1.0-windows-x64.zip`
 - [ ] debug image export per detector
 - [x] editable recipe saving from GUI
 - [ ] validation dataset
