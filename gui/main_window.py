@@ -47,6 +47,7 @@ OUTPUT_TOGGLE_LABELS = {
     "save_csv": "輸出 CSV 報表",
     "save_json": "輸出 JSON 報表",
 }
+OUTPUT_TOGGLE_LABELS["save_matrix_csv"] = "輸出矩陣 CSV"
 
 
 def _format_duration(value: object) -> str:
@@ -101,7 +102,13 @@ class MainWindow(QMainWindow, LogMixin):
         self.selected_defect_id = None
         self.show_overlay = True
         self.output_dir = "outputs"
-        self.output_opts = {"save_overlay": True, "save_ng_tiles": True, "save_csv": True, "save_json": True}
+        self.output_opts = {
+            "save_overlay": True,
+            "save_ng_tiles": True,
+            "save_csv": True,
+            "save_matrix_csv": True,
+            "save_json": True,
+        }
         self.history: list[dict] = []
         self.batch_dir: Path | None = None
         self.batch_running = False

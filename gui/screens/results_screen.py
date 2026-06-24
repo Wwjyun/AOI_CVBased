@@ -32,6 +32,7 @@ OUTPUT_LABELS = {
     "overlay": "Overlay",
     "ng_tiles_dir": "NG Tiles",
     "csv": "CSV",
+    "matrix_csv": "Matrix CSV",
     "json": "JSON",
 }
 

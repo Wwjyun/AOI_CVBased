@@ -18,8 +18,9 @@ class Reporter(LogMixin):
         self.overlay_dir = self.output_dir / "overlay"
         self.ng_tiles_dir = self.output_dir / "ng_tiles"
         self.csv_dir = self.output_dir / "csv"
+        self.matrix_csv_dir = self.output_dir / "matrix_csv"
         self.json_dir = self.output_dir / "json"
-        for directory in (self.overlay_dir, self.ng_tiles_dir, self.csv_dir, self.json_dir):
+        for directory in (self.overlay_dir, self.ng_tiles_dir, self.csv_dir, self.matrix_csv_dir, self.json_dir):
             directory.mkdir(parents=True, exist_ok=True)
 
     def write(self, image, result: dict) -> dict[str, str]:
@@ -42,6 +43,11 @@ class Reporter(LogMixin):
             csv_path = self.csv_dir / f"{base_name}.csv"
             self._write_csv(csv_path, result)
             outputs["csv"] = str(csv_path)
+
+        if self.output_config.get("save_matrix_csv", True):
+            matrix_csv_path = self.matrix_csv_dir / f"{base_name}_matrix.csv"
+            self._write_matrix_csv(matrix_csv_path, result)
+            outputs["matrix_csv"] = str(matrix_csv_path)
 
         if self.output_config.get("save_json", True):
             json_path = self.json_dir / f"{base_name}.json"
@@ -194,3 +200,37 @@ class Reporter(LogMixin):
                                 "area": defect.get("area"),
                             }
                         )
+
+    @staticmethod
+    def _write_matrix_csv(path: Path, result: dict) -> None:
+        tiles = result.get("tiles", [])
+        max_col = max(
+            (int(tile_result.get("tile", {}).get("col", 0) or 0) for tile_result in tiles),
+            default=0,
+        )
+        fields = ["id", *[f"c{col + 1}" for col in range(max_col + 1)]]
+        image_stem = Path(str(result.get("image_name", ""))).stem
+
+        ng_tiles = []
+        for tile_result in tiles:
+            if tile_result.get("result") != "NG":
+                continue
+            tile = tile_result.get("tile", {})
+            try:
+                col = int(tile.get("col", 0) or 0)
+            except (TypeError, ValueError):
+                col = 0
+            ng_tiles.append((int(tile.get("row", 0) or 0), col, str(tile.get("tile_id", ""))))
+
+        ng_tiles.sort(key=lambda item: (item[0], item[1], item[2]))
+
+        with path.open("w", encoding="utf-8-sig", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=fields)
+            writer.writeheader()
+            for index, (_row, col, _tile_id) in enumerate(ng_tiles, start=1):
+                row_data = {field: "" for field in fields}
+                row_data["id"] = f"{image_stem}-{index}"
+                column_name = f"c{col + 1}"
+                if column_name in row_data:
+                    row_data[column_name] = "✓"
+                writer.writerow(row_data)

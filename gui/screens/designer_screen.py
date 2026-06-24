@@ -767,6 +767,7 @@ class DesignerScreen(QWidget):
                 "save_overlay": True,
                 "save_ng_tiles": True,
                 "save_csv": True,
+                "save_matrix_csv": True,
                 "save_json": True,
             },
         }

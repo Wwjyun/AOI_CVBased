@@ -38,4 +38,5 @@ output:
   save_overlay: true
   save_ng_tiles: true
   save_csv: true
+  save_matrix_csv: true
   save_json: true

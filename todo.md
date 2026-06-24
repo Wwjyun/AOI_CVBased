@@ -584,6 +584,7 @@ output:
 - [x] 2026-06-24 Scatter exporter GUI can filter JSON-only, CSV-only, or both report types
 - [x] 2026-06-24 JSON scatter export uses row/column axis labels with cleaner report styling
 - [x] 2026-06-24 JSON scatter export hides source text and rotates the Row axis label away from tick labels
+- [x] 2026-06-24 GUI-controlled matrix CSV report output in separate `matrix_csv` folder with c1..cN defect checks
 - [ ] debug image export per detector
 - [x] editable recipe saving from GUI
 - [ ] validation dataset
