@@ -16,7 +16,6 @@ DEFAULT_OUTPUT_NAME = "matrix_summary.csv"
 
 @dataclass(frozen=True)
 class MatrixRow:
-    source_file: str
     values: dict[str, str]
 
 
@@ -56,7 +55,8 @@ def combine_matrix_csvs(input_dir: Path, output_path: Path | None = None, recurs
         matrix_columns.update(file_columns)
 
     ordered_columns = sorted(matrix_columns, key=_matrix_column_sort_key)
-    fields = ["source_file", "id", *ordered_columns]
+    fields = ["id", *ordered_columns]
+    rows = sorted(rows, key=_id_prefix_sort_key)
 
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with output_path.open("w", encoding="utf-8-sig", newline="") as handle:
@@ -77,16 +77,11 @@ def load_matrix_csv(matrix_path: Path, base_dir: Path) -> tuple[list[MatrixRow],
             return [], set()
 
         rows = []
-        try:
-            source_file = str(matrix_path.relative_to(base_dir))
-        except ValueError:
-            source_file = str(matrix_path)
-
         for csv_row in reader:
-            values = {"source_file": source_file, "id": str(csv_row.get("id", "") or "")}
+            values = {"id": str(csv_row.get("id", "") or "")}
             for column in matrix_columns:
-                values[column] = str(csv_row.get(column, "") or "")
-            rows.append(MatrixRow(source_file=source_file, values=values))
+                values[column] = "1" if str(csv_row.get(column, "") or "").strip() else ""
+            rows.append(MatrixRow(values=values))
 
     return rows, matrix_columns
 
@@ -107,6 +102,27 @@ def _matrix_column_sort_key(column: str) -> tuple[int, str]:
     if not match:
         return (sys.maxsize, column.lower())
     return (int(match.group(1)), column.lower())
+
+
+def _id_prefix_sort_key(row: MatrixRow) -> tuple[int, tuple[object, ...]]:
+    id_value = row.values.get("id", "")
+    prefix = id_value.rsplit("-", 1)[0] if "-" in id_value else id_value
+    return _natural_sort_key(prefix)
+
+
+def _natural_sort_key(value: str) -> tuple[int, tuple[tuple[int, object], ...]]:
+    text = str(value).strip()
+    if not text:
+        return (2, ((1, ""),))
+    if re.fullmatch(r"\d+", text):
+        return (0, ((0, int(text)),))
+
+    parts: list[tuple[int, object]] = []
+    for part in re.split(r"(\d+)", text.lower()):
+        if not part:
+            continue
+        parts.append((0, int(part)) if part.isdigit() else (1, part))
+    return (1, tuple(parts))
 
 
 class MatrixSummaryApp:
