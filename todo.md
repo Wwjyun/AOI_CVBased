@@ -590,6 +590,7 @@ output:
 - [x] 2026-06-25 Standalone matrix CSV summary exporter with folder picker and recursive combine support
 - [x] 2026-06-25 Monitor mode can open processed original images from the table context menu and optionally move completed images while preserving subfolders
 - [x] 2026-06-25 Popup menus and dialogs use explicit readable light theme styling
+- [x] 2026-06-25 Built AOI_GUI Windows executable package and published GitHub Release v0.3.0 for monitor original-image open, processed-image move, and popup theme fixes
 - [ ] debug image export per detector
 - [x] editable recipe saving from GUI
 - [ ] validation dataset
