@@ -589,6 +589,7 @@ output:
 - [x] 2026-06-25 Prepared AOI_GUI Windows executable package and GitHub Release v0.2.0 for scatter export and matrix CSV updates
 - [x] 2026-06-25 Standalone matrix CSV summary exporter with folder picker and recursive combine support
 - [x] 2026-06-25 Monitor mode can open processed original images from the table context menu and optionally move completed images while preserving subfolders
+- [x] 2026-06-25 Popup menus and dialogs use explicit readable light theme styling
 - [ ] debug image export per detector
 - [x] editable recipe saving from GUI
 - [ ] validation dataset

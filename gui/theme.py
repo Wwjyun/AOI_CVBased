@@ -422,6 +422,53 @@ def build_stylesheet() -> str:
         color: #ffffff;
     }}
 
+    /* ---------- popups and dialogs ---------- */
+    QMenu {{
+        background: {c['surface']};
+        color: {c['text']};
+        border: 1px solid {c['border_strong']};
+        border-radius: {R_MD}px;
+        padding: 5px;
+    }}
+    QMenu::item {{
+        min-height: 26px;
+        padding: 5px 26px 5px 10px;
+        border-radius: {R_SM}px;
+        color: {c['text']};
+        background: transparent;
+    }}
+    QMenu::item:selected {{
+        background: {c['accent_soft']};
+        color: {c['accent_text']};
+    }}
+    QMenu::item:disabled {{
+        color: {c['text_3']};
+    }}
+    QMenu::separator {{
+        height: 1px;
+        background: {c['border']};
+        margin: 5px 4px;
+    }}
+
+    QDialog, QMessageBox, QFileDialog {{
+        background: {c['surface']};
+        color: {c['text']};
+    }}
+    QMessageBox QLabel, QDialog QLabel, QFileDialog QLabel {{
+        color: {c['text']};
+        background: transparent;
+    }}
+    QMessageBox QPushButton, QDialog QPushButton, QFileDialog QPushButton {{
+        min-width: 76px;
+    }}
+    QToolTip {{
+        background: {c['viewer_bg_2']};
+        color: {c['text_invert']};
+        border: 1px solid rgba(255,255,255,0.18);
+        border-radius: {R_SM}px;
+        padding: 5px 7px;
+    }}
+
     /* ---------- scrollbars ---------- */
     QScrollBar:vertical {{
         width: 10px;
