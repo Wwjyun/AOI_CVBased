@@ -137,12 +137,14 @@ class FolderMonitorWorker(QObject, LogMixin):
         recipe_path: Path,
         output_dir: Path,
         output_overrides: dict | None = None,
+        processed_move_dir: Path | None = None,
     ):
         super().__init__()
         self.input_dir = Path(input_dir)
         self.recipe_path = Path(recipe_path)
         self.output_dir = Path(output_dir)
         self.output_overrides = output_overrides
+        self.processed_move_dir = Path(processed_move_dir) if processed_move_dir else None
         self._stop_requested = False
 
     def stop(self) -> None:
@@ -157,6 +159,7 @@ class FolderMonitorWorker(QObject, LogMixin):
                 recipe_path=self.recipe_path,
                 output_dir=self.output_dir,
                 output_overrides=self.output_overrides,
+                processed_move_dir=self.processed_move_dir,
                 progress_callback=self.progress.emit,
                 item_callback=self.image_processed.emit,
                 stop_callback=lambda: self._stop_requested,

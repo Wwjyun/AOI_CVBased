@@ -5,6 +5,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QPushButton,
     QSplitter,
     QTableWidget,
@@ -33,6 +34,7 @@ def _format_duration(value: object) -> str:
 
 class MonitorControlPanel(Panel):
     choose_folder_requested = Signal()
+    choose_move_folder_requested = Signal()
     start_requested = Signal()
     stop_requested = Signal()
 
@@ -46,6 +48,13 @@ class MonitorControlPanel(Panel):
         self.folder_label.setStyleSheet(f"color: {COLORS['text_3']}; font-size: 12px;")
         self.add_widget(self.folder_label)
 
+        move_label = QLabel("Processed images stay in monitor folder")
+        move_label.setProperty("mono", "true")
+        move_label.setWordWrap(True)
+        move_label.setStyleSheet(f"color: {COLORS['text_3']}; font-size: 12px;")
+        self.move_folder_label = move_label
+        self.add_widget(move_label)
+
         button_row = QWidget()
         button_layout = QHBoxLayout(button_row)
         button_layout.setContentsMargins(0, 0, 0, 0)
@@ -57,6 +66,13 @@ class MonitorControlPanel(Panel):
         self.choose_button.setIcon(icons.icon("folder", size=14, color=COLORS["text_2"]))
         self.choose_button.clicked.connect(self.choose_folder_requested.emit)
         button_layout.addWidget(self.choose_button)
+
+        self.move_folder_button = QPushButton("Move To")
+        self.move_folder_button.setProperty("variant", "secondary")
+        self.move_folder_button.setProperty("size", "sm")
+        self.move_folder_button.setIcon(icons.icon("folder", size=14, color=COLORS["text_2"]))
+        self.move_folder_button.clicked.connect(self.choose_move_folder_requested.emit)
+        button_layout.addWidget(self.move_folder_button)
 
         self.start_button = QPushButton("Start")
         self.start_button.setProperty("variant", "primary")
@@ -102,8 +118,16 @@ class MonitorControlPanel(Panel):
             f"color: {COLORS['text_2'] if folder else COLORS['text_3']}; font-size: 12px;"
         )
 
+    def set_move_folder(self, folder: str | None) -> None:
+        text = f"Move processed images to: {folder}" if folder else "Processed images stay in monitor folder"
+        self.move_folder_label.setText(text)
+        self.move_folder_label.setStyleSheet(
+            f"color: {COLORS['text_2'] if folder else COLORS['text_3']}; font-size: 12px;"
+        )
+
     def set_ready(self, ready: bool, running: bool) -> None:
         self.choose_button.setEnabled(not running)
+        self.move_folder_button.setEnabled(not running)
         self.start_button.setEnabled(ready and not running)
         self.stop_button.setEnabled(running)
         self.start_button.setText("Monitoring" if running else "Start")
@@ -153,8 +177,11 @@ class MonitorStatsPanel(Panel):
 
 
 class MonitorTablePanel(Panel):
+    open_original_requested = Signal(dict)
+
     def __init__(self, parent=None):
         super().__init__(title="Processed Images", flush=True, parent=parent)
+        self._items: list[dict] = []
         self.table = QTableWidget(0, 6)
         self.table.setHorizontalHeaderLabels(["Time", "Image", "Result", "Def", "NG", "Duration"])
         self.table.verticalHeader().setVisible(False)
@@ -162,9 +189,12 @@ class MonitorTablePanel(Panel):
         self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
         self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._show_context_menu)
         self.add_widget(self.table, 1)
 
     def set_items(self, items: list[dict]) -> None:
+        self._items = list(items)
         self.table.setRowCount(len(items))
         for row, item in enumerate(items):
             time_item = QTableWidgetItem(str(item.get("processed_at", "")))
@@ -190,9 +220,22 @@ class MonitorTablePanel(Panel):
             return -1
         return selected[0].row()
 
+    def _show_context_menu(self, pos) -> None:
+        row = self.table.rowAt(pos.y())
+        if row < 0 or row >= len(self._items):
+            return
+        self.table.selectRow(row)
+        menu = QMenu(self.table)
+        open_action = menu.addAction("Open Original Image")
+        action = menu.exec(self.table.viewport().mapToGlobal(pos))
+        if action == open_action:
+            self.open_original_requested.emit(dict(self._items[row]))
+
 
 class MonitorScreen(QWidget):
     choose_folder_requested = Signal()
+    choose_move_folder_requested = Signal()
+    open_original_requested = Signal(dict)
     start_requested = Signal()
     stop_requested = Signal()
 
@@ -234,13 +277,18 @@ class MonitorScreen(QWidget):
         layout.addWidget(self.empty_state)
 
         self.control_panel.choose_folder_requested.connect(self.choose_folder_requested.emit)
+        self.control_panel.choose_move_folder_requested.connect(self.choose_move_folder_requested.emit)
         self.control_panel.start_requested.connect(self.start_requested.emit)
         self.control_panel.stop_requested.connect(self.stop_requested.emit)
         self.table_panel.table.itemSelectionChanged.connect(self._on_table_selection_changed)
+        self.table_panel.open_original_requested.connect(self.open_original_requested.emit)
         self._refresh()
 
     def set_folder(self, folder: str | None) -> None:
         self.control_panel.set_folder(folder)
+
+    def set_move_folder(self, folder: str | None) -> None:
+        self.control_panel.set_move_folder(folder)
 
     def set_ready(self, ready: bool, running: bool) -> None:
         self.control_panel.set_ready(ready, running)

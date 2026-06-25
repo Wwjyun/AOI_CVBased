@@ -3,7 +3,8 @@ from __future__ import annotations
 import datetime
 from pathlib import Path
 
-from PySide6.QtCore import QThread
+from PySide6.QtCore import QThread, QUrl
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
@@ -114,6 +115,7 @@ class MainWindow(QMainWindow, LogMixin):
         self.batch_running = False
         self.batch_result: dict | None = None
         self.monitor_dir: Path | None = None
+        self.monitor_move_dir: Path | None = None
         self.monitor_running = False
         self.monitor_result: dict | None = None
 
@@ -271,6 +273,8 @@ class MainWindow(QMainWindow, LogMixin):
         self.run_screen.choose_batch_folder_requested.connect(self._choose_batch_folder)
         self.run_screen.start_batch_requested.connect(self._run_batch_inspection)
         self.monitor_screen.choose_folder_requested.connect(self._choose_monitor_folder)
+        self.monitor_screen.choose_move_folder_requested.connect(self._choose_monitor_move_folder)
+        self.monitor_screen.open_original_requested.connect(self._open_monitor_original_image)
         self.monitor_screen.start_requested.connect(self._start_monitoring)
         self.monitor_screen.stop_requested.connect(self._stop_monitoring)
 
@@ -431,6 +435,17 @@ class MainWindow(QMainWindow, LogMixin):
         self.monitor_screen.set_progress(0, "Ready to monitor")
         self._update_monitor_ready()
 
+    def _choose_monitor_move_folder(self) -> None:
+        if self.monitor_running:
+            return
+        path = QFileDialog.getExistingDirectory(self, "選擇處理後圖片搬移資料夾", str(self.monitor_move_dir or Path.cwd()))
+        if not path:
+            self.monitor_move_dir = None
+            self.monitor_screen.set_move_folder(None)
+            return
+        self.monitor_move_dir = Path(path)
+        self.monitor_screen.set_move_folder(str(self.monitor_move_dir))
+
     def _update_monitor_ready(self) -> None:
         ready = self.monitor_dir is not None and self.recipe_path is not None and not self.monitor_running
         self.monitor_screen.set_ready(ready, self.monitor_running)
@@ -463,6 +478,7 @@ class MainWindow(QMainWindow, LogMixin):
             recipe_path=self.recipe_path,
             output_dir=Path(self.output_dir or "outputs"),
             output_overrides=dict(self.output_opts),
+            processed_move_dir=self.monitor_move_dir,
         )
         self._monitor_worker.moveToThread(self._monitor_thread)
         self._monitor_thread.started.connect(self._monitor_worker.run)
@@ -494,6 +510,13 @@ class MainWindow(QMainWindow, LogMixin):
         self.monitor_screen.add_item(item)
         final = item.get("final_result", "-")
         self.statusBar().showMessage(f"監控模式完成: {item.get('image_name', '')} -> {final}")
+
+    def _open_monitor_original_image(self, item: dict) -> None:
+        image_path = Path(str(item.get("image_path") or item.get("moved_image_path") or item.get("source_image_path") or ""))
+        if not image_path.exists():
+            QMessageBox.warning(self, "監控模式", f"找不到原圖:\n{image_path}")
+            return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(image_path)))
 
     def _on_monitor_finished(self, result: dict) -> None:
         self.monitor_result = result

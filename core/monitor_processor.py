@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import shutil
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -26,10 +27,12 @@ class MonitorImageResult:
     duration_sec: float
     outputs: dict
     detail: dict
+    source_image_path: Path | None = None
+    moved_image_path: Path | None = None
     error: str = ""
 
     def to_dict(self) -> dict:
-        return {
+        data = {
             "image_path": str(self.image_path),
             "image_name": self.image_path.name,
             "final_result": self.final_result,
@@ -41,6 +44,11 @@ class MonitorImageResult:
             "detail": dict(self.detail),
             "error": self.error,
         }
+        if self.source_image_path is not None:
+            data["source_image_path"] = str(self.source_image_path)
+        if self.moved_image_path is not None:
+            data["moved_image_path"] = str(self.moved_image_path)
+        return data
 
 
 class FolderMonitorProcessor(LogMixin):
@@ -52,6 +60,7 @@ class FolderMonitorProcessor(LogMixin):
         recipe_path: Path,
         output_dir: Path,
         output_overrides: dict | None = None,
+        processed_move_dir: Path | None = None,
         poll_interval_sec: float = 1.0,
         stable_checks: int = 2,
         progress_callback: MonitorProgressCallback | None = None,
@@ -62,6 +71,7 @@ class FolderMonitorProcessor(LogMixin):
         self.recipe_path = Path(recipe_path)
         self.output_dir = Path(output_dir)
         self.output_overrides = output_overrides
+        self.processed_move_dir = Path(processed_move_dir) if processed_move_dir else None
         self.poll_interval_sec = max(0.2, float(poll_interval_sec))
         self.stable_checks = max(1, int(stable_checks))
         self.progress_callback = progress_callback
@@ -135,8 +145,10 @@ class FolderMonitorProcessor(LogMixin):
             )
             result = pipeline.run(image_path)
             summary = result.get("summary", {})
+            moved_path = self._move_processed_image(image_path)
+            current_image_path = moved_path or image_path
             return MonitorImageResult(
-                image_path=image_path,
+                image_path=current_image_path,
                 final_result=str(result.get("final_result", "-")),
                 defect_count=int(summary.get("defect_count", 0)),
                 ng_count=int(summary.get("ng_count", 0)),
@@ -144,6 +156,8 @@ class FolderMonitorProcessor(LogMixin):
                 duration_sec=float(result.get("duration_sec", 0) or 0),
                 outputs=result.get("outputs", {}),
                 detail=result,
+                source_image_path=image_path,
+                moved_image_path=moved_path,
             )
         except Exception as exc:
             self.logger.exception("Monitor image failed: image=%s", image_path)
@@ -156,8 +170,45 @@ class FolderMonitorProcessor(LogMixin):
                 duration_sec=0.0,
                 outputs={},
                 detail={},
+                source_image_path=image_path,
                 error=str(exc),
             )
+
+    def _move_processed_image(self, image_path: Path) -> Path | None:
+        if self.processed_move_dir is None:
+            return None
+
+        try:
+            relative_parent = image_path.parent.relative_to(self.input_dir)
+        except ValueError:
+            relative_parent = Path()
+        target_dir = self.processed_move_dir / relative_parent
+        target_dir.mkdir(parents=True, exist_ok=True)
+        direct_target_path = target_dir / image_path.name
+
+        if image_path.resolve() == direct_target_path.resolve():
+            return None
+
+        target_path = self._unique_target_path(direct_target_path)
+        self.logger.info("Moving monitor image after processing: %s -> %s", image_path, target_path)
+        moved = Path(shutil.move(str(image_path), str(target_path)))
+        self._seen.add(moved)
+        self._file_states.pop(image_path, None)
+        return moved
+
+    @staticmethod
+    def _unique_target_path(target_path: Path) -> Path:
+        if not target_path.exists():
+            return target_path
+        stem = target_path.stem
+        suffix = target_path.suffix
+        parent = target_path.parent
+        index = 1
+        while True:
+            candidate = parent / f"{stem}_{index}{suffix}"
+            if not candidate.exists():
+                return candidate
+            index += 1
 
     def _discover_images(self) -> list[Path]:
         return sorted(
