@@ -587,6 +587,7 @@ output:
 - [x] 2026-06-24 GUI-controlled matrix CSV report output in separate `matrix_csv` folder with c1..cN defect checks
 - [x] 2026-06-24 Matrix CSV now mirrors tile scatter data as full row/column matrix with reversed row IDs
 - [x] 2026-06-25 Prepared AOI_GUI Windows executable package and GitHub Release v0.2.0 for scatter export and matrix CSV updates
+- [x] 2026-06-25 Standalone matrix CSV summary exporter with folder picker and recursive combine support
 - [ ] debug image export per detector
 - [x] editable recipe saving from GUI
 - [ ] validation dataset
