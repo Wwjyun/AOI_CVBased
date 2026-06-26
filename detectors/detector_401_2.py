@@ -8,8 +8,8 @@ from detectors.base_detector import BaseDetector
 
 class Detector401_2(BaseDetector):
     detector_id = "401-2"
-    detector_name = "adaptive_min_gray_detector"
-    display_name = "401-2 adaptive min gray detector"
+    detector_name = "adaptive_white_ratio_detector"
+    display_name = "401-2 adaptive white ratio detector"
     default_params = {
         "max_value": 255,
         "blur_size": 25,
@@ -19,7 +19,7 @@ class Detector401_2(BaseDetector):
         "contour_mode": "list",
         "min_area": 0,
         "max_area": 0,
-        "min_gray_threshold": 16,
+        "white_pixel_ratio_threshold": 0.625,
     }
 
     def preprocess(self, image):
@@ -30,7 +30,7 @@ class Detector401_2(BaseDetector):
         binary = self._make_binary(roi)
         contours, _ = cv2.findContours(binary, self._contour_mode(), cv2.CHAIN_APPROX_SIMPLE)
         defects = []
-        gray_threshold = int(self.params.get("min_gray_threshold", 16))
+        ratio_threshold = float(self.params.get("white_pixel_ratio_threshold", 0.625))
 
         for contour in contours:
             if len(contour) < 3:
@@ -42,29 +42,34 @@ class Detector401_2(BaseDetector):
 
             mask = np.zeros(roi.shape[:2], dtype=np.uint8)
             cv2.drawContours(mask, [contour], -1, 255, thickness=cv2.FILLED)
-            contour_pixels = roi[mask > 0]
-            if contour_pixels.size == 0:
+            contour_pixel_count = int(np.count_nonzero(mask))
+            if contour_pixel_count <= 0:
                 continue
 
-            min_gray = int(np.min(contour_pixels))
-            if min_gray >= gray_threshold:
+            white_pixel_count = int(np.count_nonzero((binary == 255) & (mask > 0)))
+            white_pixel_ratio = white_pixel_count / float(contour_pixel_count)
+            if white_pixel_ratio < ratio_threshold:
                 continue
 
             x, y, w, h = cv2.boundingRect(contour)
             x += offset_x
             y += offset_y
-            confidence = min(1.0, max(0.0, (gray_threshold - min_gray) / max(float(gray_threshold), 1.0)))
+            confidence = min(1.0, white_pixel_ratio)
 
             defects.append(
                 {
-                    "type": "401_2_min_gray_ng",
+                    "type": "401_2_white_pixel_ratio_ng",
                     "bbox_local": [int(x), int(y), int(w), int(h)],
                     "area": float(np.round(area, 3)),
                     "confidence": float(np.round(confidence, 4)),
                     "metadata": {
                         "shape": "contour",
-                        "min_gray": min_gray,
-                        "min_gray_threshold": gray_threshold,
+                        "white_pixel_count": white_pixel_count,
+                        "contour_pixel_count": contour_pixel_count,
+                        "white_pixel_ratio": float(np.round(white_pixel_ratio, 6)),
+                        "white_pixel_ratio_percent": float(np.round(white_pixel_ratio * 100.0, 3)),
+                        "white_pixel_ratio_threshold": ratio_threshold,
+                        "white_pixel_ratio_threshold_percent": float(np.round(ratio_threshold * 100.0, 3)),
                         "threshold_method": "adaptive_mean_inv",
                         "roi_inset_px": int(self.params.get("roi_inset_px", 0)),
                         "roi_offset_local": [int(offset_x), int(offset_y)],
@@ -78,7 +83,7 @@ class Detector401_2(BaseDetector):
                 }
             )
 
-        defects.sort(key=lambda item: item["metadata"]["min_gray"])
+        defects.sort(key=lambda item: item["metadata"]["white_pixel_ratio"], reverse=True)
         return defects
 
     def _roi_image(self, gray):

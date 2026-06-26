@@ -1,4 +1,4 @@
-recipe_name: "PRODUCT_A_MIN_GRAY_401_2_AOI_01"
+recipe_name: "PRODUCT_A_WHITE_RATIO_401_2_AOI_01"
 product_id: "PRODUCT_A"
 machine_id: "AOI_01"
 version: "0.1.0"
@@ -19,7 +19,7 @@ decision:
 detectors:
   "401-2":
     enabled: true
-    display_name: "401-2 adaptive min gray detector"
+    display_name: "401-2 adaptive white ratio detector"
     params:
       max_value: 255
       blur_size: 25
@@ -29,7 +29,7 @@ detectors:
       contour_mode: "list"
       min_area: 0
       max_area: 0
-      min_gray_threshold: 16
+      white_pixel_ratio_threshold: 0.625
 
 output:
   save_overlay: true

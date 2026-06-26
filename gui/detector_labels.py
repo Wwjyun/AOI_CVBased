@@ -4,7 +4,7 @@ from __future__ import annotations
 DETECTOR_ZH = {
     "401": "401_ negative",
     "401-1": "401-1 圓形 NG 檢測",
-    "401-2": "401-2 最小灰階 NG 檢測",
+    "401-2": "401-2 白色比例 NG 檢測",
 }
 
 
