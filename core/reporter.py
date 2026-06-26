@@ -145,7 +145,44 @@ class Reporter(LogMixin):
             if tile_image is None:
                 continue
             path = self.ng_tiles_dir / f"{base_name}_{tile['tile_id']}.png"
-            self._write_png(path, tile_image)
+            self._write_png(path, self._make_ng_tile_overlay(tile_image, tile_result))
+
+    @staticmethod
+    def _make_ng_tile_overlay(tile_image, tile_result: dict):
+        annotated = tile_image.copy()
+        line_width = Reporter._ng_tile_line_width(annotated)
+        for detector_result in tile_result.get("detectors", []):
+            for defect in detector_result.get("defects", []):
+                bbox = Reporter._clipped_local_bbox(defect.get("bbox_local"), annotated)
+                if bbox is None:
+                    continue
+                x, y, width, height = bbox
+                cv2.rectangle(annotated, (x, y), (x + width, y + height), (0, 0, 255), line_width)
+        return annotated
+
+    @staticmethod
+    def _ng_tile_line_width(image) -> int:
+        height, width = image.shape[:2]
+        return max(5, int(round(min(width, height) / 120)))
+
+    @staticmethod
+    def _clipped_local_bbox(bbox: object, image) -> tuple[int, int, int, int] | None:
+        if not isinstance(bbox, (list, tuple)) or len(bbox) != 4:
+            return None
+
+        height, width = image.shape[:2]
+        try:
+            x, y, box_width, box_height = [int(round(float(value))) for value in bbox]
+        except (TypeError, ValueError):
+            return None
+
+        x1 = max(0, min(width - 1, x))
+        y1 = max(0, min(height - 1, y))
+        x2 = max(0, min(width - 1, x + max(1, box_width)))
+        y2 = max(0, min(height - 1, y + max(1, box_height)))
+        if x2 <= x1 or y2 <= y1:
+            return None
+        return x1, y1, x2 - x1, y2 - y1
 
     @staticmethod
     def _write_png(path: Path, image) -> None:
