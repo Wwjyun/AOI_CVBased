@@ -215,6 +215,8 @@ Build the Windows GUI package from the project virtual environment:
 
 The launcher executable is created at `dist\VisionFlow AOI\VisionFlow AOI.exe`. For a machine-transfer smoke test, copy the whole `dist\VisionFlow AOI` folder because the exe depends on the `_internal` runtime directory next to it. Double-clicking `VisionFlow AOI.exe` starts the GUI directly.
 
+Release packages use the `VisionFlow-AOI-vX.Y.Z-windows-x64.zip` naming pattern, starting with `VisionFlow-AOI-v1.0.0-windows-x64.zip`.
+
 ## Current Scope
 
 Implemented MVP scope:
