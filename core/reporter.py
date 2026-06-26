@@ -162,8 +162,7 @@ class Reporter(LogMixin):
 
     @staticmethod
     def _ng_tile_line_width(image) -> int:
-        height, width = image.shape[:2]
-        return max(2, int(round(min(width, height) / 120)))
+        return 2
 
     @staticmethod
     def _clipped_local_bbox(bbox: object, image) -> tuple[int, int, int, int] | None:
