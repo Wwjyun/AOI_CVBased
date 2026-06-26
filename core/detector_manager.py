@@ -4,6 +4,7 @@ from copy import deepcopy
 
 from detectors.detector_401 import Detector401
 from detectors.detector_401_1 import Detector401_1
+from detectors.detector_401_2 import Detector401_2
 
 
 class DetectorManager:
@@ -11,6 +12,7 @@ class DetectorManager:
         self._registry = {
             Detector401.detector_id: Detector401,
             Detector401_1.detector_id: Detector401_1,
+            Detector401_2.detector_id: Detector401_2,
         }
 
     def create(self, detector_id: str, display_name: str | None = None, params: dict | None = None):

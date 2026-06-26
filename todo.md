@@ -595,6 +595,7 @@ output:
 - [x] 2026-06-25 Added `PROJECT_REPORT.md` project report notes covering features, workflows, usage scenarios, outputs, and deployment considerations
 - [x] 2026-06-26 NG tile output draws thick red local defect boxes for easier review
 - [x] 2026-06-26 Prepared VisionFlow AOI v1.0.0 product naming and Windows release package
+- [x] 2026-06-26 Added Detector401-2 adaptive mean inverse contour detector with contour area limits, min_gray < 16 NG rule, and recipe
 - [ ] debug image export per detector
 - [x] editable recipe saving from GUI
 - [ ] validation dataset
