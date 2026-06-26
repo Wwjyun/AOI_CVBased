@@ -213,7 +213,7 @@ Build the Windows GUI package from the project virtual environment:
 .\build_exe.ps1
 ```
 
-The launcher executable is created at `dist\AOI_GUI\AOI_GUI.exe`. For a machine-transfer smoke test, copy the whole `dist\AOI_GUI` folder because the exe depends on the `_internal` runtime directory next to it. Double-clicking `AOI_GUI.exe` starts the GUI directly.
+The launcher executable is created at `dist\VisionFlow AOI\VisionFlow AOI.exe`. For a machine-transfer smoke test, copy the whole `dist\VisionFlow AOI` folder because the exe depends on the `_internal` runtime directory next to it. Double-clicking `VisionFlow AOI.exe` starts the GUI directly.
 
 ## Current Scope
 

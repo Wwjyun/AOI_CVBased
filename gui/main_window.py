@@ -90,7 +90,7 @@ class MainWindow(QMainWindow, LogMixin):
         app = QApplication.instance()
         if app is not None:
             theme.install_application_font(app)
-        self.setWindowTitle("AOI 視覺檢測系統")
+        self.setWindowTitle("VisionFlow AOI")
         self.resize(1440, 900)
 
         # ---- state ----

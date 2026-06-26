@@ -594,6 +594,7 @@ output:
 - [x] 2026-06-25 Built AOI_GUI Windows executable package and published GitHub Release v0.3.0 for monitor original-image open, processed-image move, and popup theme fixes
 - [x] 2026-06-25 Added `PROJECT_REPORT.md` project report notes covering features, workflows, usage scenarios, outputs, and deployment considerations
 - [x] 2026-06-26 NG tile output draws thick red local defect boxes for easier review
+- [x] 2026-06-26 Prepared VisionFlow AOI v1.0.0 product naming and Windows release package
 - [ ] debug image export per detector
 - [x] editable recipe saving from GUI
 - [ ] validation dataset

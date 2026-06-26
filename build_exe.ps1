@@ -9,8 +9,8 @@ if (-not (Test-Path $python)) {
     --noconfirm `
     --clean `
     --windowed `
-    --name AOI_GUI `
+    --name "VisionFlow AOI" `
     --add-data "recipes;recipes" `
     gui_launcher.py
 
-Write-Host "Built GUI executable: dist\AOI_GUI\AOI_GUI.exe"
+Write-Host "Built GUI executable: dist\VisionFlow AOI\VisionFlow AOI.exe"
