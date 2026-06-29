@@ -314,6 +314,7 @@ class MainWindow(QMainWindow, LogMixin):
         self.rail.set_visible_screens(visible_screens)
         self.rail.set_settings_visible(self.mode != "op")
         self.run_screen.set_mode(self.mode)
+        self.designer_screen.set_mode(self.mode)
         self._update_mode_status_label()
         if self.stack.currentIndex() != SCREEN_INDEX["monitor"] and "monitor" in visible_screens and self.mode == "op":
             self._set_screen("monitor")

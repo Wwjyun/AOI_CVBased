@@ -75,6 +75,52 @@ CONTOUR_DEFAULTS = {
     },
 }
 
+ENGINEER_VISIBLE_PARAM_KEYS = {
+    "roi_inset_px",
+    "min_area",
+    "max_area",
+    "min_width",
+    "max_width",
+    "min_height",
+    "max_height",
+    "width",
+    "height",
+    "min_radius",
+    "max_radius",
+    "radius",
+    "min_length",
+    "max_length",
+    "crop_padding",
+    "padding",
+}
+
+ENGINEER_HIDDEN_PARAM_KEY_PARTS = {
+    "adaptive",
+    "binary",
+    "blur",
+    "circularity",
+    "contour",
+    "fill_ratio",
+    "invert",
+    "kernel",
+    "max_value",
+    "morph",
+    "nms",
+    "process_scale",
+    "ratio",
+    "threshold",
+    "window",
+}
+
+
+def _is_engineer_visible_param(key: str) -> bool:
+    normalized = key.lower()
+    if normalized in ENGINEER_VISIBLE_PARAM_KEYS:
+        return True
+    if any(part in normalized for part in ENGINEER_HIDDEN_PARAM_KEY_PARTS):
+        return False
+    return normalized.endswith(("_area", "_width", "_height", "_radius", "_length", "_padding"))
+
 
 def _form_grid() -> QFormLayout:
     form = QFormLayout()
@@ -155,6 +201,7 @@ class DesignerScreen(QWidget):
         self._enabled["401-1"] = True
         self._row_widgets: dict[str, dict] = {}
         self._active_detector = "401-1"
+        self.mode = "eng"
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -389,6 +436,13 @@ class DesignerScreen(QWidget):
         self._set_tile_config(recipe.get("tile", {}), recipe.get("assets", {}))
         self._set_detector_config(recipe.get("detectors", {}))
 
+    def set_mode(self, mode: str) -> None:
+        if mode == self.mode:
+            return
+        self.mode = mode
+        if hasattr(self, "param_form"):
+            self._select_detector(self._active_detector)
+
     def _set_tile_config(self, tile: dict, assets: dict) -> None:
         mode = str(tile.get("mode", "pattern_match"))
         if mode not in {"pattern_match", "grid", "contour"}:
@@ -621,6 +675,8 @@ class DesignerScreen(QWidget):
         self._clear_param_form()
         widgets = self._param_widgets.setdefault(detector_id, {})
         for key, default_value in self._param_values_for_detector(detector_id).items():
+            if self.mode == "eng" and not _is_engineer_visible_param(key):
+                continue
             widget = widgets.get(key)
             if widget is None:
                 widget = make_param_widget(default_value)

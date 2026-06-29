@@ -598,6 +598,7 @@ output:
 - [x] 2026-06-26 Added Detector401-2 adaptive mean inverse contour detector with contour area limits, white pixel ratio >= 62.5% NG rule, and recipe
 - [x] 2026-06-29 Monitor mode adds a cumulative tile scatter chart with per-image Y offsets
 - [x] 2026-06-29 GUI mode selector adds OP / Engineer / Admin permissions; OP only sees monitor mode
+- [x] 2026-06-29 Engineer mode hides advanced detector parameters and only exposes geometry-style controls
 - [ ] debug image export per detector
 - [x] editable recipe saving from GUI
 - [ ] validation dataset
