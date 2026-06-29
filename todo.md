@@ -596,6 +596,7 @@ output:
 - [x] 2026-06-26 NG tile output draws thick red local defect boxes for easier review
 - [x] 2026-06-26 Prepared VisionFlow AOI v1.0.0 product naming and Windows release package
 - [x] 2026-06-26 Added Detector401-2 adaptive mean inverse contour detector with contour area limits, white pixel ratio >= 62.5% NG rule, and recipe
+- [x] 2026-06-29 Monitor mode adds a cumulative sequence scatter chart that updates after each processed image
 - [ ] debug image export per detector
 - [x] editable recipe saving from GUI
 - [ ] validation dataset

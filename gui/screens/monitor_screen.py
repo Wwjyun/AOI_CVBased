@@ -263,11 +263,21 @@ class MonitorScreen(QWidget):
         self.table_panel = MonitorTablePanel()
         self.data_splitter.addWidget(self.table_panel)
 
+        sequence_panel = Panel(title="Monitor Sequence Scatter")
+        self.sequence_chart = ImageScatterChart(
+            x_label="image #",
+            y_label="defects",
+            empty_text="No monitor points",
+            y_origin_bottom=True,
+        )
+        sequence_panel.add_widget(self.sequence_chart, 1)
+        self.data_splitter.addWidget(sequence_panel)
+
         scatter_panel = Panel(title="Selected Tile Scatter")
         self.scatter_chart = ImageScatterChart()
         scatter_panel.add_widget(self.scatter_chart, 1)
         self.data_splitter.addWidget(scatter_panel)
-        self.data_splitter.setSizes([620, 360])
+        self.data_splitter.setSizes([520, 320, 320])
         layout.addWidget(self.data_splitter, 1)
 
         self.empty_state = QFrame()
@@ -312,6 +322,7 @@ class MonitorScreen(QWidget):
         has_items = bool(self._items)
         self.stats_panel.set_counts(self._items)
         self.table_panel.set_items(self._items)
+        self.sequence_chart.set_model(BatchDashboardBuilder.build_monitor_sequence_scatter(self._items))
         self.data_splitter.setVisible(has_items)
         self.empty_state.setVisible(not has_items)
         if has_items:

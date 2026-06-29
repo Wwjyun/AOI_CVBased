@@ -158,3 +158,32 @@ class BatchDashboardBuilder:
             height=max_bottom,
             points=points,
         )
+
+    @staticmethod
+    def build_monitor_sequence_scatter(rows: list[dict]) -> ImageScatterModel:
+        if not rows:
+            return ImageScatterModel(image_name="", width=0.0, height=0.0, points=[])
+
+        chronological_rows = list(reversed(rows))
+        points: list[ScatterPoint] = []
+        max_defects = 0
+
+        for index, row in enumerate(chronological_rows, start=1):
+            defect_count = int(row.get("defect_count", 0) or 0)
+            max_defects = max(max_defects, defect_count)
+            points.append(
+                ScatterPoint(
+                    tile_id=str(row.get("image_name", index)),
+                    x=float(index),
+                    y=float(defect_count),
+                    status=str(row.get("final_result", "") or "PASS"),
+                    defect_count=defect_count,
+                )
+            )
+
+        return ImageScatterModel(
+            image_name="monitor_sequence",
+            width=float(len(points) + 1),
+            height=float(max(max_defects, 1)),
+            points=points,
+        )

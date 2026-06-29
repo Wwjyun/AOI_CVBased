@@ -16,9 +16,20 @@ RESULT_COLORS = {
 
 
 class ImageScatterChart(QWidget):
-    def __init__(self, parent=None):
+    def __init__(
+        self,
+        parent=None,
+        x_label: str = "tile x",
+        y_label: str = "tile y",
+        empty_text: str = "No tile points",
+        y_origin_bottom: bool = False,
+    ):
         super().__init__(parent)
         self._model = ImageScatterModel("", 0.0, 0.0, [])
+        self._x_label = x_label
+        self._y_label = y_label
+        self._empty_text = empty_text
+        self._y_origin_bottom = y_origin_bottom
         self.setMinimumSize(260, 260)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
@@ -33,7 +44,7 @@ class ImageScatterChart(QWidget):
 
         if not self._model.points:
             painter.setPen(QColor(COLORS["text_3"]))
-            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No tile points")
+            painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._empty_text)
             return
 
         plot = QRectF(42, 18, max(1, self.width() - 64), max(1, self.height() - 52))
@@ -53,7 +64,11 @@ class ImageScatterChart(QWidget):
 
         for point in self._model.points:
             px = plot.left() + (float(point.x) / width) * plot.width()
-            py = plot.top() + (float(point.y) / height) * plot.height()
+            y_ratio = float(point.y) / height
+            if self._y_origin_bottom:
+                py = plot.bottom() - y_ratio * plot.height()
+            else:
+                py = plot.top() + y_ratio * plot.height()
             radius = 4 + min(8, int(point.defect_count))
             color = RESULT_COLORS.get(point.status, COLORS["text_3"])
             painter.setPen(QPen(QColor("#ffffff"), 1))
@@ -64,11 +79,11 @@ class ImageScatterChart(QWidget):
         font = QFont("Consolas")
         font.setPointSize(8)
         painter.setFont(font)
-        painter.drawText(QRectF(plot.left(), plot.bottom() + 6, plot.width(), 18), Qt.AlignmentFlag.AlignCenter, "tile x")
+        painter.drawText(QRectF(plot.left(), plot.bottom() + 6, plot.width(), 18), Qt.AlignmentFlag.AlignCenter, self._x_label)
         painter.save()
         painter.translate(10, plot.center().y())
         painter.rotate(-90)
-        painter.drawText(QRectF(-plot.height() / 2, 0, plot.height(), 18), Qt.AlignmentFlag.AlignCenter, "tile y")
+        painter.drawText(QRectF(-plot.height() / 2, 0, plot.height(), 18), Qt.AlignmentFlag.AlignCenter, self._y_label)
         painter.restore()
 
         legend_y = plot.top() + 6
