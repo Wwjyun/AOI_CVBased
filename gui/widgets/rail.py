@@ -58,15 +58,15 @@ class NavRail(QWidget):
         spacer.setSizePolicy(QSizePolicy.Policy.Minimum, QSizePolicy.Policy.Expanding)
         layout.addWidget(spacer)
 
-        settings_button = QToolButton()
-        settings_button.setProperty("role", "rail-btn")
-        settings_button.setToolTip("設定")
-        settings_button.setIcon(icons.icon("gear", size=20, color=COLORS["text_3"]))
-        settings_button.setIconSize(settings_button.iconSize().__class__(20, 20))
-        settings_button.setFixedSize(40, 40)
-        settings_button.setCursor(Qt.CursorShape.PointingHandCursor)
-        settings_button.clicked.connect(self.settings_clicked.emit)
-        layout.addWidget(settings_button, 0, Qt.AlignmentFlag.AlignHCenter)
+        self.settings_button = QToolButton()
+        self.settings_button.setProperty("role", "rail-btn")
+        self.settings_button.setToolTip("設定")
+        self.settings_button.setIcon(icons.icon("gear", size=20, color=COLORS["text_3"]))
+        self.settings_button.setIconSize(self.settings_button.iconSize().__class__(20, 20))
+        self.settings_button.setFixedSize(40, 40)
+        self.settings_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.settings_button.clicked.connect(self.settings_clicked.emit)
+        layout.addWidget(self.settings_button, 0, Qt.AlignmentFlag.AlignHCenter)
 
         self._current = "run"
         self.set_active("run")
@@ -85,3 +85,14 @@ class NavRail(QWidget):
             if not visible and self._current == "designer":
                 self.set_active("run")
                 self.screen_changed.emit("run")
+
+    def set_visible_screens(self, screen_ids: set[str]) -> None:
+        for sid, button in self._buttons.items():
+            button.setVisible(sid in screen_ids)
+        if self._current not in screen_ids and screen_ids:
+            next_screen = "monitor" if "monitor" in screen_ids else next(iter(screen_ids))
+            self.set_active(next_screen)
+            self.screen_changed.emit(next_screen)
+
+    def set_settings_visible(self, visible: bool) -> None:
+        self.settings_button.setVisible(visible)

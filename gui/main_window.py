@@ -40,6 +40,12 @@ from gui.workers import BatchInspectionWorker, FolderMonitorWorker, ImagePreview
 # ============================================================
 
 SCREEN_INDEX = {"run": 0, "monitor": 1, "designer": 2, "results": 3, "batch_dashboard": 4}
+ALL_SCREENS = set(SCREEN_INDEX)
+MODE_LABELS = {
+    "op": "操作員模式",
+    "eng": "工程師模式",
+    "admin": "管理員模式",
+}
 HISTORY_LIMIT = 6
 
 OUTPUT_TOGGLE_LABELS = {
@@ -145,9 +151,7 @@ class MainWindow(QMainWindow, LogMixin):
 
         self._set_screen("run")
         self.topbar.set_mode(self.mode)
-        self.run_screen.set_mode(self.mode)
-        self.rail.set_designer_visible(self.mode == "eng")
-        self._update_mode_status_label()
+        self._apply_mode_permissions()
         self._refresh_image_chip()
         self._update_run_ready()
         self.statusBar().showMessage("就緒")
@@ -290,18 +294,32 @@ class MainWindow(QMainWindow, LogMixin):
     # screen / mode switching
     # ------------------------------------------------------------------
     def _set_screen(self, screen_id: str) -> None:
+        if screen_id not in self._visible_screens_for_mode():
+            screen_id = "monitor"
         self.stack.setCurrentIndex(SCREEN_INDEX[screen_id])
         self.rail.set_active(screen_id)
         self.topbar.set_screen(screen_id)
 
     def _on_mode_changed(self, mode: str) -> None:
         self.mode = mode
-        self.rail.set_designer_visible(mode == "eng")
-        self.run_screen.set_mode(mode)
+        self._apply_mode_permissions()
+
+    def _visible_screens_for_mode(self) -> set[str]:
+        if self.mode == "op":
+            return {"monitor"}
+        return set(ALL_SCREENS)
+
+    def _apply_mode_permissions(self) -> None:
+        visible_screens = self._visible_screens_for_mode()
+        self.rail.set_visible_screens(visible_screens)
+        self.rail.set_settings_visible(self.mode != "op")
+        self.run_screen.set_mode(self.mode)
         self._update_mode_status_label()
+        if self.stack.currentIndex() != SCREEN_INDEX["monitor"] and "monitor" in visible_screens and self.mode == "op":
+            self._set_screen("monitor")
 
     def _update_mode_status_label(self) -> None:
-        mode_text = "操作員模式" if self.mode == "op" else "工程師模式"
+        mode_text = MODE_LABELS.get(self.mode, MODE_LABELS["eng"])
         self.mode_status_label.setText(f"AOI_01 · {mode_text}")
 
     def _on_overlay_toggled(self, checked: bool) -> None:

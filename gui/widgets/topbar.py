@@ -18,7 +18,7 @@ SCREEN_TITLES = {
     "batch_dashboard": "批量數據圖表",
 }
 
-MODE_OPTIONS = [("op", "OP"), ("eng", "工程")]
+MODE_OPTIONS = [("op", "OP"), ("eng", "工程"), ("admin", "管理")]
 
 
 class TopBar(QWidget):
