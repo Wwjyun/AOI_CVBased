@@ -265,10 +265,9 @@ class MonitorScreen(QWidget):
 
         sequence_panel = Panel(title="Monitor Sequence Scatter")
         self.sequence_chart = ImageScatterChart(
-            x_label="image #",
-            y_label="defects",
-            empty_text="No monitor points",
-            y_origin_bottom=True,
+            x_label="tile x",
+            y_label="tile y",
+            empty_text="No cumulative tile points",
         )
         sequence_panel.add_widget(self.sequence_chart, 1)
         self.data_splitter.addWidget(sequence_panel)
