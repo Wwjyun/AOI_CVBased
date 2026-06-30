@@ -172,6 +172,15 @@ class Reporter(LogMixin):
             color=(255, 255, 0),
             prefix="OUT",
             line_width=line_width,
+            label_y_offset=0,
+        )
+        Reporter._draw_900_candidate_group(
+            annotated,
+            metadata.get("debug_outer_rejected_candidates") or [],
+            color=(255, 0, 255),
+            prefix="OUT_FAIL",
+            line_width=line_width,
+            label_y_offset=18,
         )
         Reporter._draw_900_candidate_group(
             annotated,
@@ -179,6 +188,15 @@ class Reporter(LogMixin):
             color=(0, 255, 0),
             prefix="IN",
             line_width=line_width,
+            label_y_offset=0,
+        )
+        Reporter._draw_900_candidate_group(
+            annotated,
+            metadata.get("debug_inner_rejected_candidates") or [],
+            color=(0, 165, 255),
+            prefix="IN_FAIL",
+            line_width=line_width,
+            label_y_offset=36,
         )
 
         bbox = Reporter._clipped_local_bbox(defect.get("bbox_local"), annotated)
@@ -194,7 +212,14 @@ class Reporter(LogMixin):
         Reporter._draw_text_panel(annotated, lines, origin=(panel_x, 10))
 
     @staticmethod
-    def _draw_900_candidate_group(annotated, candidates: object, color: tuple[int, int, int], prefix: str, line_width: int) -> None:
+    def _draw_900_candidate_group(
+        annotated,
+        candidates: object,
+        color: tuple[int, int, int],
+        prefix: str,
+        line_width: int,
+        label_y_offset: int = 0,
+    ) -> None:
         if not isinstance(candidates, list):
             return
         for index, candidate in enumerate(candidates, start=1):
@@ -206,8 +231,10 @@ class Reporter(LogMixin):
             x, y, width, height = bbox
             thickness = max(1, line_width - 1) if index > 1 else max(line_width, 2)
             cv2.rectangle(annotated, (x, y), (x + width, y + height), color, thickness)
-            label = f"{prefix}{index} a={Reporter._fmt_num(candidate.get('area'))} {width}x{height}"
-            Reporter._draw_label(annotated, label, x, y - 6, color)
+            reject_reason = str(candidate.get("reject_reason", ""))
+            reject_suffix = f" {reject_reason}" if reject_reason else ""
+            label = f"{prefix}{index}{reject_suffix} a={Reporter._fmt_num(candidate.get('area'))} {width}x{height}"
+            Reporter._draw_label(annotated, label, x, y - 6 + label_y_offset, color)
 
     @staticmethod
     def _draw_900_edge_gaps(annotated, debug_pair: dict, line_width: int) -> None:
@@ -247,8 +274,16 @@ class Reporter(LogMixin):
             "Detector 900 NG debug",
             f"reason: {metadata.get('reason', '')}",
             (
-                "outer/inner candidates: "
-                f"{metadata.get('outer_candidate_count', 0)}/{metadata.get('inner_candidate_count', 0)}"
+                "outer pass/raw/fail: "
+                f"{metadata.get('outer_candidate_count', 0)}/"
+                f"{metadata.get('outer_raw_candidate_count', 0)}/"
+                f"{metadata.get('outer_rejected_candidate_count', 0)}"
+            ),
+            (
+                "inner pass/raw/fail: "
+                f"{metadata.get('inner_candidate_count', 0)}/"
+                f"{metadata.get('inner_raw_candidate_count', 0)}/"
+                f"{metadata.get('inner_rejected_candidate_count', 0)}"
             ),
             f"inner size pass: {metadata.get('inner_size_pass_count', 0)}",
             (

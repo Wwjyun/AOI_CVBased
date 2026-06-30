@@ -599,6 +599,7 @@ output:
 - [x] 2026-06-30 Added Detector900 dual-frame spacing detector and recipe with separate outer binary / inner adaptive contour parameters
 - [x] 2026-06-30 Updated Detector900 area filtering to use binary component pixel area for frame-like contours
 - [x] 2026-06-30 Added Detector900 NG tile debug overlays for outer/inner candidates, reason text, and edge gaps
+- [x] 2026-06-30 Added Detector900 NG tile rejected-candidate overlays to debug no_outer_candidate area misses
 - [x] 2026-06-29 Monitor mode adds a cumulative tile scatter chart with per-image Y offsets
 - [x] 2026-06-29 GUI mode selector adds OP / Engineer / Admin permissions; OP only sees monitor mode
 - [x] 2026-06-29 Engineer mode hides advanced detector parameters and only exposes geometry-style controls

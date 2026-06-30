@@ -41,17 +41,23 @@ class Detector900(BaseDetector):
         outer_mask = self._make_outer_binary(roi)
         inner_mask = self._make_inner_binary(roi)
 
-        outer_candidates = self._find_candidates(
+        outer_all_candidates = self._collect_candidates(
             outer_mask,
             mode_param="outer_contour_mode",
             area_metric_param="outer_area_metric",
+        )
+        outer_candidates = self._filter_candidates(
+            outer_all_candidates,
             min_area_param="outer_min_area",
             max_area_param="outer_max_area",
         )
-        inner_candidates = self._find_candidates(
+        inner_all_candidates = self._collect_candidates(
             inner_mask,
             mode_param="inner_contour_mode",
             area_metric_param="inner_area_metric",
+        )
+        inner_candidates = self._filter_candidates(
+            inner_all_candidates,
             min_area_param="inner_min_area",
             max_area_param="inner_max_area",
         )
@@ -65,6 +71,16 @@ class Detector900(BaseDetector):
         reason = self._failure_reason(outer_candidates, inner_candidates, sized_inner_candidates)
         debug_outer = self._offset_candidates(outer_candidates[:5], offset_x, offset_y)
         debug_inner = self._offset_candidates(inner_candidates[:5], offset_x, offset_y)
+        debug_outer_rejected = self._offset_candidates(
+            self._rejected_candidates(outer_all_candidates, "outer_min_area", "outer_max_area")[:5],
+            offset_x,
+            offset_y,
+        )
+        debug_inner_rejected = self._offset_candidates(
+            self._rejected_candidates(inner_all_candidates, "inner_min_area", "inner_max_area")[:5],
+            offset_x,
+            offset_y,
+        )
         debug_pair = self._debug_pair(outer_candidates, inner_candidates, offset_x, offset_y)
         return [
             {
@@ -75,7 +91,11 @@ class Detector900(BaseDetector):
                 "metadata": {
                     "reason": reason,
                     "outer_candidate_count": len(outer_candidates),
+                    "outer_raw_candidate_count": len(outer_all_candidates),
+                    "outer_rejected_candidate_count": len(outer_all_candidates) - len(outer_candidates),
                     "inner_candidate_count": len(inner_candidates),
+                    "inner_raw_candidate_count": len(inner_all_candidates),
+                    "inner_rejected_candidate_count": len(inner_all_candidates) - len(inner_candidates),
                     "inner_size_pass_count": len(sized_inner_candidates),
                     "outer_threshold": int(self.params.get("outer_threshold", 160)),
                     "outer_contour_mode": str(self.params.get("outer_contour_mode", "list")),
@@ -101,6 +121,8 @@ class Detector900(BaseDetector):
                     "debug_outer_candidates": debug_outer,
                     "debug_inner_candidates": debug_inner,
                     "debug_pair": debug_pair,
+                    "debug_outer_rejected_candidates": debug_outer_rejected,
+                    "debug_inner_rejected_candidates": debug_inner_rejected,
                 },
             }
         ]
@@ -138,31 +160,23 @@ class Detector900(BaseDetector):
             float(self.params.get("inner_adaptive_c", 0.0)),
         )
 
-    def _find_candidates(
+    def _collect_candidates(
         self,
         binary,
         mode_param: str,
         area_metric_param: str,
-        min_area_param: str,
-        max_area_param: str,
     ) -> list[dict]:
         if str(self.params.get(area_metric_param, "component_pixels")).lower() == "component_pixels":
-            return self._find_component_candidates(binary, min_area_param, max_area_param)
+            return self._collect_component_candidates(binary)
 
         contours, _ = cv2.findContours(binary, self._contour_mode(mode_param), cv2.CHAIN_APPROX_SIMPLE)
         candidates = []
-        min_area = float(self.params.get(min_area_param, 0))
-        max_area = float(self.params.get(max_area_param, 0))
         for contour in contours:
             if len(contour) < 3:
                 continue
 
             area = float(cv2.contourArea(contour))
             if area <= 0.0:
-                continue
-            if min_area and area < min_area:
-                continue
-            if max_area and area > max_area:
                 continue
 
             x, y, width, height = cv2.boundingRect(contour)
@@ -178,11 +192,9 @@ class Detector900(BaseDetector):
         candidates.sort(key=lambda item: item["area"], reverse=True)
         return candidates
 
-    def _find_component_candidates(self, binary, min_area_param: str, max_area_param: str) -> list[dict]:
+    def _collect_component_candidates(self, binary) -> list[dict]:
         component_count, _, stats, _ = cv2.connectedComponentsWithStats((binary > 0).astype(np.uint8), connectivity=8)
         candidates = []
-        min_area = float(self.params.get(min_area_param, 0))
-        max_area = float(self.params.get(max_area_param, 0))
         for label in range(1, component_count):
             x = int(stats[label, cv2.CC_STAT_LEFT])
             y = int(stats[label, cv2.CC_STAT_TOP])
@@ -190,10 +202,6 @@ class Detector900(BaseDetector):
             height = int(stats[label, cv2.CC_STAT_HEIGHT])
             area = float(stats[label, cv2.CC_STAT_AREA])
             if area <= 0.0:
-                continue
-            if min_area and area < min_area:
-                continue
-            if max_area and area > max_area:
                 continue
 
             candidates.append(
@@ -207,6 +215,42 @@ class Detector900(BaseDetector):
 
         candidates.sort(key=lambda item: item["area"], reverse=True)
         return candidates
+
+    def _filter_candidates(self, candidates: list[dict], min_area_param: str, max_area_param: str) -> list[dict]:
+        min_area = float(self.params.get(min_area_param, 0))
+        max_area = float(self.params.get(max_area_param, 0))
+        return [
+            candidate
+            for candidate in candidates
+            if self._passes_area(candidate["area"], min_area, max_area)
+        ]
+
+    def _rejected_candidates(self, candidates: list[dict], min_area_param: str, max_area_param: str) -> list[dict]:
+        min_area = float(self.params.get(min_area_param, 0))
+        max_area = float(self.params.get(max_area_param, 0))
+        rejected = []
+        for candidate in candidates:
+            area = float(candidate["area"])
+            if self._passes_area(area, min_area, max_area):
+                continue
+
+            debug_candidate = dict(candidate)
+            if min_area and area < min_area:
+                debug_candidate["reject_reason"] = "LOW"
+            elif max_area and area > max_area:
+                debug_candidate["reject_reason"] = "HIGH"
+            else:
+                debug_candidate["reject_reason"] = "REJECT"
+            rejected.append(debug_candidate)
+        return rejected
+
+    @staticmethod
+    def _passes_area(area: float, min_area: float, max_area: float) -> bool:
+        if min_area and area < min_area:
+            return False
+        if max_area and area > max_area:
+            return False
+        return True
 
     def _passes_inner_size(self, candidate: dict) -> bool:
         _, _, width, height = candidate["bbox"]
@@ -314,6 +358,7 @@ class Detector900(BaseDetector):
             "bbox": [int(x + offset_x), int(y + offset_y), int(width), int(height)],
             "area": float(np.round(candidate["area"], 3)),
             "area_metric": candidate.get("area_metric", ""),
+            "reject_reason": candidate.get("reject_reason", ""),
         }
 
     @staticmethod
