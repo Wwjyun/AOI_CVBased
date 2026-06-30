@@ -233,7 +233,7 @@ class Reporter(LogMixin):
             cv2.rectangle(annotated, (x, y), (x + width, y + height), color, thickness)
             reject_reason = str(candidate.get("reject_reason", ""))
             reject_suffix = f" {reject_reason}" if reject_reason else ""
-            label = f"{prefix}{index}{reject_suffix} a={Reporter._fmt_num(candidate.get('area'))} {width}x{height}"
+            label = f"{prefix}{index}{reject_suffix} {width}x{height}"
             Reporter._draw_label(annotated, label, x, y - 6 + label_y_offset, color)
 
     @staticmethod
@@ -285,7 +285,11 @@ class Reporter(LogMixin):
                 f"{metadata.get('inner_raw_candidate_count', 0)}/"
                 f"{metadata.get('inner_rejected_candidate_count', 0)}"
             ),
-            f"inner size pass: {metadata.get('inner_size_pass_count', 0)}",
+            (
+                "target outer: "
+                f"{metadata.get('outer_target_width')}+-{metadata.get('outer_width_tolerance')} x "
+                f"{metadata.get('outer_target_height')}+-{metadata.get('outer_height_tolerance')}"
+            ),
             (
                 "target inner: "
                 f"{metadata.get('inner_target_width')}+-{metadata.get('inner_width_tolerance')} x "

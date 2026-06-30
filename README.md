@@ -191,7 +191,7 @@ The sample recipe is `recipes/PRODUCT_A_NEGATIVE_401_AOI_01.yaml`.
 
 - `401`: `401_ negative` negative-pole adaptive mean rotated rectangle NG detector.
 - `401-1`: adaptive mean circular contour NG detector.
-- `900`: dual frame spacing guard. It finds the outer frame with global binary threshold `160` and contour list/component pixel area `100000..130000`, independently finds the inner frame with adaptive mean block `11` / C `0` and the same area range, then PASSes only when an inner frame is `998+-33` wide, `1164+-33` high, sits inside the outer frame, and each corresponding edge gap is `<=31` px.
+- `900`: dual frame spacing guard. It finds the outer frame with global binary threshold `160` and contour list bbox size `1033+-33` wide by `1211+-33` high, independently finds the inner frame with adaptive mean block `11` / C `0` and bbox size `998+-33` wide by `1164+-33` high, then PASSes only when the inner frame sits inside the outer frame and each corresponding edge gap is `<=31` px.
 
 The sample recipe enables `401-1` by default.
 
