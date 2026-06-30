@@ -1,0 +1,48 @@
+recipe_name: "PRODUCT_A_FRAME_900_AOI_01"
+product_id: "PRODUCT_A"
+machine_id: "AOI_01"
+version: "0.1.0"
+
+tile:
+  mode: "grid"
+  width: 9999
+  height: 9999
+  overlap_x: 0
+  overlap_y: 0
+
+decision:
+  mode: "all_detectors_must_pass"
+  important_detectors:
+    - "900"
+  max_ng_count: 0
+
+detectors:
+  "900":
+    enabled: true
+    display_name: "900 dual frame spacing detector"
+    params:
+      max_value: 255
+      outer_threshold: 160
+      outer_invert: false
+      outer_contour_mode: "list"
+      outer_min_area: 100000
+      outer_max_area: 130000
+      inner_adaptive_block_size: 11
+      inner_adaptive_c: 0.0
+      inner_invert: false
+      inner_contour_mode: "list"
+      inner_min_area: 100000
+      inner_max_area: 130000
+      inner_target_width: 998
+      inner_width_tolerance: 33
+      inner_target_height: 1164
+      inner_height_tolerance: 33
+      max_edge_gap: 31
+      roi_inset_px: 0
+
+output:
+  save_overlay: true
+  save_ng_tiles: true
+  save_csv: true
+  save_matrix_csv: true
+  save_json: true
