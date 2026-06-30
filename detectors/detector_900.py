@@ -15,12 +15,14 @@ class Detector900(BaseDetector):
         "outer_threshold": 160,
         "outer_invert": False,
         "outer_contour_mode": "list",
+        "outer_area_metric": "component_pixels",
         "outer_min_area": 100000,
         "outer_max_area": 130000,
         "inner_adaptive_block_size": 11,
         "inner_adaptive_c": 0.0,
         "inner_invert": False,
         "inner_contour_mode": "list",
+        "inner_area_metric": "component_pixels",
         "inner_min_area": 100000,
         "inner_max_area": 130000,
         "inner_target_width": 998,
@@ -42,12 +44,14 @@ class Detector900(BaseDetector):
         outer_candidates = self._find_candidates(
             outer_mask,
             mode_param="outer_contour_mode",
+            area_metric_param="outer_area_metric",
             min_area_param="outer_min_area",
             max_area_param="outer_max_area",
         )
         inner_candidates = self._find_candidates(
             inner_mask,
             mode_param="inner_contour_mode",
+            area_metric_param="inner_area_metric",
             min_area_param="inner_min_area",
             max_area_param="inner_max_area",
         )
@@ -72,12 +76,14 @@ class Detector900(BaseDetector):
                     "inner_size_pass_count": len(sized_inner_candidates),
                     "outer_threshold": int(self.params.get("outer_threshold", 160)),
                     "outer_contour_mode": str(self.params.get("outer_contour_mode", "list")),
+                    "outer_area_metric": str(self.params.get("outer_area_metric", "component_pixels")),
                     "outer_min_area": float(self.params.get("outer_min_area", 100000)),
                     "outer_max_area": float(self.params.get("outer_max_area", 130000)),
                     "inner_threshold_method": "adaptive_mean",
                     "inner_adaptive_block_size": int(self.params.get("inner_adaptive_block_size", 11)),
                     "inner_adaptive_c": float(self.params.get("inner_adaptive_c", 0.0)),
                     "inner_contour_mode": str(self.params.get("inner_contour_mode", "list")),
+                    "inner_area_metric": str(self.params.get("inner_area_metric", "component_pixels")),
                     "inner_min_area": float(self.params.get("inner_min_area", 100000)),
                     "inner_max_area": float(self.params.get("inner_max_area", 130000)),
                     "inner_target_width": int(self.params.get("inner_target_width", 998)),
@@ -126,7 +132,17 @@ class Detector900(BaseDetector):
             float(self.params.get("inner_adaptive_c", 0.0)),
         )
 
-    def _find_candidates(self, binary, mode_param: str, min_area_param: str, max_area_param: str) -> list[dict]:
+    def _find_candidates(
+        self,
+        binary,
+        mode_param: str,
+        area_metric_param: str,
+        min_area_param: str,
+        max_area_param: str,
+    ) -> list[dict]:
+        if str(self.params.get(area_metric_param, "component_pixels")).lower() == "component_pixels":
+            return self._find_component_candidates(binary, min_area_param, max_area_param)
+
         contours, _ = cv2.findContours(binary, self._contour_mode(mode_param), cv2.CHAIN_APPROX_SIMPLE)
         candidates = []
         min_area = float(self.params.get(min_area_param, 0))
@@ -148,6 +164,38 @@ class Detector900(BaseDetector):
                 {
                     "bbox": [int(x), int(y), int(width), int(height)],
                     "area": area,
+                    "contour_area": area,
+                    "area_metric": "contour_area",
+                }
+            )
+
+        candidates.sort(key=lambda item: item["area"], reverse=True)
+        return candidates
+
+    def _find_component_candidates(self, binary, min_area_param: str, max_area_param: str) -> list[dict]:
+        component_count, _, stats, _ = cv2.connectedComponentsWithStats((binary > 0).astype(np.uint8), connectivity=8)
+        candidates = []
+        min_area = float(self.params.get(min_area_param, 0))
+        max_area = float(self.params.get(max_area_param, 0))
+        for label in range(1, component_count):
+            x = int(stats[label, cv2.CC_STAT_LEFT])
+            y = int(stats[label, cv2.CC_STAT_TOP])
+            width = int(stats[label, cv2.CC_STAT_WIDTH])
+            height = int(stats[label, cv2.CC_STAT_HEIGHT])
+            area = float(stats[label, cv2.CC_STAT_AREA])
+            if area <= 0.0:
+                continue
+            if min_area and area < min_area:
+                continue
+            if max_area and area > max_area:
+                continue
+
+            candidates.append(
+                {
+                    "bbox": [x, y, width, height],
+                    "area": area,
+                    "component_pixel_area": area,
+                    "area_metric": "component_pixels",
                 }
             )
 
@@ -238,6 +286,7 @@ class Detector900(BaseDetector):
         return {
             "bbox": [int(x + offset_x), int(y + offset_y), int(width), int(height)],
             "area": float(np.round(candidate["area"], 3)),
+            "area_metric": candidate.get("area_metric", ""),
         }
 
     @staticmethod
