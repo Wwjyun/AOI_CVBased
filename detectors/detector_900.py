@@ -63,6 +63,9 @@ class Detector900(BaseDetector):
 
         failure_bbox = self._failure_bbox(outer_candidates, inner_candidates, image.shape[:2], offset_x, offset_y)
         reason = self._failure_reason(outer_candidates, inner_candidates, sized_inner_candidates)
+        debug_outer = self._offset_candidates(outer_candidates[:5], offset_x, offset_y)
+        debug_inner = self._offset_candidates(inner_candidates[:5], offset_x, offset_y)
+        debug_pair = self._debug_pair(outer_candidates, inner_candidates, offset_x, offset_y)
         return [
             {
                 "type": "900_frame_spacing_ng",
@@ -95,6 +98,9 @@ class Detector900(BaseDetector):
                     "roi_offset_local": [int(offset_x), int(offset_y)],
                     "best_outer": self._offset_candidate(self._largest_candidate(outer_candidates), offset_x, offset_y),
                     "best_inner": self._offset_candidate(self._largest_candidate(inner_candidates), offset_x, offset_y),
+                    "debug_outer_candidates": debug_outer,
+                    "debug_inner_candidates": debug_inner,
+                    "debug_pair": debug_pair,
                 },
             }
         ]
@@ -274,6 +280,27 @@ class Detector900(BaseDetector):
         height, width = image_shape
         return [0, 0, int(width), int(height)]
 
+    def _debug_pair(
+        self,
+        outer_candidates: list[dict],
+        inner_candidates: list[dict],
+        offset_x: int,
+        offset_y: int,
+    ) -> dict | None:
+        outer = self._largest_candidate(outer_candidates)
+        inner = self._largest_candidate(inner_candidates)
+        if outer is None or inner is None:
+            return None
+
+        edge_gaps = self._edge_gaps(outer["bbox"], inner["bbox"])
+        return {
+            "outer": self._offset_candidate(outer, offset_x, offset_y),
+            "inner": self._offset_candidate(inner, offset_x, offset_y),
+            "inner_size_pass": self._passes_inner_size(inner),
+            "edge_gaps": edge_gaps,
+            "edge_gap_pass": edge_gaps is not None and max(edge_gaps.values()) <= int(self.params.get("max_edge_gap", 31)),
+        }
+
     @staticmethod
     def _largest_candidate(candidates: list[dict]) -> dict | None:
         return candidates[0] if candidates else None
@@ -288,6 +315,14 @@ class Detector900(BaseDetector):
             "area": float(np.round(candidate["area"], 3)),
             "area_metric": candidate.get("area_metric", ""),
         }
+
+    @staticmethod
+    def _offset_candidates(candidates: list[dict], offset_x: int, offset_y: int) -> list[dict]:
+        return [
+            offset_candidate
+            for offset_candidate in (Detector900._offset_candidate(candidate, offset_x, offset_y) for candidate in candidates)
+            if offset_candidate is not None
+        ]
 
     @staticmethod
     def _bbox_area(bbox: list[int]) -> float:
