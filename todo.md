@@ -604,6 +604,7 @@ output:
 - [x] 2026-06-29 Monitor mode adds a cumulative tile scatter chart with per-image Y offsets
 - [x] 2026-06-29 GUI mode selector adds OP / Engineer / Admin permissions; OP only sees monitor mode
 - [x] 2026-06-29 Engineer mode hides advanced detector parameters and only exposes geometry-style controls
+- [x] 2026-07-01 Added weekly update report from 2026-06-24 to 2026-07-01 for status reporting
 - [ ] debug image export per detector
 - [x] editable recipe saving from GUI
 - [ ] validation dataset
