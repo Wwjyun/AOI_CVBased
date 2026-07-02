@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import gc
 import shutil
 import time
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ from typing import Callable
 from core.image_loader import SUPPORTED_EXTENSIONS
 from core.logging_system import LogMixin
 from core.pipeline import AOIPipeline
+from core.result_compactor import compact_inspection_result
 
 
 MonitorProgressCallback = Callable[[int, str], None]
@@ -135,6 +137,7 @@ class FolderMonitorProcessor(LogMixin):
             self._progress(5, f"Queued {image_path.name}")
 
     def _process_image(self, image_path: Path, monitor_output_dir: Path) -> MonitorImageResult:
+        result: dict | None = None
         try:
             self.logger.info("Monitor image started: image=%s", image_path)
             pipeline = AOIPipeline(
@@ -145,6 +148,7 @@ class FolderMonitorProcessor(LogMixin):
             )
             result = pipeline.run(image_path)
             summary = result.get("summary", {})
+            compact_detail = compact_inspection_result(result)
             moved_path = self._move_processed_image(image_path)
             current_image_path = moved_path or image_path
             return MonitorImageResult(
@@ -155,7 +159,7 @@ class FolderMonitorProcessor(LogMixin):
                 tile_count=int(summary.get("tile_count", 0)),
                 duration_sec=float(result.get("duration_sec", 0) or 0),
                 outputs=result.get("outputs", {}),
-                detail=result,
+                detail=compact_detail,
                 source_image_path=image_path,
                 moved_image_path=moved_path,
             )
@@ -173,6 +177,9 @@ class FolderMonitorProcessor(LogMixin):
                 source_image_path=image_path,
                 error=str(exc),
             )
+        finally:
+            result = None
+            gc.collect(0)
 
     def _move_processed_image(self, image_path: Path) -> Path | None:
         if self.processed_move_dir is None:

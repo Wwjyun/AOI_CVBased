@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import gc
 import os
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
@@ -10,6 +11,7 @@ from typing import Callable
 from core.image_loader import SUPPORTED_EXTENSIONS
 from core.logging_system import LogMixin
 from core.pipeline import AOIPipeline
+from core.result_compactor import compact_inspection_result
 
 
 BatchProgressCallback = Callable[[int, str], None]
@@ -124,30 +126,36 @@ class BatchInspectionProcessor(LogMixin):
 
     def _process_image(self, image_path: Path, batch_output_dir: Path) -> BatchImageResult:
         self.logger.info("Batch image started: image=%s", image_path)
-        pipeline = AOIPipeline(
-            recipe_path=self.recipe_path,
-            output_dir=batch_output_dir,
-            output_overrides=self.output_overrides,
-        )
-        result = pipeline.run(image_path)
-        summary = result.get("summary", {})
-        self.logger.info(
-            "Batch image completed: image=%s final=%s defects=%s duration=%s",
-            image_path.name,
-            result.get("final_result", "-"),
-            summary.get("defect_count", 0),
-            result.get("duration_sec", 0),
-        )
-        return BatchImageResult(
-            image_path=image_path,
-            final_result=str(result.get("final_result", "-")),
-            defect_count=int(summary.get("defect_count", 0)),
-            ng_count=int(summary.get("ng_count", 0)),
-            tile_count=int(summary.get("tile_count", 0)),
-            duration_sec=float(result.get("duration_sec", 0) or 0),
-            outputs=result.get("outputs", {}),
-            detail=result,
-        )
+        result: dict | None = None
+        try:
+            pipeline = AOIPipeline(
+                recipe_path=self.recipe_path,
+                output_dir=batch_output_dir,
+                output_overrides=self.output_overrides,
+            )
+            result = pipeline.run(image_path)
+            summary = result.get("summary", {})
+            compact_detail = compact_inspection_result(result)
+            self.logger.info(
+                "Batch image completed: image=%s final=%s defects=%s duration=%s",
+                image_path.name,
+                result.get("final_result", "-"),
+                summary.get("defect_count", 0),
+                result.get("duration_sec", 0),
+            )
+            return BatchImageResult(
+                image_path=image_path,
+                final_result=str(result.get("final_result", "-")),
+                defect_count=int(summary.get("defect_count", 0)),
+                ng_count=int(summary.get("ng_count", 0)),
+                tile_count=int(summary.get("tile_count", 0)),
+                duration_sec=float(result.get("duration_sec", 0) or 0),
+                outputs=result.get("outputs", {}),
+                detail=compact_detail,
+            )
+        finally:
+            result = None
+            gc.collect(0)
 
     def discover_images(self) -> list[Path]:
         if not self.input_dir.exists():
