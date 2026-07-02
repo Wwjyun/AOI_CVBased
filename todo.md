@@ -607,6 +607,7 @@ output:
 - [x] 2026-07-01 Added weekly update report from 2026-06-24 to 2026-07-01 for status reporting
 - [x] 2026-07-02 Compact GUI batch/monitor inspection results and run light GC after each image to reduce long-run slowdown
 - [x] 2026-07-02 Optimized monitor mode table/scatter refresh and cleared stable-file tracking after queueing images
+- [x] 2026-07-02 Rewrote README as a detailed current-state project evaluation document covering architecture, GUI/CLI workflows, detectors, recipes, outputs, validation, packaging, and remaining work
 - [ ] debug image export per detector
 - [x] editable recipe saving from GUI
 - [ ] validation dataset
