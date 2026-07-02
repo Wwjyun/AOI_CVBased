@@ -606,6 +606,7 @@ output:
 - [x] 2026-06-29 Engineer mode hides advanced detector parameters and only exposes geometry-style controls
 - [x] 2026-07-01 Added weekly update report from 2026-06-24 to 2026-07-01 for status reporting
 - [x] 2026-07-02 Compact GUI batch/monitor inspection results and run light GC after each image to reduce long-run slowdown
+- [x] 2026-07-02 Optimized monitor mode table/scatter refresh and cleared stable-file tracking after queueing images
 - [ ] debug image export per detector
 - [x] editable recipe saving from GUI
 - [ ] validation dataset

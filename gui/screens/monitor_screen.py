@@ -22,6 +22,10 @@ from gui.widgets.panel import Panel
 from gui.widgets.scatter_chart import ImageScatterChart
 
 
+MONITOR_HISTORY_LIMIT = 200
+MONITOR_SEQUENCE_SCATTER_LIMIT = 50
+
+
 def _format_duration(value: object) -> str:
     try:
         seconds = float(value)
@@ -197,28 +201,43 @@ class MonitorTablePanel(Panel):
         self._items = list(items)
         self.table.setRowCount(len(items))
         for row, item in enumerate(items):
-            time_item = QTableWidgetItem(str(item.get("processed_at", "")))
-            name_item = QTableWidgetItem(str(item.get("image_name", "")))
-            name_item.setToolTip(str(item.get("image_path", "")))
-            defects_item = QTableWidgetItem(str(item.get("defect_count", 0)))
-            ng_item = QTableWidgetItem(str(item.get("ng_count", 0)))
-            duration_item = QTableWidgetItem(_format_duration(item.get("duration_sec")))
-            for table_item in (time_item, name_item, defects_item, ng_item, duration_item):
-                table_item.setFlags(table_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.table.setItem(row, 0, time_item)
-            self.table.setItem(row, 1, name_item)
-            self.table.setCellWidget(row, 2, result_badge(item.get("final_result")))
-            self.table.setItem(row, 3, defects_item)
-            self.table.setItem(row, 4, ng_item)
-            self.table.setItem(row, 5, duration_item)
-        self.table.resizeColumnsToContents()
-        self.table.horizontalHeader().setStretchLastSection(True)
+            self._set_row(row, item)
+        self._resize_table()
+
+    def prepend_item(self, item: dict, limit: int) -> None:
+        self._items.insert(0, item)
+        self._items = self._items[:limit]
+        self.table.insertRow(0)
+        self._set_row(0, item)
+        while self.table.rowCount() > limit:
+            self.table.removeRow(self.table.rowCount() - 1)
+        self._resize_table()
 
     def selected_row_index(self) -> int:
         selected = self.table.selectionModel().selectedRows()
         if not selected:
             return -1
         return selected[0].row()
+
+    def _set_row(self, row: int, item: dict) -> None:
+        time_item = QTableWidgetItem(str(item.get("processed_at", "")))
+        name_item = QTableWidgetItem(str(item.get("image_name", "")))
+        name_item.setToolTip(str(item.get("image_path", "")))
+        defects_item = QTableWidgetItem(str(item.get("defect_count", 0)))
+        ng_item = QTableWidgetItem(str(item.get("ng_count", 0)))
+        duration_item = QTableWidgetItem(_format_duration(item.get("duration_sec")))
+        for table_item in (time_item, name_item, defects_item, ng_item, duration_item):
+            table_item.setFlags(table_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
+        self.table.setItem(row, 0, time_item)
+        self.table.setItem(row, 1, name_item)
+        self.table.setCellWidget(row, 2, result_badge(item.get("final_result")))
+        self.table.setItem(row, 3, defects_item)
+        self.table.setItem(row, 4, ng_item)
+        self.table.setItem(row, 5, duration_item)
+
+    def _resize_table(self) -> None:
+        self.table.resizeColumnsToContents()
+        self.table.horizontalHeader().setStretchLastSection(True)
 
     def _show_context_menu(self, pos) -> None:
         row = self.table.rowAt(pos.y())
@@ -311,8 +330,14 @@ class MonitorScreen(QWidget):
 
     def add_item(self, item: dict) -> None:
         self._items.insert(0, item)
-        self._items = self._items[:200]
-        self._refresh()
+        self._items = self._items[:MONITOR_HISTORY_LIMIT]
+        self.stats_panel.set_counts(self._items)
+        self.table_panel.prepend_item(item, MONITOR_HISTORY_LIMIT)
+        self.sequence_chart.set_model(BatchDashboardBuilder.build_monitor_sequence_scatter(self._sequence_items()))
+        self.data_splitter.setVisible(True)
+        self.empty_state.setVisible(False)
+        self.table_panel.table.selectRow(0)
+        self._render_selected_scatter()
 
     def items(self) -> list[dict]:
         return list(self._items)
@@ -321,7 +346,7 @@ class MonitorScreen(QWidget):
         has_items = bool(self._items)
         self.stats_panel.set_counts(self._items)
         self.table_panel.set_items(self._items)
-        self.sequence_chart.set_model(BatchDashboardBuilder.build_monitor_sequence_scatter(self._items))
+        self.sequence_chart.set_model(BatchDashboardBuilder.build_monitor_sequence_scatter(self._sequence_items()))
         self.data_splitter.setVisible(has_items)
         self.empty_state.setVisible(not has_items)
         if has_items:
@@ -337,3 +362,6 @@ class MonitorScreen(QWidget):
         row_index = self.table_panel.selected_row_index()
         item = self._items[row_index] if 0 <= row_index < len(self._items) else None
         self.scatter_chart.set_model(BatchDashboardBuilder.build_image_scatter(item))
+
+    def _sequence_items(self) -> list[dict]:
+        return self._items[:MONITOR_SEQUENCE_SCATTER_LIMIT]

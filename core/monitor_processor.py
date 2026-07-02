@@ -132,6 +132,7 @@ class FolderMonitorProcessor(LogMixin):
             if not self._is_stable(image_path):
                 continue
             self._seen.add(image_path)
+            self._file_states.pop(image_path, None)
             self._pending.append(image_path)
             self.logger.info("Monitor queued image: %s", image_path)
             self._progress(5, f"Queued {image_path.name}")
