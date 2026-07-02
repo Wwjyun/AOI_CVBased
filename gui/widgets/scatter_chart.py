@@ -23,6 +23,7 @@ class ImageScatterChart(QWidget):
         y_label: str = "tile y",
         empty_text: str = "No tile points",
         y_origin_bottom: bool = False,
+        defect_radius_scale: int = 8,
     ):
         super().__init__(parent)
         self._model = ImageScatterModel("", 0.0, 0.0, [])
@@ -30,6 +31,7 @@ class ImageScatterChart(QWidget):
         self._y_label = y_label
         self._empty_text = empty_text
         self._y_origin_bottom = y_origin_bottom
+        self._defect_radius_scale = max(0, int(defect_radius_scale))
         self.setMinimumSize(260, 260)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
@@ -69,7 +71,7 @@ class ImageScatterChart(QWidget):
                 py = plot.bottom() - y_ratio * plot.height()
             else:
                 py = plot.top() + y_ratio * plot.height()
-            radius = 4 + min(8, int(point.defect_count))
+            radius = 4 + min(self._defect_radius_scale, int(point.defect_count))
             color = RESULT_COLORS.get(point.status, COLORS["text_3"])
             painter.setPen(QPen(QColor("#ffffff"), 1))
             painter.setBrush(QColor(color))

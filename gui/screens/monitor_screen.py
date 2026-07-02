@@ -287,6 +287,7 @@ class MonitorScreen(QWidget):
             x_label="tile x",
             y_label="tile y",
             empty_text="No cumulative tile points",
+            defect_radius_scale=0,
         )
         sequence_panel.add_widget(self.sequence_chart, 1)
         self.data_splitter.addWidget(sequence_panel)
