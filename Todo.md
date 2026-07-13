@@ -132,3 +132,9 @@
 - [ ] RTX 3090 有 24GB VRAM，可先從 16、32、64 個同尺寸 ROI 的 batch size 實測，再依影像大小自動調整。
 - [ ] 使用 FP16 AI 推論；傳統 threshold/mask 多使用 `uint8`，統計或模板分數視精度需求使用 FP16/FP32。
 - [ ] 監控 GPU 溫度、功耗與長時間批次穩定性；3090 長時間滿載時要確保散熱與電源供應充足。
+
+## Progress / Completed Items
+
+- [x] 2026-07-13 建立 `cuda_practice/`，包含 CUDA 裝置檢查、灰階、二值化、Gaussian Blur、形態學、模板比對及 ROI batch 的獨立 `.cu` 練習程式。
+- [x] 2026-07-13 加入 RTX 3090 `sm_86` 中文編譯說明與 `build_all.ps1`。
+- [ ] 安裝 CUDA Toolkit 與 CMake；目前系統 PATH 找不到 `nvcc` / `cmake`，待安裝後執行實機編譯驗證。
