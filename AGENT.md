@@ -19,8 +19,8 @@ Use the local virtual environment first:
 
 ## Working Rules
 
-- Read `todo.md` before starting implementation work.
-- Keep completed work marked in `todo.md`, preferably in the `Progress / Completed Items` section because the original TODO text has encoding issues.
+- Read the canonical `Todo.md` before starting implementation work; do not create separate CPU/GPU Todo files.
+- Keep completed work marked in the relevant `Todo.md` section and append a dated entry under `完成紀錄`.
 - Preserve existing user changes. Do not revert unrelated edits.
 - Keep generated validation files out of git. `.gitignore` already excludes temporary validation images and `outputs_validation/`.
 - Use focused changes that match the existing project structure.

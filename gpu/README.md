@@ -58,4 +58,4 @@ build script 明確使用 static CUDA runtime；`nvcuda.dll` 仍由 NVIDIA Drive
   -Recipe .\recipes\PRODUCT_A_AOI_01.yaml
 ```
 
-完整環境、五個 recipe、GUI、打包與壓力測試清單見 [`cuda-Todo.md`](../cuda-Todo.md)。
+完整 CPU/GPU roadmap、CUDA 環境、五個 recipe、GUI、打包與壓力測試清單統一見 [`Todo.md`](../Todo.md)。

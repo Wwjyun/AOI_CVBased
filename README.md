@@ -1087,7 +1087,7 @@ RTX 3090 (`sm_86`) 主機安裝 CUDA Toolkit 後可執行：
 .\gpu\build_cuda_dll.ps1
 ```
 
-Qt 的 QImage/QPixmap、overlay、文字與檔案輸出仍由 CPU 處理；GPU 顯示選項加速的是預覽影像的色彩轉換。功能進度見 `GPU-Todo.md`；另一台 CUDA 電腦的編譯與完整實機驗收步驟見 `cuda-Todo.md`。
+Qt 的 QImage/QPixmap、overlay、文字與檔案輸出仍由 CPU 處理；GPU 顯示選項加速的是預覽影像的色彩轉換。CPU/GPU 功能進度、CUDA 編譯與完整實機驗收步驟統一維護在 [`Todo.md`](Todo.md)。
 
 ```powershell
 cd C:\Users\王\Desktop\AOI_CVbased

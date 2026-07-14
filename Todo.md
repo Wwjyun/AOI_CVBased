@@ -1,150 +1,225 @@
-# AOI GPU 加速 TODO（RTX 3090 24GB）
+# VisionFlow AOI 統一開發清單
 
-## 目標與硬體條件
+本文件是專案唯一的工作清單，涵蓋 CPU、GPU、CUDA、Detector、GUI、打包、CI 與實機驗收。完成程式修改時必須同步更新對應 checkbox；不得再建立分散的 CPU/GPU Todo 文件。
 
-- CPU：Intel Core i7-7700（4 核心 / 8 執行緒）
-- GPU：NVIDIA GeForce RTX 3090（24GB VRAM）
-- 目標：把大量像素運算、模板比對與未來 AI 推論移至 GPU，降低單張檢測時間並提高批次吞吐量。
-- 原則：不是所有 OpenCV 操作搬到 GPU 都會更快。小圖、少量 ROI、輪廓迴圈、CSV/JSON 與磁碟存取仍適合 CPU；應讓影像一次上傳 GPU 後連續完成多個步驟，避免 CPU/GPU 反覆複製。
+## 開發原則
 
-## P0：先量測，避免盲目改寫
+- CPU 路徑是正確性基準，也是無 NVIDIA GPU、DLL 載入失敗、CUDA error 或顯存不足時的 fallback。
+- GPU 最佳化不得改變 recipe 語意、PASS/NG、座標與輸出格式；允許差異必須先定義容差並加入測試。
+- 不追求所有工作 GPU 化。YAML、彙總、少量 contour 幾何、GUI 控制、CSV/JSON、PNG 編碼與磁碟 I/O 預設留在 CPU。
+- Detector 不得各自建立一套 CUDA workflow。Detector 只宣告 backend-neutral `PreprocessPlan`，由 CPU/CUDA executor 執行共用 operators。
+- GPU 路徑應盡量一次 upload、連續執行多個 operators、最後只 download 必要 mask 或統計值。
+- 新功能必須保持 OOP 邊界、CPU-only 可啟動、舊 DLL 相容與完整 detector CPU fallback。
+- 只有 RTX 3090 實測通過數值等價、穩定性與端到端效能門檻的功能，才能預設啟用 GPU。
 
-- [ ] 在 `core/pipeline.py` 加入分段計時：讀圖、切圖、每個 detector、彙總、overlay、寫檔。
-- [ ] 記錄影像尺寸、tile/ROI 數量、各 detector 耗時、GPU 上傳與下載耗時、顯存峰值。
-- [ ] 建立固定測試集（小圖、大圖、少 ROI、多 ROI、PASS、NG），保存 CPU 基準值。
-- [ ] 設定驗收門檻：單張與批次至少快 1.5 倍，檢測結果、bbox、PASS/NG 必須與 CPU 版一致或在明確容差內。
-- [ ] 啟動時檢查 CUDA 是否可用；不可用或 GPU 記憶體不足時自動退回 CPU，不能讓產線中斷。
+## 目前狀態摘要
 
-## P1：最值得優先搬到 GPU 的部分
+- [x] CUDA DLL 已在 RTX 3090 編譯，並在另一台電腦確認可載入及顯示 CUDA active。
+- [x] 已確認 CUDA active 不代表整條 AOI pipeline 都在 GPU；首次跨機測試端到端沒有加速。
+- [x] 已有 CPU-only、缺 DLL fallback、GPU 呼叫統計及 detector 整體 CPU 重跑機制。
+- [x] Gaussian 已改 separable kernels；Adaptive Mean 已改 64-bit integral image。
+- [x] 已有 persistent context、grow-only buffers 與 401-2 fused preprocessing 原型。
+- [x] 已建立通用 `PreprocessPlan`、typed operators、CPU/CUDA executors，401-2 已完成第一階段遷移。
+- [ ] 目前開發機缺少可用的 `nvcc`/CMake，新增 CUDA 原始碼仍需在 RTX 3090 重新編譯與實測。
+- [ ] 尚未完成固定 production 測試集、五個 recipes 全流程等價、長時間壓測與可信的 CPU/GPU benchmark。
 
-### 1. Pattern Match / Search ROI 模板比對
+## P0：正確性、CPU 基準與觀測能力
 
-位置：`core/tiler.py` 的 `cv2.matchTemplate`。
+### Pipeline 與 profiler
 
-- [ ] 將全圖或大型 Search ROI 的模板比對改為 GPU 版本（OpenCV CUDA `cv2.cuda.createTemplateMatching`，或 CuPy/PyTorch 實作）。
-- [ ] 灰階轉換、縮放、模板比對、局部最大值篩選盡量留在 GPU，最後只下載座標與分數。
-- [ ] 模板圖片於 recipe 載入後常駐 GPU，不要每張圖重複上傳。
-- [ ] 多張圖使用同一尺寸時重用 GPU buffer，減少配置顯存的成本。
-- [ ] 保留 CPU `cv2.matchTemplate` 路徑，做結果一致性與效能比較。
+- [x] 記錄 recipe setup、image load、tiling、各 detector、aggregation、reporting 與 end-to-end host wall time。
+- [x] Reporter 分別記錄 overlay、NG tiles、CSV、matrix CSV 與 JSON 耗時。
+- [x] 記錄 DLL load、同步呼叫、lock wait、估算 H2D/D2H bytes、round trips 與各 primitive 呼叫統計。
+- [ ] 加入 GUI 顯示、QImage/QPixmap 轉換與使用者實際等待時間計時。
+- [ ] DLL 加入 CUDA event，拆分 context、allocation、H2D、kernel、synchronize、D2H 與 free。
+- [ ] 保存測試機 CPU、GPU、RAM、Driver、Toolkit、recipe、影像資訊與 commit hash，建立可重現 baseline。
+- [ ] 分開公布冷啟動、warm-up、純檢測與包含輸出的端到端數據。
+- [ ] benchmark 記錄平均、P50、P95、CPU/GPU utilization、VRAM、溫度與功耗。
 
-中文說明：模板比對會在搜尋區域的每個位置做大量重複計算，是目前最適合 RTX 3090 平行處理的傳統 CV 工作。搜尋區越大、模板越多，效益通常越明顯。
+### CPU 與 fallback 正確性
 
-### 2. 前處理：色彩轉換、模糊、二值化、形態學
+- [x] 缺少 DLL 時，CPU fallback 與純 CPU 的 PASS/NG、tiles、defects、bbox 與 metadata 完整一致。
+- [x] fused GPU 呼叫失敗時不採用部分結果，整個 detector 重新從 CPU preprocess 開始執行。
+- [ ] 建立固定 random seed 測例：BGR、gray、全黑、全白、棋盤格、邊界像素及真實 AOI 影像。
+- [ ] 覆蓋奇數尺寸、極小圖、4K、non-contiguous stride、1/3 channels 與不同 ROI 尺寸。
+- [ ] 五個 production recipes 各準備至少一張 PASS 與一張 NG 樣本。
+- [ ] 實機注入 kernel error、CUDA 初始化失敗與 OOM，確認 fallback 後無 stale pointer 或錯誤中間結果。
+- [ ] `fallback_to_cpu: false` 時必須明確失敗，不可回報假的 GPU success。
 
-位置：`core/tiler.py`、`detectors/detector_401.py`、`detector_401_1.py`、`detector_401_2.py`、`detector_900.py`。
+## P1：共用 Preprocess Plan 架構
 
-- [ ] 建立共用 `GpuImageContext`，讓原圖、灰階圖、模糊圖與 binary mask 在同一次檢測中共用。
-- [ ] 評估改用 GPU 的 `cvtColor`、`resize`、`GaussianBlur`、固定 threshold、dilate、erode、morphology。
-- [ ] 相同 tile 被多個 detector 使用時，只做一次灰階與常用前處理，不要每個 detector 重算。
-- [ ] Adaptive Threshold 若所用 OpenCV CUDA 版本沒有直接支援，評估以 CuPy/PyTorch kernel 實作；未達加速門檻則保留 CPU。
-- [ ] 把整張圖或一批 ROI 一次送入 GPU，避免逐個小 tile 上傳。
+### Python/OOP execution layer
 
-中文說明：這些是逐像素運算，GPU 很擅長；但單一小 ROI 的傳輸時間可能比運算時間更久。因此要採用「整圖上傳、連續運算、最後下載結果」或「多 ROI 批次處理」。
+- [x] 建立 immutable `PreprocessPlan`。
+- [x] 建立 typed operators：Gray、Resize、Gaussian、Threshold、AdaptiveMean、Morphology。
+- [x] 建立 `CpuPreprocessExecutor`，OpenCV 結果作為 fallback 與等價基準。
+- [x] 建立 `CudaPreprocessExecutor`，支援 stateless primitives 與既有 401-2 fused compatibility adapter。
+- [x] `BaseDetector.execute_preprocess_plan()` 統一選擇 executor。
+- [x] 401-2 改為宣告 Gray → Gaussian → AdaptiveMean，不再直接呼叫 CUDA export。
+- [x] CUDA 尚不能保持 `INTER_AREA` 語意時拒絕執行 Resize(area)，不可靜默改用 nearest-neighbor。
+- [ ] 將 plan 建立移出每次 tile 熱路徑，依 detector params 與 shape cache immutable plan。
+- [ ] 加入 operator/plan signature、輸入輸出型別、channel 與 shape validation。
+- [ ] 加入 capability report，清楚列出 plan 為何走 fused、primitive、CPU 或 fallback。
 
-### 3. 多 ROI / 多 Tile 批次處理
+### Generic native plan ABI
 
-位置：`core/pipeline.py` 目前逐 tile、逐 detector 的雙層迴圈。
+- [ ] 定義 versioned C structs：operator kind、input node、參數、output node；不得包含 detector ID/name。
+- [ ] 新增 optional `vf_plan_create/execute/destroy` exports；ABI v1 primitives 與 401-2 adapter 保持相容。
+- [ ] plan create 階段驗證 operators、channel、shape、參數與輸出；execute 階段只處理資料。
+- [ ] 將 Gray、Gaussian、AdaptiveMean、Threshold、Morphology 接入通用 native executor。
+- [ ] 通用 native plan 達成一次 H2D、連續 kernels、最後一次必要 D2H。
+- [ ] 加入 plan capability query；任一 operator 不支援時整份 plan CPU fallback，避免反覆 CPU/GPU 傳輸。
+- [ ] 實作與 OpenCV 等價的 `INTER_AREA` resize 後，才開放 CUDA Resize(area)。
+- [ ] 線性 plan 穩定後擴充 DAG/multi-output，支援一份 gray 產生多張 masks。
 
-- [ ] 將同尺寸 ROI 組成 batch，再交給 GPU detector 一次運算。
-- [ ] 重新設計 detector 介面，新增 `run_batch(images)`，CPU 版可保留預設逐張行為。
-- [ ] 以 CUDA stream 實作上傳、運算、下載重疊，減少 GPU 等待。
-- [ ] 根據 ROI 尺寸與 24GB VRAM 自動選 batch size，並保留安全顯存空間。
-- [ ] GUI 單張檢測優先低延遲；資料夾批次模式優先高吞吐量，兩者使用不同 batch 策略。
+## P2：CUDA kernels 與資源生命週期
 
-中文說明：i7-7700 核心數較少，而 3090 有大量平行運算單元。把數百個 ROI 一個一個處理，無法發揮 GPU；批次化通常比單純把某個函式換成 CUDA 更重要。
+### 已完成的核心 kernels
 
-## P2：可搬一部分，但要 CPU/GPU 混合
+- [x] Gaussian 使用 horizontal/vertical separable kernels 與 float 中間 buffer。
+- [x] Gaussian weights 使用 constant memory。
+- [x] Adaptive Mean 使用 replicate-border 64-bit integral image，視窗查詢為 O(1)。
+- [x] Integral image 使用 row scan、transpose、第二次 row scan，並檢查 allocation overflow。
+- [x] 驗證工具已加入 Gaussian、Adaptive Mean、401-2 fused 與 4K benchmark 案例。
+- [ ] Gaussian 加入 shared-memory tile/halo，實測 kernel 45 收益與限制。
+- [ ] CUDA event 分別量測 integral 建立、Gaussian passes 與 threshold kernel。
 
-### 4. Detector 401 / 401-1 / 401-2
+### Persistent context 與 buffers
 
-- [ ] 灰階、縮放、Gaussian Blur、二值化、morphology 放 GPU。
-- [ ] `findContours`、`contourArea`、`arcLength`、`minAreaRect`、`minEnclosingCircle` 暫留 CPU。
-- [ ] 僅下載 binary mask 或候選區域，不要下載所有中間影像。
-- [ ] Detector 401-2 的白像素比例改成 GPU reduction（CuPy/PyTorch sum/count），只回傳統計值。
+- [x] 保留 ABI v1 host-pointer primitives，使用 optional export probe 相容舊 DLL。
+- [x] 新增 `vf_context_create/destroy/stats`。
+- [x] context 擁有 grow-only uint8、float Gaussian 與 64-bit integral buffers。
+- [x] 相同或較小尺寸的 401-2 fused 呼叫不再重複 `cudaMalloc/cudaFree`。
+- [x] `GpuRuntime` 提供 `close()`、context manager、destructor 與 `RLock` 序列化。
+- [ ] 將 CUDA stream、morphology ping-pong 與所有 plan scratch 納入同一 context。
+- [ ] monitor/batch 跨多張影像重用同一個長生命週期 `GpuRuntime`/context。
+- [ ] 測試尺寸增減、channel 切換、參數改變、CUDA error/OOM 後的重用與釋放。
+- [ ] 評估 `cudaMallocAsync`/memory pool；只有相容且實測有收益時採用。
 
-中文說明：OpenCV 的輪廓追蹤與幾何物件處理多半仍以 CPU API 為主。最實際的做法是 GPU 產生乾淨 mask，再由 CPU 處理少量輪廓，而不是強行全部 GPU 化。
+### Morphology
 
-### 5. Detector 900
+- [ ] 量測 detector 401 多 iterations 的 morphology 占比。
+- [ ] 評估矩形 kernel 的 horizontal/vertical separable min/max filter。
+- [ ] 多 iterations 使用 device ping-pong buffers，中間不得回傳 CPU。
+- [ ] 小 kernel/少 iterations 建立 CPU/GPU crossover 規則。
 
-- [ ] 外層固定 threshold 與內層 adaptive threshold 優先 GPU 化。
-- [ ] 候選輪廓搜尋與外框/內框配對留在 CPU。
-- [ ] 若候選數量很大，先在 GPU 做 connected-components 或區域統計以縮小候選集合。
-- [ ] 檢查巢狀配對迴圈的候選數量；若 CPU 配對仍是瓶頸，再做空間索引或向量化，不必先寫 CUDA。
+## P3：Detector 遷移與 CPU/GPU 邊界
 
-### 6. Overlay 與預覽縮放
+- [ ] 401-1 遷移到共用 plan：Gray → Resize(area) → Gaussian → AdaptiveMean → Morphology。
+- [ ] 401 遷移到共用 plan，保留目前 threshold/morphology/contour 語意。
+- [x] 401-2 preprocessing 已遷移到共用 plan，並保留 fused/legacy/CPU 路徑。
+- [ ] 900 遷移成 DAG plan，共用 device gray 產生 outer global 與 inner adaptive masks。
+- [ ] 401/401-1/401-2 的 `findContours` 與少量幾何分析暫留 CPU，只下載 binary mask。
+- [ ] 401-2 contour mask 改為局部 bbox mask，避免每個 contour 配置整張 ROI mask。
+- [ ] 評估 401-2 white-pixel reduction 移至 GPU，只下載統計值與必要 mask。
+- [ ] 評估 connected components；只有 bbox/area/排序語意等價且 profiler 證明有收益時取代部分 contours。
+- [ ] 全部 detector 遷移並通過 RTX 3090 驗收後，才評估移除 detector-specific compatibility adapter。
 
-- [ ] 大圖預覽的 resize、色彩轉換可評估 GPU 化。
-- [ ] 大量矩形/圓形標註可評估 GPU 或先縮圖再畫；一般數量不多時維持 CPU。
-- [ ] PNG 編碼、CSV/JSON、matrix CSV 與檔案寫入維持 CPU。
+## P4：Tiling、ROI、Batch 與跨圖片重用
 
-中文說明：產生報表通常受磁碟與 PNG 壓縮影響，GPU 不一定有明顯幫助。只有超大圖縮放或大量圖形繪製經量測確定是瓶頸時才值得改。
+- [x] 偵測重複 GPU crop round trips，記錄傳輸量並輸出負優化警告。
+- [ ] production/benchmark 在 device tiling 改善前預設關閉 GPU crop。
+- [ ] 原圖一次 upload，以 device offset/view 表示 grid ROI，不再每 tile 上傳完整原圖。
+- [ ] detector 可直接消費 device ROI；只有 CPU contour、GUI、debug 或存檔時才下載。
+- [ ] 新增 batch ROI API，以座標陣列產生連續 device buffers。
+- [ ] 新增 `run_batch(images/rois)` 或等價 detector batch 介面；CPU 預設實作可逐張執行。
+- [ ] 依影像尺寸與可用 VRAM 自動選 batch size；RTX 3090 測試 8、16、32、64 ROI。
+- [ ] 單張 GUI 採低延遲策略；資料夾、monitor、batch 採高吞吐策略。
+- [ ] 使用 bounded 單一 GPU queue，避免多個 CPU workers 同時搶 GPU 或無限制累積 VRAM。
+- [ ] 評估 pinned host memory 與 CUDA streams，量測 upload/kernel/download 重疊收益。
 
-## P3：未來 AI Detector（3090 最大優勢）
+## P5：CPU 與整體 Pipeline 最佳化
 
-- [ ] 導入 YOLO、RT-DETR 或分類/分割模型時使用 PyTorch CUDA 或 ONNX Runtime CUDA。
-- [ ] 優先使用 FP16；完成精度驗證後再評估 TensorRT FP16/INT8。
-- [ ] 模型只載入一次並常駐 3090，不要每張圖重新建立 session。
-- [ ] 使用 batch inference、固定輸入尺寸與 pinned memory。
-- [ ] 建立 warm-up，計時時排除第一次 CUDA context 與模型初始化成本。
-- [ ] 監控顯存，避免 GUI、batch worker 各自載入一份大型模型造成 24GB 顯存浪費。
+- [ ] 分別量測 `findContours`、幾何分析、Python tile/detector 迴圈、progress callback、aggregation 與 reporter。
+- [ ] 降低 progress callback 頻率，避免每個小 primitive 更新 GUI。
+- [ ] 移除不必要的 `image.copy()`、`np.ascontiguousarray()` 與完整尺寸 temporary masks。
+- [ ] 相同 tile 被多個 detectors 使用時，共用 gray 與可重用的 CPU/GPU preprocessing 結果。
+- [ ] 對小圖、小 ROI、少 tiles 建立 CPU/GPU crossover benchmark；低於門檻自動選 CPU。
+- [ ] Overlay、NG tiles、CSV/JSON 與純檢測計時分離；必要時將檔案輸出移至背景工作。
+- [ ] Pattern matching 只有在 profiler 證明為主要熱點後才 GPU 化，模板常駐 GPU 並保留 CPU 等價路徑。
+- [ ] PNG 編碼、YAML、彙總、logging 與 GUI 控制邏輯維持 CPU，除非量測證明需要改變。
 
-中文說明：RTX 3090 對深度學習推論的提升通常遠高於傳統輪廓運算。若未來加入 AI detector，這應成為 GPU 架構的核心，而非只依賴 OpenCV CUDA。
+## P6：GUI、設定與部署
 
-## 不建議搬到 GPU 的部分
+- [x] Recipe 與 GUI 可設定 GPU，並顯示 DLL/device/fallback 狀態。
+- [ ] GPU mode 統一為清楚的 `auto`、`cpu`、`cuda` 語意，預設值需由實機驗收決定。
+- [ ] GUI worker 不得在 UI thread 等待 CUDA；取消、錯誤與進度更新必須保持可回應。
+- [ ] GUI 顯示實際 backend，不得因 recipe 勾選 GPU 就顯示 CUDA active。
+- [ ] PyInstaller 包含 `gpu/visionflow_cuda.dll`，但 CPU-only 電腦沒有 DLL/GPU 仍可正常啟動。
+- [ ] 有 GPU、無 GPU、DLL 缺少、DLL 版本不符、fallback 開/關各完成一次打包實機測試。
 
-- [ ] 保持 CPU：YAML recipe 讀取與驗證、PASS/NG 彙總、bbox 座標映射、JSON/CSV 組裝、檔案監控、GUI 控制邏輯、logging。
-- [ ] 保持 CPU：少量 contour 幾何計算與很小的 ROI；除非 profiling 證明它們是瓶頸。
-- [ ] 不要同時開太多 GPU batch worker；單張 3090 通常應由一個 GPU scheduler 統一排程。
+## P7：CI、GitHub Actions 與發布
 
-中文說明：這些工作資料量小、分支多或受 I/O 限制，移到 GPU 會增加複雜度，通常不會更快。
+- [ ] 一般 Windows runner 執行 unit tests、compileall、recipe/CLI/GUI smoke 與 CUDA headers/API 靜態檢查。
+- [ ] DLL 與 test EXE 使用明確 source manifest 分開編譯，不以 glob 無差別加入所有 `.cu`。
+- [ ] workflow 明確加入 `gpu/include/`，上傳 DLL、LIB、test EXE 與 build log artifacts。
+- [ ] CUDA runtime、CPU/GPU 等價、VRAM leak 與 benchmark 只在 GPU self-hosted runner 執行。
+- [ ] self-hosted runner 使用 `self-hosted`、`Windows`、`X64`、`gpu`、`rtx3090` labels。
+- [ ] 不允許不受信任的 fork PR 直接在可接觸本機資料的 self-hosted runner 執行。
+- [ ] GPU job 支援手動與 nightly；PR 至少完成 compile/static checks。
+- [ ] 保存 benchmark JSON、Nsight report、Driver/Toolkit/GPU 與 commit hash，支援 commit 間比較。
 
-## 建議技術路線
+## RTX 3090 編譯與實機驗收
 
-- [ ] 先確認 NVIDIA Driver 與 CUDA 相容性，記錄版本於診斷頁面。
-- [ ] 注意：目前 `requirements.txt` 的 `opencv-python` 官方套件通常不含 CUDA；若選 OpenCV CUDA，需要自行編譯含 CUDA 的 OpenCV，或改用可信且版本鎖定的 CUDA build。
-- [ ] 原型階段優先比較三條路：OpenCV CUDA、CuPy、PyTorch；以實測速度、部署難度及 PyInstaller 相容性決定。
-- [ ] 若未來以 AI 為主，優先採 PyTorch/ONNX Runtime/TensorRT；若以模板比對及 morphology 為主，再評估 OpenCV CUDA/CuPy。
-- [ ] GPU 功能使用 recipe 或設定開關：`auto`、`cpu`、`cuda`；預設 `auto`。
-- [ ] 將 CUDA 依賴設為可選套件，CPU 安裝仍須能正常啟動與執行。
+### 環境與編譯
 
-## 建議實作順序
+- [ ] `nvidia-smi` 可看到 GPU，並記錄 Driver、CUDA compatibility 與 VRAM。
+- [ ] 安裝 CUDA Toolkit、VS 2022 C++ Build Tools、Windows SDK；確認 `nvcc --version` 與 `where.exe cl`。
+- [ ] 使用 x64 Native Tools PowerShell 執行 `gpu/build_cuda_dll.ps1 -Architecture sm_86`。
+- [ ] 產生 `visionflow_cuda.dll`、`visionflow_cuda.lib` 與 `test_cuda_api.exe`，沒有 link/architecture 錯誤。
+- [ ] `test_cuda_api.exe` 驗證 ABI、device、compute capability、grayscale、context 與 fused smoke。
+- [ ] `dumpbin /exports` 檢查所有預期 `vf_` exports；`dumpbin /dependents` 無缺少依賴。
 
-- [ ] 第一階段：加入 profiler 與 CPU baseline，不改檢測結果。
-- [ ] 第二階段：完成 CUDA 可用性檢查、GPU context、CPU fallback 與診斷資訊。
-- [ ] 第三階段：先做 `matchTemplate` GPU 原型，這是最可能立即看見提升的項目。
-- [ ] 第四階段：整合共用 GPU 前處理與 ROI batch，改寫 `run_batch()`。
-- [ ] 第五階段：針對 401 系列與 900 detector 做 CPU/GPU 混合處理。
-- [ ] 第六階段：加入 AI detector 的 FP16 batch inference。
-- [ ] 第七階段：完成 GUI/CLI 設定、PyInstaller CUDA 打包、無 CUDA 電腦 fallback 測試。
+### Primitive、plan 與效能
 
-## 每個階段的驗收項目
+- [ ] BGR→RGB、crop、threshold、morphology 與 CPU 完全一致。
+- [ ] BGR→Gray、resize、Gaussian 與 Adaptive Mean 通過既定像素容差。
+- [ ] Gaussian 覆蓋 kernel 3/5/15/25/45 與 structured/non-contiguous inputs。
+- [ ] Adaptive Mean 覆蓋 block 3/11/35、正負與小數 C、invert 及邊界輸入。
+- [ ] 401-2 fused 與 CPU plan 結果在容差內；相同尺寸連續執行 allocation count 不增加。
+- [ ] 通用 native plan 完成後，逐 operator 與完整 plan 對 CPU executor 建立等價矩陣。
+- [ ] 記錄 4K primitives、preprocessing plan、純檢測與端到端 CPU/GPU speedup。
+- [ ] 連續執行三次完整驗證，沒有 CUDA error、崩潰或 VRAM 持續成長。
 
-- [ ] CPU 與 GPU 對相同測試集產生相同 tile 數、PASS/NG、缺陷數量與座標（允許事先定義的浮點/像素容差）。
-- [ ] 分別量測冷啟動、warm-up 後單張、10 張批次、100 張批次。
-- [ ] 測試 GPU 不可用、CUDA 初始化失敗、顯存不足時能自動退回 CPU。
-- [ ] 測試 GUI 仍保持回應，不在主執行緒等待 CUDA。
-- [ ] 記錄平均值、P95、最大顯存、CPU 使用率及 GPU 使用率。
-- [ ] 只有實測達到加速門檻的功能才正式取代 CPU 路徑，CPU 版持續作為 fallback 與正確性基準。
+### Production recipes、GUI、打包與壓測
 
-## 針對這台電腦的預設建議
+- [ ] `PRODUCT_A_AOI_01.yaml` PASS/NG 樣本一致。
+- [ ] `PRODUCT_A_CIRCLE_401_1_AOI_01.yaml` PASS/NG 樣本一致。
+- [ ] `PRODUCT_A_NEGATIVE_401_AOI_01.yaml` PASS/NG 樣本一致。
+- [ ] `PRODUCT_A_WHITE_RATIO_401_2_AOI_01.yaml` PASS/NG 樣本一致。
+- [ ] `PRODUCT_A_FRAME_900_AOI_01.yaml` PASS/NG 樣本一致。
+- [ ] 比較 tiles、PASS/NG、defect count、bbox、area、confidence、metadata 與 fallback log。
+- [ ] GUI 的 recipe 儲存/載入、viewer backend、status、overlay、輸出與 fallback 正確。
+- [ ] 打包版在有 NVIDIA GPU 與無 NVIDIA GPU 電腦均完成驗證。
+- [ ] warm-up 5 張後測 10、100、1000 張；VRAM 穩定、GUI 可回應、無 crash/error。
 
-- [ ] i7-7700 僅 4 核心，現有 batch worker 先維持 2～4 個；導入 GPU 後改為單一 GPU queue，不要讓 4 個 worker 無限制搶 GPU。
-- [ ] RTX 3090 有 24GB VRAM，可先從 16、32、64 個同尺寸 ROI 的 batch size 實測，再依影像大小自動調整。
-- [ ] 使用 FP16 AI 推論；傳統 threshold/mask 多使用 `uint8`，統計或模板分數視精度需求使用 FP16/FP32。
-- [ ] 監控 GPU 溫度、功耗與長時間批次穩定性；3090 長時間滿載時要確保散熱與電源供應充足。
+## 未來 AI Detector
 
-## Progress / Completed Items
+- [ ] 導入模型時比較 PyTorch CUDA、ONNX Runtime CUDA 與 TensorRT 的部署及效能。
+- [ ] 模型/session 只載入一次並常駐 GPU；支援 batch inference 與固定輸入尺寸。
+- [ ] 優先驗證 FP16；INT8 必須完成校正與精度驗收後才能啟用。
+- [ ] AI 與傳統 CV 共用 GPU scheduler、VRAM budget、warm-up、metrics 與 fallback policy。
+- [ ] 避免 GUI、monitor、batch worker 各自載入一份大型模型。
 
-- [x] 2026-07-13 建立 `cuda_practice/`，包含 CUDA 裝置檢查、灰階、二值化、Gaussian Blur、形態學、模板比對及 ROI batch 的獨立 `.cu` 練習程式。
-- [x] 2026-07-13 加入 RTX 3090 `sm_86` 中文編譯說明與 `build_all.ps1`。
-- [ ] 安裝 CUDA Toolkit 與 CMake；目前系統 PATH 找不到 `nvcc` / `cmake`，待安裝後執行實機編譯驗證。
-- [x] 2026-07-14 新增 `GPU-Todo.md`、recipe GPU 開關、每個 detector 的 GPU 開關、GUI GPU 狀態與安全 CPU fallback。
-- [x] 2026-07-14 新增可選 `gpu/visionflow_cuda.dll` C ABI、ctypes bridge、RTX 3090 `sm_86` build script，並整合 tiler、401/401-1/401-2/900 與 GUI 預覽。
-- [x] 在 RTX 3090 主機完成 CUDA DLL 編譯，並於另一台電腦確認 DLL 可載入且 CUDA 路徑已啟用。
-- [ ] 完成 CPU/GPU 數值比對、分階段 benchmark、效能優化與打包實機驗證；目前跨機測試尚未縮短端到端耗時。
-- [x] 2026-07-14 完成可攜式 CUDA 編譯套件：正式 `.cu`、公開 C ABI/error/internal headers、C++ smoke、Python primitive/全流程比對，以及獨立 `cuda-Todo.md`。
-- [x] 2026-07-14 依跨機 DLL 啟用但端到端未加速的實測結果，重整 `GPU-Todo.md`：納入 profiler、integral adaptive threshold、separable Gaussian、persistent buffers、fused detector pipeline、batch ROI、CPU/GPU 等價與效能驗收門檻。
-- [x] 2026-07-14 啟動 GPU M0 優化：新增 OOP pipeline/reporter profiler、ABI v1 CUDA 呼叫與估算傳輸統計、重複 GPU crop 警告、容差測試修正，以及 CPU-only/缺 DLL fallback 等價回歸。
-- [x] 2026-07-14 完成 GPU M1 原始碼：Gaussian 改 separable/constant weights，Adaptive Mean 改 64-bit integral image，擴充 structured CPU/GPU 測例與 4K kernel benchmark；待 RTX 3090 重編 DLL 實測。
-- [x] 2026-07-14 完成 GPU M2 第一階段：新增 optional persistent context ABI、grow-only device buffers/context stats、401-2 單次 upload fused preprocessing；保留舊 DLL stateless GPU 與無 GPU 純 CPU fallback。
-- [x] 2026-07-14 啟動通用 GPU preprocessing 長期架構：新增 immutable PreprocessPlan、typed operators、CPU/CUDA executors，並將 401-2 改為宣告共用 plan；既有 detector-specific fused export 降為相容 adapter，後續改走 generic native plan ABI。
+## 最終驗收門檻
+
+- [ ] CPU-only 是完整受支援模式，沒有 CUDA/NVIDIA GPU 仍可啟動 GUI、CLI、batch 與 monitor。
+- [ ] 五個 production recipes 通過 CPU/GPU 等價規則，沒有未解釋的 fallback。
+- [ ] 每個 GPU plan 原則上每張輸入最多一次 upload 與一次必要 download。
+- [ ] warm-up 後不再為每個 operator 重複 `cudaMalloc/cudaFree`。
+- [ ] 連續 1000 張後 VRAM 位於穩定平台，沒有資源洩漏或程序崩潰。
+- [ ] GPU 純檢測 median 與 P95 在目標資料集均優於 CPU；目標加速門檻為至少 1.5 倍。
+- [ ] 未達效能門檻的 recipe/operator 保持 CPU 或 GPU 預設關閉。
+- [ ] 加速不得犧牲 GUI 回應、打包啟動、結果追溯、錯誤訊息或 CPU fallback。
+
+## 完成紀錄
+
+- [x] 2026-07-13：建立 `cuda_practice/`、RTX 3090 `sm_86` 練習與編譯說明。
+- [x] 2026-07-14：加入 recipe/detector/GUI GPU 開關、CUDA 狀態與安全 CPU fallback。
+- [x] 2026-07-14：建立 CUDA DLL C ABI、ctypes bridge、build script、C++ smoke 與 Python 驗證工具。
+- [x] 2026-07-14：完成 M0 第一批 profiler、Reporter 分項計時、傳輸統計、crop 警告及容差修正。
+- [x] 2026-07-14：完成 CPU-only/缺 DLL fallback 等價回歸。
+- [x] 2026-07-14：完成 M1 原始碼：separable Gaussian、constant weights、64-bit integral Adaptive Mean 與 structured tests。
+- [x] 2026-07-14：完成 M2 第一個垂直切片：persistent context、grow-only buffers、context stats 與 401-2 fused preprocessing。
+- [x] 2026-07-14：建立通用 `PreprocessPlan`、typed operators、CPU/CUDA executors，並遷移 401-2。
+- [x] 2026-07-14：將 CPU、GPU、CUDA、GUI、CI、打包與 RTX 3090 驗收清單合併為唯一 `Todo.md`。
