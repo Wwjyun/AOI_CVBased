@@ -140,5 +140,7 @@
 - [ ] 安裝 CUDA Toolkit 與 CMake；目前系統 PATH 找不到 `nvcc` / `cmake`，待安裝後執行實機編譯驗證。
 - [x] 2026-07-14 新增 `GPU-Todo.md`、recipe GPU 開關、每個 detector 的 GPU 開關、GUI GPU 狀態與安全 CPU fallback。
 - [x] 2026-07-14 新增可選 `gpu/visionflow_cuda.dll` C ABI、ctypes bridge、RTX 3090 `sm_86` build script，並整合 tiler、401/401-1/401-2/900 與 GUI 預覽。
-- [ ] 在 RTX 3090 主機執行 `gpu/build_cuda_dll.ps1`，完成 CUDA DLL 編譯、CPU/GPU 數值比對、benchmark 與打包實機驗證。
+- [x] 在 RTX 3090 主機完成 CUDA DLL 編譯，並於另一台電腦確認 DLL 可載入且 CUDA 路徑已啟用。
+- [ ] 完成 CPU/GPU 數值比對、分階段 benchmark、效能優化與打包實機驗證；目前跨機測試尚未縮短端到端耗時。
 - [x] 2026-07-14 完成可攜式 CUDA 編譯套件：正式 `.cu`、公開 C ABI/error/internal headers、C++ smoke、Python primitive/全流程比對，以及獨立 `cuda-Todo.md`。
+- [x] 2026-07-14 依跨機 DLL 啟用但端到端未加速的實測結果，重整 `GPU-Todo.md`：納入 profiler、integral adaptive threshold、separable Gaussian、persistent buffers、fused detector pipeline、batch ROI、CPU/GPU 等價與效能驗收門檻。
