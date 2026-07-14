@@ -141,3 +141,4 @@
 - [x] 2026-07-14 新增 `GPU-Todo.md`、recipe GPU 開關、每個 detector 的 GPU 開關、GUI GPU 狀態與安全 CPU fallback。
 - [x] 2026-07-14 新增可選 `gpu/visionflow_cuda.dll` C ABI、ctypes bridge、RTX 3090 `sm_86` build script，並整合 tiler、401/401-1/401-2/900 與 GUI 預覽。
 - [ ] 在 RTX 3090 主機執行 `gpu/build_cuda_dll.ps1`，完成 CUDA DLL 編譯、CPU/GPU 數值比對、benchmark 與打包實機驗證。
+- [x] 2026-07-14 完成可攜式 CUDA 編譯套件：正式 `.cu`、公開 C ABI/error/internal headers、C++ smoke、Python primitive/全流程比對，以及獨立 `cuda-Todo.md`。

@@ -25,6 +25,7 @@
 - [x] DLL 提供 resize、Gaussian blur、global/adaptive threshold、morphology 等 detector 前處理 primitive。
 - [x] DLL 與 bridge 對輸入 dtype、channel、連續記憶體、尺寸及 stride 做防呆。
 - [x] 提供 RTX 3090 (`sm_86`) build script，並讓 PyInstaller 收入 DLL。
+- [x] 補齊公開 C ABI、錯誤碼、internal CUDA headers、ABI smoke `.cu` 與 CPU/GPU 數值/全流程驗證工具。
 
 ## 切小圖 / Tiler
 

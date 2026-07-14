@@ -16,6 +16,7 @@ class GpuRuntime:
     """Thread-safe ctypes bridge for the optional VisionFlow CUDA DLL."""
 
     DEFAULT_DLL = "gpu/visionflow_cuda.dll"
+    ABI_VERSION = 1
 
     def __init__(self, dll_path: str | Path = DEFAULT_DLL, fallback_to_cpu: bool = True, enabled: bool = True):
         self.requested_path = str(dll_path or self.DEFAULT_DLL)
@@ -136,6 +137,13 @@ class GpuRuntime:
             return
         try:
             dll = ctypes.CDLL(str(self.dll_path))
+            dll.vf_gpu_abi_version.restype = ctypes.c_int
+            abi_version = int(dll.vf_gpu_abi_version())
+            if abi_version != self.ABI_VERSION:
+                self.unavailable_reason = (
+                    f"CUDA DLL ABI mismatch: expected {self.ABI_VERSION}, got {abi_version}"
+                )
+                return
             dll.vf_gpu_device_count.restype = ctypes.c_int
             dll.vf_gpu_device_name.argtypes = [ctypes.c_char_p, ctypes.c_int]
             dll.vf_gpu_device_name.restype = ctypes.c_int
@@ -178,7 +186,20 @@ class GpuRuntime:
         with self._lock:
             result = int(function(*common, *extra))
         if result != 0:
-            raise GpuRuntimeError(f"{function_name} failed with CUDA DLL error {result}")
+            raise GpuRuntimeError(
+                f"{function_name} failed with CUDA DLL error {result}: {self._error_message(result)}"
+            )
+
+    def _error_message(self, error_code: int) -> str:
+        function = getattr(self._dll, "vf_gpu_error_message", None)
+        if function is None:
+            return "unknown error"
+        buffer = ctypes.create_string_buffer(512)
+        try:
+            function(int(error_code), buffer, len(buffer))
+            return buffer.value.decode("utf-8", errors="replace") or "unknown error"
+        except (OSError, ValueError):
+            return "unknown error"
 
     def fallback_or_raise(self, exc: Exception) -> None:
         self.last_error = str(exc)
