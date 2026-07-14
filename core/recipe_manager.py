@@ -59,6 +59,20 @@ class RecipeManager:
         if not isinstance(recipe["detectors"], dict) or not recipe["detectors"]:
             raise RecipeError("Recipe must define at least one detector.")
 
+        gpu = recipe.get("gpu", {})
+        if gpu is not None and not isinstance(gpu, dict):
+            raise RecipeError("Recipe gpu section must be a mapping.")
+        for key in ("tiling", "display", "fallback_to_cpu"):
+            if key in (gpu or {}) and not isinstance(gpu[key], bool):
+                raise RecipeError(f"Recipe gpu.{key} must be true or false.")
+        if "dll_path" in (gpu or {}) and not isinstance(gpu["dll_path"], str):
+            raise RecipeError("Recipe gpu.dll_path must be a string.")
+        for detector_id, config in recipe["detectors"].items():
+            if not isinstance(config, dict):
+                raise RecipeError(f"Recipe detector {detector_id} must be a mapping.")
+            if "use_gpu" in config and not isinstance(config["use_gpu"], bool):
+                raise RecipeError(f"Recipe detector {detector_id}.use_gpu must be true or false.")
+
     @staticmethod
     def enabled_detectors(recipe: dict[str, Any]) -> dict[str, Any]:
         detectors = recipe.get("detectors", {})

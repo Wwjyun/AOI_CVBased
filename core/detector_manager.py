@@ -17,13 +17,13 @@ class DetectorManager:
             Detector900.detector_id: Detector900,
         }
 
-    def create(self, detector_id: str, display_name: str | None = None, params: dict | None = None):
+    def create(self, detector_id: str, display_name: str | None = None, params: dict | None = None, use_gpu: bool = False, gpu_runtime=None):
         detector_cls = self._registry.get(str(detector_id))
         if detector_cls is None:
             raise KeyError(f"Detector is not registered: {detector_id}")
-        return detector_cls(display_name=display_name, params=params or {})
+        return detector_cls(display_name=display_name, params=params or {}, use_gpu=use_gpu, gpu_runtime=gpu_runtime)
 
-    def create_enabled(self, detector_configs: dict):
+    def create_enabled(self, detector_configs: dict, gpu_runtime=None):
         detectors = []
         for detector_id, config in detector_configs.items():
             detectors.append(
@@ -31,6 +31,8 @@ class DetectorManager:
                     detector_id=str(detector_id),
                     display_name=config.get("display_name"),
                     params=config.get("params", {}),
+                    use_gpu=bool(config.get("use_gpu", False)),
+                    gpu_runtime=gpu_runtime,
                 )
             )
         return detectors

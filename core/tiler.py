@@ -9,6 +9,15 @@ import numpy as np
 from core.image_loader import ImageLoader
 
 
+def _crop_image(image, x1: int, y1: int, x2: int, y2: int, gpu_runtime=None):
+    if gpu_runtime is not None and gpu_runtime.available and not gpu_runtime.last_error:
+        try:
+            return gpu_runtime.crop(image, x1, y1, x2 - x1, y2 - y1)
+        except Exception as exc:
+            gpu_runtime.fallback_or_raise(exc)
+    return image[y1:y2, x1:x2].copy()
+
+
 @dataclass(frozen=True)
 class Tile:
     tile_id: str
@@ -409,6 +418,7 @@ class Tiler:
         overlap_x: int = 0,
         overlap_y: int = 0,
         anchor_config: GridAnchorConfig | None = None,
+        gpu_runtime=None,
     ):
         if width <= 0 or height <= 0:
             raise ValueError("Tile width and height must be positive.")
@@ -423,9 +433,10 @@ class Tiler:
         self.step_y = height - overlap_y
         self.anchor_config = anchor_config
         self.image_loader = ImageLoader()
+        self.gpu_runtime = gpu_runtime
 
     @classmethod
-    def from_config(cls, config: dict) -> "Tiler":
+    def from_config(cls, config: dict, gpu_runtime=None) -> "Tiler":
         anchor_config = GridAnchorConfig.from_dict(config) if str(config.get("template_path", "")).strip() else None
         width = int(config.get("width", config.get("roi_w", 512)))
         height = int(config.get("height", config.get("roi_h", 512)))
@@ -435,6 +446,7 @@ class Tiler:
             overlap_x=int(config.get("overlap_x", 0)),
             overlap_y=int(config.get("overlap_y", 0)),
             anchor_config=anchor_config,
+            gpu_runtime=gpu_runtime,
         )
 
     def iter_tiles(self, image) -> Iterator[Tile]:
@@ -450,7 +462,7 @@ class Tiler:
             for col, x in enumerate(x_positions):
                 x2 = min(x + self.width, image_width)
                 y2 = min(y + self.height, image_height)
-                tile_image = image[y:y2, x:x2].copy()
+                tile_image = _crop_image(image, x, y, x2, y2, self.gpu_runtime)
                 yield Tile(
                     tile_id=f"r{row:04d}_c{col:04d}",
                     x=x,
@@ -489,7 +501,7 @@ class Tiler:
                 y2 = min(image_height, y + config.roi_h)
                 if x2 <= x1 or y2 <= y1:
                     continue
-                tile_image = image[y1:y2, x1:x2].copy()
+                tile_image = _crop_image(image, x1, y1, x2, y2, self.gpu_runtime)
                 yield Tile(
                     tile_id=f"r{row:04d}_c{col:04d}",
                     x=x1,
@@ -573,16 +585,18 @@ class Tiler:
 
 
 class ContourTiler:
-    def __init__(self, threshold: BinaryThresholdConfig, shapes: ShapeFilterConfig):
+    def __init__(self, threshold: BinaryThresholdConfig, shapes: ShapeFilterConfig, gpu_runtime=None):
         self.segmenter = BinarySegmenter(threshold)
         self.analyzer = ContourShapeAnalyzer(shapes)
         self.shape_config = shapes
+        self.gpu_runtime = gpu_runtime
 
     @classmethod
-    def from_config(cls, config: dict) -> "ContourTiler":
+    def from_config(cls, config: dict, gpu_runtime=None) -> "ContourTiler":
         return cls(
             threshold=BinaryThresholdConfig.from_dict(config.get("threshold")),
             shapes=ShapeFilterConfig.from_dict(config.get("shapes")),
+            gpu_runtime=gpu_runtime,
         )
 
     def iter_tiles(self, image) -> Iterator[Tile]:
@@ -606,7 +620,7 @@ class ContourTiler:
             if x2 <= x1 or y2 <= y1:
                 continue
 
-            tile_image = image[y1:y2, x1:x2].copy()
+            tile_image = _crop_image(image, x1, y1, x2, y2, self.gpu_runtime)
             shape = metadata["shape"]
             yield Tile(
                 tile_id=f"{shape}_{accepted_index:04d}",
@@ -627,13 +641,14 @@ class ContourTiler:
 
 
 class PatternMatchTiler:
-    def __init__(self, config: PatternMatchConfig):
+    def __init__(self, config: PatternMatchConfig, gpu_runtime=None):
         self.config = config
         self.matcher = PatternMatcher(config)
+        self.gpu_runtime = gpu_runtime
 
     @classmethod
-    def from_config(cls, config: dict) -> "PatternMatchTiler":
-        return cls(PatternMatchConfig.from_dict(config.get("pattern_match")))
+    def from_config(cls, config: dict, gpu_runtime=None) -> "PatternMatchTiler":
+        return cls(PatternMatchConfig.from_dict(config.get("pattern_match")), gpu_runtime=gpu_runtime)
 
     def iter_tiles(self, image) -> Iterator[Tile]:
         image_height, image_width = image.shape[:2]
@@ -651,7 +666,7 @@ class PatternMatchTiler:
             if x2 <= x1 or y2 <= y1:
                 continue
 
-            tile_image = image[y1:y2, x1:x2].copy()
+            tile_image = _crop_image(image, x1, y1, x2, y2, self.gpu_runtime)
             yield Tile(
                 tile_id=f"pm_{index:04d}",
                 x=x1,
@@ -671,12 +686,12 @@ class PatternMatchTiler:
             )
 
 
-def create_tiler(tile_config: dict):
+def create_tiler(tile_config: dict, gpu_runtime=None):
     mode = str(tile_config.get("mode", "grid")).lower()
     if mode == "grid":
-        return Tiler.from_config(tile_config)
+        return Tiler.from_config(tile_config, gpu_runtime=gpu_runtime)
     if mode == "contour":
-        return ContourTiler.from_config(tile_config)
+        return ContourTiler.from_config(tile_config, gpu_runtime=gpu_runtime)
     if mode == "pattern_match":
-        return PatternMatchTiler.from_config(tile_config)
+        return PatternMatchTiler.from_config(tile_config, gpu_runtime=gpu_runtime)
     raise ValueError(f"Unsupported tile mode: {mode}")

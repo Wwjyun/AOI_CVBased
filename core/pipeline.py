@@ -7,6 +7,7 @@ from typing import Callable
 from core.aggregator import Aggregator
 from core.detector_manager import DetectorManager
 from core.image_loader import load_image
+from core.gpu_runtime import GpuRuntime, GpuRuntimeError
 from core.logging_system import LogMixin
 from core.recipe_manager import RecipeManager
 from core.recipe_builder import RecipeTemplatePathSync
@@ -46,14 +47,35 @@ class AOIPipeline(LogMixin):
         if self.output_overrides:
             recipe["output"] = {**recipe.get("output", {}), **self.output_overrides}
         recipe = RecipeTemplatePathSync.from_recipe(recipe).apply(recipe)
+        gpu_config = recipe.get("gpu", {}) or {}
+        detector_configs = self.recipe_manager.enabled_detectors(recipe)
+        gpu_requested = bool(gpu_config.get("tiling", False)) or any(
+            bool(config.get("use_gpu", False)) for config in detector_configs.values()
+        )
+        gpu_runtime = GpuRuntime(
+            gpu_config.get("dll_path", GpuRuntime.DEFAULT_DLL),
+            fallback_to_cpu=gpu_config.get("fallback_to_cpu", True),
+            enabled=gpu_requested,
+        )
+        if gpu_requested and not gpu_runtime.available and not gpu_runtime.fallback_to_cpu:
+            raise GpuRuntimeError(gpu_runtime.unavailable_reason)
+        if gpu_requested and gpu_runtime.available:
+            self.logger.info(
+                "CUDA DLL active: path=%s device=%s capability=%s",
+                gpu_runtime.dll_path,
+                gpu_runtime.device_name,
+                gpu_runtime.compute_capability,
+            )
+        elif gpu_requested:
+            self.logger.warning("CUDA requested; falling back to CPU: %s", gpu_runtime.unavailable_reason)
         self.logger.info("Recipe loaded: name=%s version=%s", recipe.get("recipe_name"), recipe.get("version"))
         self._progress(5, "Recipe loaded")
         image = load_image(image_path)
         self.logger.info("Image loaded: image=%s shape=%s", image_path, getattr(image, "shape", None))
         self._progress(10, "Image loaded")
         tile_config = recipe["tile"]
-        tiler = create_tiler(tile_config)
-        detectors = self.detector_manager.create_enabled(self.recipe_manager.enabled_detectors(recipe))
+        tiler = create_tiler(tile_config, gpu_runtime=gpu_runtime if gpu_config.get("tiling", False) else None)
+        detectors = self.detector_manager.create_enabled(detector_configs, gpu_runtime=gpu_runtime)
         self.logger.info("Detectors initialized: count=%s ids=%s", len(detectors), [d.detector_id for d in detectors])
         self._progress(15, "Detectors initialized")
 
@@ -98,7 +120,17 @@ class AOIPipeline(LogMixin):
                 }
             )
 
-        self._progress(85, "Aggregating PASS / NG result")
+        detector_fallbacks = {
+            detector.detector_id: detector.gpu_fallback_reason
+            for detector in detectors
+            if detector.use_gpu and detector.gpu_fallback_reason
+        }
+        if detector_fallbacks:
+            self.logger.warning("Detector CUDA fallback: %s", detector_fallbacks)
+        fallback_message = " (CPU fallback)" if gpu_requested and (
+            not gpu_runtime.available or gpu_runtime.last_error or detector_fallbacks
+        ) else ""
+        self._progress(85, f"Aggregating PASS / NG result{fallback_message}")
         aggregate = Aggregator(recipe["decision"]).aggregate(tile_results)
         result = {
             "image_name": Path(image_path).name,
@@ -111,6 +143,21 @@ class AOIPipeline(LogMixin):
             "tiles": tile_results,
             "outputs": {},
             "duration_sec": round(time.perf_counter() - started, 3),
+            "execution": {
+                "gpu": {
+                    "tiling": gpu_runtime.status(bool(gpu_config.get("tiling", False))),
+                    "display_requested": bool(gpu_config.get("display", False)),
+                    "detectors": {
+                        detector.detector_id: {
+                            "requested": detector.use_gpu,
+                            "active": detector.gpu_active,
+                            "backend": "cuda_dll" if detector.gpu_active else "cpu",
+                            "fallback_reason": detector.gpu_fallback_reason,
+                        }
+                        for detector in detectors
+                    },
+                }
+            },
         }
 
         serializable_result = self._without_runtime_images(result)

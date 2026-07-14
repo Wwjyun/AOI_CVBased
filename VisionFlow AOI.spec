@@ -1,10 +1,13 @@
 # -*- mode: python ; coding: utf-8 -*-
+from pathlib import Path
 
+cuda_dll = Path('gpu/visionflow_cuda.dll')
+cuda_binaries = [(str(cuda_dll), 'gpu')] if cuda_dll.exists() else []
 
 a = Analysis(
     ['gui_launcher.py'],
     pathex=[],
-    binaries=[],
+    binaries=cuda_binaries,
     datas=[('recipes', 'recipes')],
     hiddenimports=[],
     hookspath=[],

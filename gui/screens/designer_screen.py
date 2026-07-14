@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.detector_manager import DetectorManager
+from core.gpu_runtime import GpuRuntime
 from core.recipe_builder import RecipeTemplatePathSync
 from gui import icons
 from gui.detector_labels import detector_zh_name
@@ -198,6 +199,7 @@ class DesignerScreen(QWidget):
         self.detector_definitions = DetectorManager().definitions()
         self._param_widgets: dict[str, dict[str, QWidget]] = {}
         self._enabled: dict[str, bool] = {detector_id: False for detector_id in self.detector_definitions}
+        self._gpu_enabled: dict[str, bool] = {detector_id: False for detector_id in self.detector_definitions}
         self._enabled["401-1"] = True
         self._row_widgets: dict[str, dict] = {}
         self._active_detector = "401-1"
@@ -224,6 +226,7 @@ class DesignerScreen(QWidget):
         left_layout.setSpacing(12)
 
         left_layout.addWidget(self._build_recipe_info_panel())
+        left_layout.addWidget(self._build_gpu_panel())
         left_layout.addWidget(self._build_tiling_panel())
         left_layout.addWidget(self._build_preview_panel())
         left_layout.addStretch(1)
@@ -260,6 +263,38 @@ class DesignerScreen(QWidget):
 
         panel.add_layout(form)
         return panel
+
+    def _build_gpu_panel(self) -> Panel:
+        panel = Panel(title="GPU / CUDA DLL")
+        form = _form_grid()
+        self.gpu_tiling_toggle = Toggle(checked=False)
+        self.gpu_display_toggle = Toggle(checked=False)
+        self.gpu_fallback_toggle = Toggle(checked=True)
+        self.gpu_dll_path_edit = QLineEdit(GpuRuntime.DEFAULT_DLL)
+        self.gpu_dll_path_edit.setProperty("mono", "true")
+        form.addRow(_label("切小圖使用 GPU"), self.gpu_tiling_toggle)
+        form.addRow(_label("GUI 預覽使用 GPU"), self.gpu_display_toggle)
+        form.addRow(_label("失敗回退 CPU"), self.gpu_fallback_toggle)
+        form.addRow(_label("CUDA DLL"), self.gpu_dll_path_edit)
+        panel.add_layout(form)
+        self.gpu_status_label = QLabel("")
+        self.gpu_status_label.setWordWrap(True)
+        self.gpu_status_label.setStyleSheet(f"color: {COLORS['text_3']}; font-size: 11px;")
+        panel.add_widget(self.gpu_status_label)
+        self.gpu_dll_path_edit.editingFinished.connect(self._refresh_gpu_status)
+        self.gpu_tiling_toggle.toggled.connect(lambda _checked: self._refresh_gpu_status())
+        self.gpu_display_toggle.toggled.connect(lambda _checked: self._refresh_gpu_status())
+        self._refresh_gpu_status()
+        return panel
+
+    def _refresh_gpu_status(self) -> None:
+        runtime = GpuRuntime(self.gpu_dll_path_edit.text().strip() or GpuRuntime.DEFAULT_DLL)
+        if runtime.available:
+            self.gpu_status_label.setText(f"CUDA DLL 可用 · {runtime.device_name}")
+            self.gpu_status_label.setStyleSheet(f"color: {COLORS['accent_text']}; font-size: 11px;")
+        else:
+            self.gpu_status_label.setText(f"目前使用 CPU · {runtime.unavailable_reason}")
+            self.gpu_status_label.setStyleSheet(f"color: {COLORS['text_3']}; font-size: 11px;")
 
     # ------------------------------------------------------------------
     # tiling
@@ -434,6 +469,12 @@ class DesignerScreen(QWidget):
         self.version_edit.setText(str(recipe.get("version", "")))
 
         self._set_tile_config(recipe.get("tile", {}), recipe.get("assets", {}))
+        gpu = recipe.get("gpu", {}) or {}
+        self.gpu_tiling_toggle.setChecked(bool(gpu.get("tiling", False)))
+        self.gpu_display_toggle.setChecked(bool(gpu.get("display", False)))
+        self.gpu_fallback_toggle.setChecked(bool(gpu.get("fallback_to_cpu", True)))
+        self.gpu_dll_path_edit.setText(str(gpu.get("dll_path", GpuRuntime.DEFAULT_DLL)))
+        self._refresh_gpu_status()
         self._set_detector_config(recipe.get("detectors", {}))
 
     def set_mode(self, mode: str) -> None:
@@ -492,6 +533,7 @@ class DesignerScreen(QWidget):
     def _set_detector_config(self, detectors: dict) -> None:
         for detector_id in self.detector_definitions:
             self._enabled[detector_id] = False
+            self._gpu_enabled[detector_id] = False
         self._param_widgets = {}
 
         for detector_id, config in detectors.items():
@@ -499,6 +541,7 @@ class DesignerScreen(QWidget):
             if detector_id not in self.detector_definitions:
                 continue
             self._enabled[detector_id] = bool(config.get("enabled", True))
+            self._gpu_enabled[detector_id] = bool(config.get("use_gpu", False))
             values = deepcopy(self.detector_definitions[detector_id]["default_params"])
             values.update(config.get("params", {}) or {})
             widgets = self._param_widgets.setdefault(detector_id, {})
@@ -512,6 +555,7 @@ class DesignerScreen(QWidget):
 
         for detector_id, widgets in self._row_widgets.items():
             widgets["toggle"].setChecked(self._enabled.get(detector_id, False))
+            widgets["gpu_toggle"].setChecked(self._gpu_enabled.get(detector_id, False))
 
         if self._active_detector not in self.detector_definitions:
             self._active_detector = next(iter(self.detector_definitions))
@@ -537,8 +581,13 @@ class DesignerScreen(QWidget):
         self.preview_label.set_rgb_bytes(image_bytes, width, height, bytes_per_line)
         score_text = ""
         best_score = shape_counts.get("best_score")
+        gpu_backend = shape_counts.get("gpu_backend", {})
+        if gpu_backend.get("active"):
+            score_text += " · CUDA DLL"
+        elif gpu_backend.get("requested"):
+            score_text += " · CPU fallback"
         if best_score is not None:
-            score_text = f"；最佳分數：{best_score:.4f}"
+            score_text += f"；最佳分數：{best_score:.4f}"
         self.preview_status.setText(f"匹配 {tile_count} 張小圖{score_text}")
         self.preview_status.setStyleSheet(f"color: {COLORS['accent_text']}; font-size: 9pt;")
 
@@ -627,6 +676,10 @@ class DesignerScreen(QWidget):
         toggle.toggled.connect(lambda checked, did=detector_id: self._on_detector_toggled(did, checked))
         row_layout.addWidget(toggle)
 
+        gpu_toggle = Toggle(checked=self._gpu_enabled.get(detector_id, False))
+        gpu_toggle.setToolTip("此 detector 使用 CUDA DLL")
+        gpu_toggle.toggled.connect(lambda checked, did=detector_id: self._on_detector_gpu_toggled(did, checked))
+
         text_col = QVBoxLayout()
         text_col.setSpacing(2)
 
@@ -646,9 +699,17 @@ class DesignerScreen(QWidget):
         text_col.addWidget(display_label)
 
         row_layout.addLayout(text_col, 1)
+        gpu_col = QVBoxLayout()
+        gpu_col.setSpacing(1)
+        gpu_label = QLabel("GPU")
+        gpu_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        gpu_label.setStyleSheet(f"color: {COLORS['text_3']}; font-size: 9px;")
+        gpu_col.addWidget(gpu_label)
+        gpu_col.addWidget(gpu_toggle)
+        row_layout.addLayout(gpu_col)
 
         row.mousePressEvent = lambda _event, did=detector_id: self._select_detector(did)
-        self._row_widgets[detector_id] = {"row": row, "toggle": toggle}
+        self._row_widgets[detector_id] = {"row": row, "toggle": toggle, "gpu_toggle": gpu_toggle}
         return row
 
     def _on_detector_toggled(self, detector_id: str, checked: bool) -> None:
@@ -657,6 +718,9 @@ class DesignerScreen(QWidget):
             self.active_badge.setText("啟用" if checked else "停用")
             self.active_badge.set_kind("accent" if checked else "neutral")
         self._refresh_enabled_count()
+
+    def _on_detector_gpu_toggled(self, detector_id: str, checked: bool) -> None:
+        self._gpu_enabled[detector_id] = checked
 
     def _select_detector(self, detector_id: str) -> None:
         self._active_detector = detector_id
@@ -792,6 +856,7 @@ class DesignerScreen(QWidget):
             definition = self.detector_definitions[detector_id]
             selected[detector_id] = {
                 "enabled": True,
+                "use_gpu": bool(self._gpu_enabled.get(detector_id, False)),
                 "display_name": definition["display_name"],
                 "params": self._params_for_detector(detector_id),
             }
@@ -813,6 +878,7 @@ class DesignerScreen(QWidget):
             "machine_id": self.machine_id_edit.text() or "AOI_01",
             "version": self.version_edit.text() or "0.1.0",
             "tile": self.build_tile_config(),
+            "gpu": self.build_gpu_config(),
             "decision": {
                 "mode": "all_detectors_must_pass",
                 "important_detectors": list(detectors),
@@ -829,13 +895,21 @@ class DesignerScreen(QWidget):
         }
         return RecipeTemplatePathSync(self._active_template_path()).apply(recipe)
 
+    def build_gpu_config(self) -> dict:
+        return {
+            "tiling": bool(self.gpu_tiling_toggle.isChecked()),
+            "display": bool(self.gpu_display_toggle.isChecked()),
+            "dll_path": self.gpu_dll_path_edit.text().strip() or GpuRuntime.DEFAULT_DLL,
+            "fallback_to_cpu": bool(self.gpu_fallback_toggle.isChecked()),
+        }
+
     def _active_template_path(self) -> str:
         if self.tile_mode.value() == "grid":
             return self.grid_template_path_edit.text().strip()
         return self.template_path_edit.text().strip()
 
     def _emit_preview(self) -> None:
-        self.preview_requested.emit(self.build_tile_config())
+        self.preview_requested.emit({"tile": self.build_tile_config(), "gpu": self.build_gpu_config()})
 
     def _save_recipe(self) -> None:
         if not any(self._enabled.values()):

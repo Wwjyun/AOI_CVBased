@@ -23,6 +23,8 @@ class Detector401_2(BaseDetector):
     }
 
     def preprocess(self, image):
+        if self.gpu_active and image.ndim == 3:
+            return self.gpu_runtime.bgr_to_gray(image)
         return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image.copy()
 
     def detect(self, image) -> list[dict]:
@@ -99,6 +101,16 @@ class Detector401_2(BaseDetector):
 
     def _make_binary(self, gray):
         blur_size = self._odd_at_least(int(self.params.get("blur_size", 25)), 3)
+        if self.gpu_active:
+            blurred = self.gpu_runtime.gaussian_blur(gray, blur_size)
+            block_size = self._odd_at_least(int(self.params.get("adaptive_block_size", 35)), 3)
+            return self.gpu_runtime.adaptive_threshold(
+                blurred,
+                block_size,
+                float(self.params.get("adaptive_c", -2.0)),
+                int(self.params.get("max_value", 255)),
+                True,
+            )
         blurred = cv2.GaussianBlur(gray, (blur_size, blur_size), 0)
         block_size = self._odd_at_least(int(self.params.get("adaptive_block_size", 35)), 3)
         return cv2.adaptiveThreshold(

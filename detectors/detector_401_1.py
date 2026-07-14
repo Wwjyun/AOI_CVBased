@@ -31,6 +31,8 @@ class Detector401_1(BaseDetector):
     }
 
     def preprocess(self, image):
+        if self.gpu_active and image.ndim == 3:
+            return self.gpu_runtime.bgr_to_gray(image)
         return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image.copy()
 
     def detect(self, image) -> list[dict]:
@@ -110,26 +112,32 @@ class Detector401_1(BaseDetector):
         work = gray
         if process_scale < 0.999:
             height, width = gray.shape[:2]
-            work = cv2.resize(
-                gray,
-                (max(1, int(width * process_scale)), max(1, int(height * process_scale))),
-                interpolation=cv2.INTER_AREA,
-            )
+            target_width = max(1, int(width * process_scale))
+            target_height = max(1, int(height * process_scale))
+            if self.gpu_active:
+                work = self.gpu_runtime.resize_gray(gray, target_width, target_height)
+            else:
+                work = cv2.resize(gray, (target_width, target_height), interpolation=cv2.INTER_AREA)
 
         blur_size = self._odd_at_least(int(self.params.get("blur_size", 45)), 3)
-        work = cv2.GaussianBlur(work, (blur_size, blur_size), 0)
+        work = self.gpu_runtime.gaussian_blur(work, blur_size) if self.gpu_active else cv2.GaussianBlur(work, (blur_size, blur_size), 0)
 
         threshold_type = cv2.THRESH_BINARY_INV if self.params.get("invert", False) else cv2.THRESH_BINARY
         block_size = self._odd_at_least(int(self.params.get("adaptive_block_size", 33)), 3)
         adaptive_c = float(self.params.get("adaptive_c", -2.0))
-        binary = cv2.adaptiveThreshold(
-            work,
-            int(self.params.get("max_value", 255)),
-            cv2.ADAPTIVE_THRESH_MEAN_C,
-            threshold_type,
-            block_size,
-            adaptive_c,
-        )
+        if self.gpu_active:
+            binary = self.gpu_runtime.adaptive_threshold(
+                work, block_size, adaptive_c, int(self.params.get("max_value", 255)), bool(self.params.get("invert", False))
+            )
+        else:
+            binary = cv2.adaptiveThreshold(
+                work,
+                int(self.params.get("max_value", 255)),
+                cv2.ADAPTIVE_THRESH_MEAN_C,
+                threshold_type,
+                block_size,
+                adaptive_c,
+            )
         return self._morph(binary), process_scale
 
     def _morph(self, binary):
@@ -140,6 +148,8 @@ class Detector401_1(BaseDetector):
             return binary
 
         kernel_size = self._odd_at_least(kernel_size, 3)
+        if self.gpu_active:
+            return self.gpu_runtime.morphology(binary, operation, kernel_size, iterations)
         kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, kernel_size))
         operations = {
             "open": cv2.MORPH_OPEN,

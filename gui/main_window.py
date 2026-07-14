@@ -583,7 +583,8 @@ class MainWindow(QMainWindow, LogMixin):
             self.topbar.image_chip.set_value("", loading=True)
         self.statusBar().showMessage(f"影像載入中：{path}")
         self._preview_thread = QThread(self)
-        self._preview_worker = ImagePreviewWorker(path)
+        gpu_config = (self.recipe or {}).get("gpu", {}) if self.recipe else {}
+        self._preview_worker = ImagePreviewWorker(path, gpu_config=gpu_config)
         self._preview_worker.moveToThread(self._preview_thread)
         self._preview_thread.started.connect(self._preview_worker.run)
         self._preview_worker.progress.connect(self._on_status_progress)
@@ -595,8 +596,9 @@ class MainWindow(QMainWindow, LogMixin):
         self._preview_thread.finished.connect(self._on_preview_thread_finished)
         self._preview_thread.start()
 
-    def _on_preview_loaded(self, path: Path, image) -> None:
+    def _on_preview_loaded(self, path: Path, image, backend_status: dict) -> None:
         self.run_screen.image_viewer.set_qimage(image, name=Path(path).name)
+        self.run_screen.image_viewer.set_backend_status(backend_status)
         if self.run_screen.image_viewer.last_error:
             QMessageBox.warning(self, "載入影像", self.run_screen.image_viewer.last_error)
             return
@@ -651,6 +653,8 @@ class MainWindow(QMainWindow, LogMixin):
         self.topbar.recipe_chip.set_value(path.name)
         self.run_screen.recipe_info_panel.set_recipe(recipe)
         self.designer_screen.set_recipe(recipe)
+        if self.image_path is not None and not (self._preview_thread and self._preview_thread.isRunning()):
+            self._start_preview_load(self.image_path, update_current_image=False)
         self.statusBar().showMessage(f"Recipe 已載入：{path}")
         self._update_run_ready()
         self._update_batch_ready()
@@ -738,6 +742,11 @@ class MainWindow(QMainWindow, LogMixin):
 
         final = result.get("final_result", "-")
         summary = result.get("summary", {})
+        gpu_execution = result.get("execution", {}).get("gpu", {})
+        gpu_items = [gpu_execution.get("tiling", {})] + list(gpu_execution.get("detectors", {}).values())
+        gpu_requested = any(item.get("requested") for item in gpu_items)
+        gpu_active = any(item.get("active") for item in gpu_items)
+        backend_text = " · CUDA DLL" if gpu_active else " · CPU fallback" if gpu_requested else " · CPU"
         self.history.insert(
             0,
             {
@@ -749,7 +758,7 @@ class MainWindow(QMainWindow, LogMixin):
         self.history = self.history[:HISTORY_LIMIT]
         self.run_screen.op_panel.set_history(self.history)
 
-        self.statusBar().showMessage(f"檢測完成：{final}")
+        self.statusBar().showMessage(f"檢測完成：{final}{backend_text}")
 
     def _on_inspection_failed(self, message: str) -> None:
         QMessageBox.critical(self, "執行檢測", message)
@@ -775,7 +784,7 @@ class MainWindow(QMainWindow, LogMixin):
     # ------------------------------------------------------------------
     # tile preview (Recipe designer)
     # ------------------------------------------------------------------
-    def _preview_contour_tiles(self, tile_config: dict) -> None:
+    def _preview_contour_tiles(self, preview_config: dict) -> None:
         if not self.image_path:
             QMessageBox.warning(self, "Recipe 設計", "請先載入影像再預覽切圖。")
             return
@@ -786,7 +795,9 @@ class MainWindow(QMainWindow, LogMixin):
         self.designer_screen.set_preview_running(True)
         self.statusBar().showMessage("切圖預覽中...")
         self._tile_preview_thread = QThread(self)
-        self._tile_preview_worker = TilePreviewWorker(self.image_path, tile_config)
+        tile_config = preview_config.get("tile", preview_config)
+        gpu_config = preview_config.get("gpu", {})
+        self._tile_preview_worker = TilePreviewWorker(self.image_path, tile_config, gpu_config=gpu_config)
         self._tile_preview_worker.moveToThread(self._tile_preview_thread)
         self._tile_preview_thread.started.connect(self._tile_preview_worker.run)
         self._tile_preview_worker.progress.connect(self._on_status_progress)

@@ -1062,6 +1062,33 @@ Recommended validation before release:
 
 ## Quick Start
 
+### Optional CUDA DLL
+
+Recipe Designer 可分別勾選切小圖 GPU、GUI 預覽 GPU，以及每一個 detector 的 GPU。設定會保存為：
+
+```yaml
+gpu:
+  tiling: false
+  display: false
+  dll_path: "gpu/visionflow_cuda.dll"
+  fallback_to_cpu: true
+
+detectors:
+  "401-1":
+    enabled: true
+    use_gpu: false
+```
+
+所有開關預設關閉。勾選後會透過額外的 CUDA DLL 執行；DLL 或 CUDA device 不可用時預設回退 CPU，實際 backend 與原因會寫入結果的 `execution.gpu`。
+
+RTX 3090 (`sm_86`) 主機安裝 CUDA Toolkit 後可執行：
+
+```powershell
+.\gpu\build_cuda_dll.ps1
+```
+
+Qt 的 QImage/QPixmap、overlay、文字與檔案輸出仍由 CPU 處理；GPU 顯示選項加速的是預覽影像的色彩轉換。完整進度與尚待 3090 實機驗證項目見 `GPU-Todo.md`。
+
 ```powershell
 cd C:\Users\王\Desktop\AOI_CVbased
 .\env\Scripts\python.exe -m pip install -r requirements.txt

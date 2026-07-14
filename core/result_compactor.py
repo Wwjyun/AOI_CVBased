@@ -11,10 +11,11 @@ TOP_LEVEL_KEYS = (
     "summary",
     "outputs",
     "duration_sec",
+    "execution",
 )
 
 TILE_KEYS = ("tile_id", "x", "y", "width", "height", "row", "col")
-DETECTOR_KEYS = ("detector_id", "pass", "score")
+DETECTOR_KEYS = ("detector_id", "pass", "score", "execution")
 DEFECT_KEYS = ("type", "bbox_global", "bbox_local", "area", "confidence")
 
 

@@ -102,6 +102,18 @@ class Detector401(BaseDetector):
 
     def _make_binary(self, image):
         blur_size = self._odd_at_least(int(self.params.get("blur_size", 15)), 3)
+        if self.gpu_active:
+            blurred = self.gpu_runtime.gaussian_blur(image, blur_size)
+            morphed = self._morph_gpu(blurred)
+            gray = self.gpu_runtime.bgr_to_gray(morphed) if morphed.ndim == 3 else morphed
+            block_size = self._odd_at_least(int(self.params.get("adaptive_block_size", 29)), 3)
+            return self.gpu_runtime.adaptive_threshold(
+                gray,
+                block_size,
+                float(self.params.get("adaptive_c", 5)),
+                int(self.params.get("max_value", 255)),
+                bool(self.params.get("binary_inv", True)),
+            )
         blurred = cv2.GaussianBlur(image, (blur_size, blur_size), 0)
         morphed = self._morph(blurred)
         gray = cv2.cvtColor(morphed, cv2.COLOR_BGR2GRAY) if morphed.ndim == 3 else morphed
@@ -115,6 +127,14 @@ class Detector401(BaseDetector):
             block_size,
             float(self.params.get("adaptive_c", 5)),
         )
+
+    def _morph_gpu(self, image):
+        operation = str(self.params.get("morph_operation", "open")).lower()
+        iterations = int(self.params.get("morph_iterations", 10))
+        kernel_size = int(self.params.get("morph_kernel", 5))
+        if operation in {"none", ""} or iterations <= 0 or kernel_size <= 1:
+            return image
+        return self.gpu_runtime.morphology(image, operation, self._odd_at_least(kernel_size, 3), iterations)
 
     def _morph(self, image):
         operation = str(self.params.get("morph_operation", "open")).lower()

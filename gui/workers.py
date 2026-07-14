@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 
 from core.image_loader import ImageLoader
+from core.gpu_runtime import GpuRuntime, GpuRuntimeError
 from core.batch_processor import BatchInspectionProcessor
 from core.logging_system import LogMixin
 from core.monitor_processor import FolderMonitorProcessor
@@ -17,22 +18,40 @@ from core.tiler import create_tiler
 
 
 class ImagePreviewWorker(QObject, LogMixin):
-    loaded = Signal(Path, object)
+    loaded = Signal(Path, object, object)
     failed = Signal(Path, str)
     progress = Signal(int, str)
 
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, gpu_config: dict | None = None):
         super().__init__()
         self.path = Path(path)
         self.image_loader = ImageLoader()
+        self.gpu_config = dict(gpu_config or {})
 
     @Slot()
     def run(self) -> None:
         try:
             self.logger.info("Preview load started: image=%s", self.path)
             self.progress.emit(0, "Loading image")
-            image = self.image_loader.load_rgb(self.path)
+            bgr = self.image_loader.load_bgr(self.path)
             self.progress.emit(60, "Converting preview")
+            requested = bool(self.gpu_config.get("display", False))
+            runtime = GpuRuntime(
+                self.gpu_config.get("dll_path", GpuRuntime.DEFAULT_DLL),
+                fallback_to_cpu=self.gpu_config.get("fallback_to_cpu", True),
+                enabled=requested,
+            )
+            if requested and not runtime.available and not runtime.fallback_to_cpu:
+                raise GpuRuntimeError(runtime.unavailable_reason)
+            if requested and runtime.available:
+                try:
+                    image = runtime.bgr_to_rgb(bgr)
+                except Exception as exc:
+                    runtime.fallback_or_raise(exc)
+                    image = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            else:
+                image = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+            backend_status = runtime.status(requested)
             height, width, channels = image.shape
             qimage = QImage(
                 image.data,
@@ -48,7 +67,7 @@ class ImagePreviewWorker(QObject, LogMixin):
 
         self.progress.emit(100, "Preview ready")
         self.logger.info("Preview load completed: image=%s size=%sx%s", self.path, width, height)
-        self.loaded.emit(self.path, qimage)
+        self.loaded.emit(self.path, qimage, backend_status)
 
 
 class InspectionWorker(QObject, LogMixin):
@@ -180,10 +199,11 @@ class TilePreviewWorker(QObject, LogMixin):
     progress = Signal(int, str)
     MAX_PREVIEW_SIDE = 2200
 
-    def __init__(self, image_path: Path, tile_config: dict):
+    def __init__(self, image_path: Path, tile_config: dict, gpu_config: dict | None = None):
         super().__init__()
         self.image_path = Path(image_path)
         self.tile_config = dict(tile_config)
+        self.gpu_config = dict(gpu_config or {})
         self.image_loader = ImageLoader()
 
     @Slot()
@@ -193,7 +213,15 @@ class TilePreviewWorker(QObject, LogMixin):
             self.progress.emit(0, "Loading image for tile preview")
             image = self.image_loader.load_bgr(self.image_path)
             self.progress.emit(20, "Creating tiler")
-            tiler = create_tiler(self.tile_config)
+            requested = bool(self.gpu_config.get("tiling", False))
+            runtime = GpuRuntime(
+                self.gpu_config.get("dll_path", GpuRuntime.DEFAULT_DLL),
+                fallback_to_cpu=self.gpu_config.get("fallback_to_cpu", True),
+                enabled=requested,
+            )
+            if requested and not runtime.available and not runtime.fallback_to_cpu:
+                raise GpuRuntimeError(runtime.unavailable_reason)
+            tiler = create_tiler(self.tile_config, gpu_runtime=runtime if requested else None)
             tiles = list(tiler.iter_tiles(image))
             self.progress.emit(60, f"Drawing {len(tiles)} preview tiles")
             preview = self._draw_tiles(image, tiles)
@@ -215,6 +243,7 @@ class TilePreviewWorker(QObject, LogMixin):
                     score = float(metadata["score"])
                     best_score = score if best_score is None else max(best_score, score)
             shape_counts["best_score"] = best_score
+            shape_counts["gpu_backend"] = runtime.status(requested)
         except Exception as exc:
             self.logger.exception("Tile preview failed: image=%s", self.image_path)
             self.failed.emit(str(exc))

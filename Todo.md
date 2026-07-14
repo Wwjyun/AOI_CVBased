@@ -138,3 +138,6 @@
 - [x] 2026-07-13 建立 `cuda_practice/`，包含 CUDA 裝置檢查、灰階、二值化、Gaussian Blur、形態學、模板比對及 ROI batch 的獨立 `.cu` 練習程式。
 - [x] 2026-07-13 加入 RTX 3090 `sm_86` 中文編譯說明與 `build_all.ps1`。
 - [ ] 安裝 CUDA Toolkit 與 CMake；目前系統 PATH 找不到 `nvcc` / `cmake`，待安裝後執行實機編譯驗證。
+- [x] 2026-07-14 新增 `GPU-Todo.md`、recipe GPU 開關、每個 detector 的 GPU 開關、GUI GPU 狀態與安全 CPU fallback。
+- [x] 2026-07-14 新增可選 `gpu/visionflow_cuda.dll` C ABI、ctypes bridge、RTX 3090 `sm_86` build script，並整合 tiler、401/401-1/401-2/900 與 GUI 預覽。
+- [ ] 在 RTX 3090 主機執行 `gpu/build_cuda_dll.ps1`，完成 CUDA DLL 編譯、CPU/GPU 數值比對、benchmark 與打包實機驗證。

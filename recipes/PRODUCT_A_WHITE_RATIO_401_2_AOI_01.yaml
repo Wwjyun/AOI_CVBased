@@ -3,6 +3,12 @@ product_id: "PRODUCT_A"
 machine_id: "AOI_01"
 version: "0.1.0"
 
+gpu:
+  tiling: false
+  display: false
+  dll_path: "gpu/visionflow_cuda.dll"
+  fallback_to_cpu: true
+
 tile:
   mode: "grid"
   width: 512
@@ -19,6 +25,7 @@ decision:
 detectors:
   "401-2":
     enabled: true
+    use_gpu: false
     display_name: "401-2 adaptive white ratio detector"
     params:
       max_value: 255

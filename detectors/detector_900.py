@@ -32,6 +32,8 @@ class Detector900(BaseDetector):
     }
 
     def preprocess(self, image):
+        if self.gpu_active and image.ndim == 3:
+            return self.gpu_runtime.bgr_to_gray(image)
         return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image.copy()
 
     def detect(self, image) -> list[dict]:
@@ -147,6 +149,13 @@ class Detector900(BaseDetector):
         return gray[inset : height - inset, inset : width - inset], inset, inset
 
     def _make_outer_binary(self, gray):
+        if self.gpu_active:
+            return self.gpu_runtime.threshold(
+                gray,
+                int(self.params.get("outer_threshold", 160)),
+                int(self.params.get("max_value", 255)),
+                bool(self.params.get("outer_invert", False)),
+            )
         threshold_type = cv2.THRESH_BINARY_INV if self.params.get("outer_invert", False) else cv2.THRESH_BINARY
         _, binary = cv2.threshold(
             gray,
@@ -158,6 +167,14 @@ class Detector900(BaseDetector):
 
     def _make_inner_binary(self, gray):
         block_size = self._odd_at_least(int(self.params.get("inner_adaptive_block_size", 11)), 3)
+        if self.gpu_active:
+            return self.gpu_runtime.adaptive_threshold(
+                gray,
+                block_size,
+                float(self.params.get("inner_adaptive_c", 0.0)),
+                int(self.params.get("max_value", 255)),
+                bool(self.params.get("inner_invert", False)),
+            )
         threshold_type = cv2.THRESH_BINARY_INV if self.params.get("inner_invert", False) else cv2.THRESH_BINARY
         return cv2.adaptiveThreshold(
             gray,

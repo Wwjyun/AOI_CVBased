@@ -261,12 +261,16 @@ class ImageViewer(QWidget):
         self.zoom_label = QLabel("zoom 0%")
         self.zoom_label.setProperty("mono", "true")
         self.zoom_label.setStyleSheet(mono_style)
+        self.backend_label = QLabel("顯示: CPU")
+        self.backend_label.setProperty("mono", "true")
+        self.backend_label.setStyleSheet(mono_style)
         self.cursor_label = QLabel("x —  y —")
         self.cursor_label.setProperty("mono", "true")
         self.cursor_label.setStyleSheet(mono_style)
 
         status_layout.addWidget(self.size_label)
         status_layout.addWidget(self.zoom_label)
+        status_layout.addWidget(self.backend_label)
         status_layout.addStretch(1)
         status_layout.addWidget(self.cursor_label)
 
@@ -301,6 +305,16 @@ class ImageViewer(QWidget):
         self._image_name = name
         if not self.pixmap_item.pixmap().isNull():
             self.name_label.setText(name)
+
+    def set_backend_status(self, status: dict) -> None:
+        if status.get("active"):
+            text = f"顯示: CUDA DLL · {status.get('device_name', '')}".rstrip(" ·")
+        elif status.get("requested"):
+            text = "顯示: CPU fallback"
+        else:
+            text = "顯示: CPU"
+        self.backend_label.setText(text)
+        self.backend_label.setToolTip(str(status.get("fallback_reason", "")))
 
     def clear(self) -> None:
         self.pixmap_item.setPixmap(QPixmap())
