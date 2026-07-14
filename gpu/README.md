@@ -2,6 +2,8 @@
 
 `visionflow_cuda.dll` 是 AOI 的可選 CUDA backend。Recipe 未勾選 GPU 時不載入它；勾選但 DLL/裝置不可用時，依 `fallback_to_cpu` 決定回退 CPU 或明確失敗。
 
+目前 Gaussian blur 使用 horizontal/vertical separable kernels 與 constant weights；Adaptive Mean Threshold 使用 replicate-border 64-bit integral image。公開 C ABI 維持 v1，因此 Python bridge 與既有打包版介面不需修改，但更新原始碼後必須重新編譯 DLL。
+
 ## 檔案
 
 ```text
@@ -34,7 +36,7 @@ build script 明確使用 static CUDA runtime；`nvcuda.dll` 仍由 NVIDIA Drive
 
 ## 編譯並測試
 
-只測 ABI、所有 primitive 與 4K grayscale benchmark：
+測試 ABI、structured primitive matrix，以及 4K grayscale、Gaussian k45、Adaptive Mean b35 的 CPU/GPU benchmark：
 
 ```powershell
 .\gpu\build_cuda_dll.ps1 -RunTests

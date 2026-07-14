@@ -86,18 +86,63 @@ def validate_primitives(runtime: GpuRuntime) -> list[dict]:
         )
     )
     metrics.append(compare("global_threshold", runtime.threshold(gray, 128, 255, False), binary))
-    expected_adaptive = cv2.adaptiveThreshold(
-        gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 11, 2.0
-    )
+    structured_gray = {
+        "random_odd": rng.integers(0, 256, size=(65, 97), dtype=np.uint8),
+        "black": np.zeros((63, 79), dtype=np.uint8),
+        "white": np.full((63, 79), 255, dtype=np.uint8),
+        "checker": ((np.indices((63, 79)).sum(axis=0) % 2) * 255).astype(np.uint8),
+        "non_contiguous": gray[:, ::2],
+    }
+    for case_name, case in structured_gray.items():
+        for kernel_size in (3, 5, 15, 25, 45):
+            expected_gaussian = cv2.GaussianBlur(case, (kernel_size, kernel_size), 0)
+            metrics.append(
+                compare(
+                    f"gaussian_{case_name}_k{kernel_size}",
+                    runtime.gaussian_blur(case, kernel_size),
+                    expected_gaussian,
+                    max_diff=2,
+                    mismatch_ratio=0.001,
+                )
+            )
+    expected_gaussian_bgr = cv2.GaussianBlur(bgr, (15, 15), 0)
     metrics.append(
         compare(
-            "adaptive_mean",
-            runtime.adaptive_threshold(gray, 11, 2.0, 255, False),
-            expected_adaptive,
-            max_diff=0,
-            mismatch_ratio=0.02,
+            "gaussian_bgr_k15",
+            runtime.gaussian_blur(bgr, 15),
+            expected_gaussian_bgr,
+            max_diff=2,
+            mismatch_ratio=0.001,
         )
     )
+    adaptive_cases = (
+        ("random_binary_b3_c2", structured_gray["random_odd"], 3, 2.0, False),
+        ("random_binary_b11_cneg2", structured_gray["random_odd"], 11, -2.0, False),
+        ("random_inverse_b35_c24", structured_gray["random_odd"], 35, 2.4, True),
+        ("black_binary_b11", structured_gray["black"], 11, 2.0, False),
+        ("white_inverse_b11", structured_gray["white"], 11, 2.0, True),
+        ("checker_binary_b35", structured_gray["checker"], 35, -2.0, False),
+        ("non_contiguous_inverse_b11", structured_gray["non_contiguous"], 11, -2.0, True),
+    )
+    for case_name, case, block_size, adaptive_c, invert in adaptive_cases:
+        threshold_type = cv2.THRESH_BINARY_INV if invert else cv2.THRESH_BINARY
+        expected_adaptive = cv2.adaptiveThreshold(
+            case,
+            255,
+            cv2.ADAPTIVE_THRESH_MEAN_C,
+            threshold_type,
+            block_size,
+            adaptive_c,
+        )
+        metrics.append(
+            compare(
+                f"adaptive_{case_name}",
+                runtime.adaptive_threshold(case, block_size, adaptive_c, 255, invert),
+                expected_adaptive,
+                max_diff=0,
+                mismatch_ratio=0.02,
+            )
+        )
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     for operation, cv_operation in (
         ("open", cv2.MORPH_OPEN),
@@ -116,20 +161,47 @@ def validate_primitives(runtime: GpuRuntime) -> list[dict]:
     return metrics
 
 
+def _average_ms(operation, repetitions: int) -> float:
+    started = time.perf_counter()
+    for _ in range(repetitions):
+        operation()
+    return (time.perf_counter() - started) * 1000.0 / repetitions
+
+
 def benchmark(runtime: GpuRuntime, repetitions: int) -> dict:
     if repetitions <= 0:
         return {}
     image = np.random.default_rng(7).integers(0, 256, size=(2160, 3840, 3), dtype=np.uint8)
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
     runtime.bgr_to_gray(image)
-    started = time.perf_counter()
-    for _ in range(repetitions):
-        runtime.bgr_to_gray(image)
-    elapsed = time.perf_counter() - started
+    runtime.gaussian_blur(gray, 45)
+    runtime.adaptive_threshold(gray, 35, -2.0, 255, False)
+    operations = (
+        ("bgr_to_gray_4k", lambda: cv2.cvtColor(image, cv2.COLOR_BGR2GRAY), lambda: runtime.bgr_to_gray(image)),
+        ("gaussian_gray_4k_k45", lambda: cv2.GaussianBlur(gray, (45, 45), 0), lambda: runtime.gaussian_blur(gray, 45)),
+        (
+            "adaptive_mean_gray_4k_b35",
+            lambda: cv2.adaptiveThreshold(gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 35, -2.0),
+            lambda: runtime.adaptive_threshold(gray, 35, -2.0, 255, False),
+        ),
+    )
+    measurements = []
+    for name, cpu_operation, gpu_operation in operations:
+        cpu_ms = _average_ms(cpu_operation, repetitions)
+        gpu_ms = _average_ms(gpu_operation, repetitions)
+        measurements.append(
+            {
+                "operation": name,
+                "cpu_average_ms": round(cpu_ms, 3),
+                "gpu_average_ms_including_transfer": round(gpu_ms, 3),
+                "speedup": round(cpu_ms / gpu_ms, 3) if gpu_ms > 0 else None,
+            }
+        )
     result = {
-        "operation": "bgr_to_gray_4k_including_transfer",
         "repetitions": repetitions,
-        "total_sec": round(elapsed, 4),
-        "average_ms": round(elapsed * 1000.0 / repetitions, 3),
+        "image_shape": list(image.shape),
+        "measurements": measurements,
+        "gpu_host_metrics": runtime.performance_stats(),
     }
     print(f"BENCHMARK {result}")
     return result

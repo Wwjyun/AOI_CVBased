@@ -2,6 +2,7 @@
 #include "visionflow_cuda.h"
 #include "visionflow_cuda_internal.cuh"
 #include <algorithm>
+#include <climits>
 #include <cmath>
 #include <cstring>
 #include <vector>
@@ -9,6 +10,12 @@
 namespace {
 constexpr int BLOCK_X = 16;
 constexpr int BLOCK_Y = 16;
+constexpr int SCAN_THREADS = 256;
+constexpr int TRANSPOSE_TILE = 32;
+constexpr int TRANSPOSE_ROWS = 8;
+constexpr int MAX_GAUSSIAN_KERNEL = 127;
+
+__constant__ float gaussian_weights[MAX_GAUSSIAN_KERNEL];
 
 int cuda_result(cudaError_t error) { return visionflow_cuda::runtime_error(error); }
 
@@ -91,17 +98,44 @@ __global__ void resize_gray_kernel(const uint8_t* src, uint8_t* dst, int sw, int
     dst[y * dw + x] = static_cast<uint8_t>(value + 0.5f);
 }
 
-__global__ void gaussian_kernel(const uint8_t* src, uint8_t* dst, int width, int height, int channels, const float* weights, int radius) {
+__global__ void gaussian_horizontal_kernel(
+    const uint8_t* src,
+    float* intermediate,
+    int width,
+    int height,
+    int channels,
+    int radius) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
     if (x >= width || y >= height) return;
     for (int c = 0; c < channels; ++c) {
         float sum = 0.0f;
-        for (int ky = -radius; ky <= radius; ++ky) for (int kx = -radius; kx <= radius; ++kx) {
-            int sx = reflect101(x + kx, width), sy = reflect101(y + ky, height);
-            sum += src[(sy * width + sx) * channels + c] * weights[ky + radius] * weights[kx + radius];
+        for (int kx = -radius; kx <= radius; ++kx) {
+            int sx = reflect101(x + kx, width);
+            sum += src[(y * width + sx) * channels + c] * gaussian_weights[kx + radius];
         }
-        dst[(y * width + x) * channels + c] = static_cast<uint8_t>(fminf(255.0f, fmaxf(0.0f, sum + 0.5f)));
+        intermediate[(y * width + x) * channels + c] = sum;
+    }
+}
+
+__global__ void gaussian_vertical_kernel(
+    const float* intermediate,
+    uint8_t* dst,
+    int width,
+    int height,
+    int channels,
+    int radius) {
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x >= width || y >= height) return;
+    for (int c = 0; c < channels; ++c) {
+        float sum = 0.0f;
+        for (int ky = -radius; ky <= radius; ++ky) {
+            int sy = reflect101(y + ky, height);
+            sum += intermediate[(sy * width + x) * channels + c] * gaussian_weights[ky + radius];
+        }
+        dst[(y * width + x) * channels + c] =
+            static_cast<uint8_t>(fminf(255.0f, fmaxf(0.0f, sum + 0.5f)));
     }
 }
 
@@ -112,18 +146,152 @@ __global__ void threshold_kernel(const uint8_t* src, uint8_t* dst, int count, in
     dst[i] = static_cast<uint8_t>((invert ? !high : high) ? max_value : 0);
 }
 
-__global__ void adaptive_kernel(const uint8_t* src, uint8_t* dst, int width, int height, int radius, float c, int max_value, int invert) {
+__global__ void replicate_border_kernel(
+    const uint8_t* src,
+    uint8_t* padded,
+    int width,
+    int height,
+    int padded_width,
+    int padded_height,
+    int radius) {
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    if (x >= padded_width || y >= padded_height) return;
+    int source_x = max(0, min(width - 1, x - radius));
+    int source_y = max(0, min(height - 1, y - radius));
+    padded[y * padded_width + x] = src[source_y * width + source_x];
+}
+
+__global__ void row_prefix_u8_kernel(
+    const uint8_t* src,
+    unsigned long long* prefix,
+    int width,
+    int height) {
+    int row = blockIdx.x;
+    int lane = threadIdx.x;
+    if (row >= height) return;
+    __shared__ unsigned long long scan[SCAN_THREADS];
+    __shared__ unsigned long long carry;
+    __shared__ unsigned long long chunk_carry;
+    if (lane == 0) carry = 0;
+    __syncthreads();
+    for (int base = 0; base < width; base += SCAN_THREADS) {
+        int column = base + lane;
+        scan[lane] = column < width ? static_cast<unsigned long long>(src[row * width + column]) : 0ULL;
+        __syncthreads();
+        for (int offset = 1; offset < SCAN_THREADS; offset <<= 1) {
+            unsigned long long add = lane >= offset ? scan[lane - offset] : 0ULL;
+            __syncthreads();
+            scan[lane] += add;
+            __syncthreads();
+        }
+        if (lane == 0) chunk_carry = carry;
+        __syncthreads();
+        if (column < width) prefix[row * width + column] = scan[lane] + chunk_carry;
+        __syncthreads();
+        int valid = min(SCAN_THREADS, width - base);
+        if (lane == 0) carry = chunk_carry + scan[valid - 1];
+        __syncthreads();
+    }
+}
+
+__global__ void transpose_u64_kernel(
+    const unsigned long long* src,
+    unsigned long long* dst,
+    int width,
+    int height) {
+    __shared__ unsigned long long tile[TRANSPOSE_TILE][TRANSPOSE_TILE + 1];
+    int x = blockIdx.x * TRANSPOSE_TILE + threadIdx.x;
+    int y = blockIdx.y * TRANSPOSE_TILE + threadIdx.y;
+    for (int offset = 0; offset < TRANSPOSE_TILE; offset += TRANSPOSE_ROWS) {
+        if (x < width && y + offset < height) {
+            tile[threadIdx.y + offset][threadIdx.x] = src[(y + offset) * width + x];
+        }
+    }
+    __syncthreads();
+    x = blockIdx.y * TRANSPOSE_TILE + threadIdx.x;
+    y = blockIdx.x * TRANSPOSE_TILE + threadIdx.y;
+    for (int offset = 0; offset < TRANSPOSE_TILE; offset += TRANSPOSE_ROWS) {
+        if (x < height && y + offset < width) {
+            dst[(y + offset) * height + x] = tile[threadIdx.x][threadIdx.y + offset];
+        }
+    }
+}
+
+__global__ void row_prefix_u64_inplace_kernel(
+    unsigned long long* values,
+    int width,
+    int height) {
+    int row = blockIdx.x;
+    int lane = threadIdx.x;
+    if (row >= height) return;
+    __shared__ unsigned long long scan[SCAN_THREADS];
+    __shared__ unsigned long long carry;
+    __shared__ unsigned long long chunk_carry;
+    if (lane == 0) carry = 0;
+    __syncthreads();
+    for (int base = 0; base < width; base += SCAN_THREADS) {
+        int column = base + lane;
+        scan[lane] = column < width ? values[row * width + column] : 0ULL;
+        __syncthreads();
+        for (int offset = 1; offset < SCAN_THREADS; offset <<= 1) {
+            unsigned long long add = lane >= offset ? scan[lane - offset] : 0ULL;
+            __syncthreads();
+            scan[lane] += add;
+            __syncthreads();
+        }
+        if (lane == 0) chunk_carry = carry;
+        __syncthreads();
+        if (column < width) values[row * width + column] = scan[lane] + chunk_carry;
+        __syncthreads();
+        int valid = min(SCAN_THREADS, width - base);
+        if (lane == 0) carry = chunk_carry + scan[valid - 1];
+        __syncthreads();
+    }
+}
+
+__device__ unsigned long long integral_value_transposed(
+    const unsigned long long* integral_transposed,
+    int padded_height,
+    int x,
+    int y) {
+    if (x < 0 || y < 0) return 0ULL;
+    return integral_transposed[x * padded_height + y];
+}
+
+__global__ void adaptive_integral_kernel(
+    const uint8_t* src,
+    const unsigned long long* integral_transposed,
+    uint8_t* dst,
+    int width,
+    int height,
+    int padded_height,
+    int block_size,
+    float c,
+    int max_value,
+    int invert) {
     int x = blockIdx.x * blockDim.x + threadIdx.x;
     int y = blockIdx.y * blockDim.y + threadIdx.y;
     if (x >= width || y >= height) return;
-    unsigned int sum = 0;
-    for (int ky = -radius; ky <= radius; ++ky) for (int kx = -radius; kx <= radius; ++kx) {
-        int sx = max(0, min(width - 1, x + kx)), sy = max(0, min(height - 1, y + ky));
-        sum += src[sy * width + sx];
-    }
-    float mean = static_cast<float>(sum) / ((radius * 2 + 1) * (radius * 2 + 1));
-    bool high = src[y * width + x] > mean - c;
-    dst[y * width + x] = static_cast<uint8_t>((invert ? !high : high) ? max_value : 0);
+    int x0 = x;
+    int y0 = y;
+    int x1 = x + block_size - 1;
+    int y1 = y + block_size - 1;
+    unsigned long long bottom_right =
+        integral_value_transposed(integral_transposed, padded_height, x1, y1);
+    unsigned long long above =
+        integral_value_transposed(integral_transposed, padded_height, x1, y0 - 1);
+    unsigned long long left =
+        integral_value_transposed(integral_transposed, padded_height, x0 - 1, y1);
+    unsigned long long above_left =
+        integral_value_transposed(integral_transposed, padded_height, x0 - 1, y0 - 1);
+    unsigned long long sum = (bottom_right + above_left) - (above + left);
+    unsigned long long area = static_cast<unsigned long long>(block_size) * block_size;
+    int mean = static_cast<int>((sum + area / 2ULL) / area);
+    bool selected = invert
+        ? static_cast<int>(src[y * width + x]) <= mean - static_cast<int>(floorf(c))
+        : static_cast<int>(src[y * width + x]) > mean - static_cast<int>(ceilf(c));
+    dst[y * width + x] = static_cast<uint8_t>(selected ? max_value : 0);
 }
 
 __global__ void morph_kernel(const uint8_t* src, uint8_t* dst, int width, int height, int channels, int radius, int dilate) {
@@ -245,12 +413,21 @@ VF_CUDA_API int vf_resize_gray_u8(const uint8_t* src,int w,int h,int stride,int 
 }
 
 VF_CUDA_API int vf_gaussian_blur_u8(const uint8_t* src,int w,int h,int stride,int sc,uint8_t* dst,int dstride,int dc,int kernel) {
-    if (sc != dc || (sc != 1 && sc != 3) || kernel < 3 || kernel % 2 == 0) return VF_CUDA_INVALID_ARGUMENT;
+    if (sc != dc || (sc != 1 && sc != 3) || kernel < 3 || kernel % 2 == 0 || kernel > MAX_GAUSSIAN_KERNEL) {
+        return VF_CUDA_INVALID_ARGUMENT;
+    }
     uint8_t *ds = nullptr, *dd = nullptr;
+    float* intermediate = nullptr;
     int result = alloc_copy(src, w, h, stride, sc, &ds);
     if (result != VF_CUDA_OK) return result;
     result = visionflow_cuda::allocate_bytes(&dd, static_cast<size_t>(w) * h * sc);
     if (result != VF_CUDA_OK) { visionflow_cuda::free_device(ds); return result; }
+    cudaError_t error = cudaMalloc(&intermediate, static_cast<size_t>(w) * h * sc * sizeof(float));
+    if (error != cudaSuccess) {
+        visionflow_cuda::free_device(dd);
+        visionflow_cuda::free_device(ds);
+        return cuda_result(error);
+    }
 
     double sigma = 0.3 * ((kernel - 1) * 0.5 - 1) + 0.8;
     std::vector<float> weights(kernel);
@@ -262,20 +439,17 @@ VF_CUDA_API int vf_gaussian_blur_u8(const uint8_t* src,int w,int h,int stride,in
     }
     for (float& value : weights) value /= total;
 
-    float* dweights = nullptr;
-    cudaError_t error = cudaMalloc(&dweights, static_cast<size_t>(kernel) * sizeof(float));
-    if (error == cudaSuccess) {
-        error = cudaMemcpy(dweights, weights.data(), static_cast<size_t>(kernel) * sizeof(float), cudaMemcpyHostToDevice);
-    }
+    error = cudaMemcpyToSymbol(gaussian_weights, weights.data(), static_cast<size_t>(kernel) * sizeof(float));
     if (error != cudaSuccess) {
-        visionflow_cuda::free_device(dweights);
+        visionflow_cuda::free_device(intermediate);
         visionflow_cuda::free_device(dd);
         visionflow_cuda::free_device(ds);
         return cuda_result(error);
     }
-    gaussian_kernel<<<grid2d(w, h), dim3(BLOCK_X, BLOCK_Y)>>>(ds, dd, w, h, sc, dweights, radius);
+    gaussian_horizontal_kernel<<<grid2d(w, h), dim3(BLOCK_X, BLOCK_Y)>>>(ds, intermediate, w, h, sc, radius);
+    gaussian_vertical_kernel<<<grid2d(w, h), dim3(BLOCK_X, BLOCK_Y)>>>(intermediate, dd, w, h, sc, radius);
     result = visionflow_cuda::kernel_result();
-    visionflow_cuda::free_device(dweights);
+    visionflow_cuda::free_device(intermediate);
     if (result == VF_CUDA_OK) result = copy_back_free(dst, dstride, w, h, sc, dd);
     else visionflow_cuda::free_device(dd);
     visionflow_cuda::free_device(ds);
@@ -299,14 +473,60 @@ VF_CUDA_API int vf_threshold_u8(const uint8_t* src,int w,int h,int stride,int sc
 }
 
 VF_CUDA_API int vf_adaptive_mean_u8(const uint8_t* src,int w,int h,int stride,int sc,uint8_t* dst,int dstride,int dc,int block,float c,int max_value,int invert) {
-    if (sc != 1 || dc != 1 || block < 3 || block % 2 == 0 || max_value < 0 || max_value > 255) return VF_CUDA_INVALID_ARGUMENT;
+    if (w <= 0 || h <= 0 || sc != 1 || dc != 1 || block < 3 || block % 2 == 0 ||
+        max_value < 0 || max_value > 255 || !std::isfinite(c)) {
+        return VF_CUDA_INVALID_ARGUMENT;
+    }
+    int radius = block / 2;
+    if (radius > (INT_MAX - w) / 2 || radius > (INT_MAX - h) / 2) return VF_CUDA_INVALID_ARGUMENT;
+    int padded_width = w + radius * 2;
+    int padded_height = h + radius * 2;
+    if (static_cast<size_t>(padded_width) > SIZE_MAX / static_cast<size_t>(padded_height)) {
+        return VF_CUDA_INVALID_ARGUMENT;
+    }
+    size_t padded_count = static_cast<size_t>(padded_width) * static_cast<size_t>(padded_height);
+    if (padded_count > SIZE_MAX / sizeof(unsigned long long)) return VF_CUDA_INVALID_ARGUMENT;
     uint8_t *ds = nullptr, *dd = nullptr;
+    uint8_t* padded = nullptr;
+    unsigned long long* row_prefix = nullptr;
+    unsigned long long* integral_transposed = nullptr;
     int result = alloc_copy(src, w, h, stride, 1, &ds);
     if (result != VF_CUDA_OK) return result;
     result = visionflow_cuda::allocate_bytes(&dd, static_cast<size_t>(w) * h);
     if (result != VF_CUDA_OK) { visionflow_cuda::free_device(ds); return result; }
-    adaptive_kernel<<<grid2d(w, h), dim3(BLOCK_X, BLOCK_Y)>>>(ds, dd, w, h, block / 2, c, max_value, invert);
+    result = visionflow_cuda::allocate_bytes(&padded, padded_count);
+    if (result != VF_CUDA_OK) {
+        visionflow_cuda::free_device(dd);
+        visionflow_cuda::free_device(ds);
+        return result;
+    }
+    cudaError_t error = cudaMalloc(&row_prefix, padded_count * sizeof(unsigned long long));
+    if (error == cudaSuccess) error = cudaMalloc(&integral_transposed, padded_count * sizeof(unsigned long long));
+    if (error != cudaSuccess) {
+        visionflow_cuda::free_device(integral_transposed);
+        visionflow_cuda::free_device(row_prefix);
+        visionflow_cuda::free_device(padded);
+        visionflow_cuda::free_device(dd);
+        visionflow_cuda::free_device(ds);
+        return cuda_result(error);
+    }
+    replicate_border_kernel<<<grid2d(padded_width, padded_height), dim3(BLOCK_X, BLOCK_Y)>>>(
+        ds, padded, w, h, padded_width, padded_height, radius);
+    row_prefix_u8_kernel<<<padded_height, SCAN_THREADS>>>(padded, row_prefix, padded_width, padded_height);
+    dim3 transpose_block(TRANSPOSE_TILE, TRANSPOSE_ROWS);
+    dim3 transpose_grid(
+        (padded_width + TRANSPOSE_TILE - 1) / TRANSPOSE_TILE,
+        (padded_height + TRANSPOSE_TILE - 1) / TRANSPOSE_TILE);
+    transpose_u64_kernel<<<transpose_grid, transpose_block>>>(
+        row_prefix, integral_transposed, padded_width, padded_height);
+    row_prefix_u64_inplace_kernel<<<padded_width, SCAN_THREADS>>>(
+        integral_transposed, padded_height, padded_width);
+    adaptive_integral_kernel<<<grid2d(w, h), dim3(BLOCK_X, BLOCK_Y)>>>(
+        ds, integral_transposed, dd, w, h, padded_height, block, c, max_value, invert);
     result = visionflow_cuda::kernel_result();
+    visionflow_cuda::free_device(integral_transposed);
+    visionflow_cuda::free_device(row_prefix);
+    visionflow_cuda::free_device(padded);
     if (result == VF_CUDA_OK) result = copy_back_free(dst, dstride, w, h, 1, dd);
     else visionflow_cuda::free_device(dd);
     visionflow_cuda::free_device(ds);

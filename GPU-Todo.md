@@ -37,8 +37,8 @@
 
 - [ ] 建立固定 random seed 的灰階、BGR、全黑、全白、棋盤格、單像素邊界及真實 AOI 測試影像。
 - [ ] 覆蓋奇數尺寸、非連續 stride、1/3 channel、極小圖、4K 圖及不同 ROI 尺寸。
-- [ ] Gaussian 覆蓋 kernel 3、5、15、25、45，驗證 OpenCV `BORDER_DEFAULT/REFLECT_101` 邊界與量化行為。
-- [ ] Adaptive threshold 覆蓋不同 block size、正負 C、invert、邊界像素與大尺寸影像。
+- [x] GPU 驗證工具加入 Gaussian kernel 3、5、15、25、45，以及 random/black/white/checker/non-contiguous/BGR 測例；待 RTX 3090 執行確認。
+- [x] GPU 驗證工具加入 Adaptive threshold block 3、11、35、正負/小數 C、invert、邊界與 non-contiguous 測例；待 RTX 3090 執行確認。
 - [ ] Morphology 覆蓋 open、close、dilate、erode、不同 kernel 與多 iterations。
 - [ ] 五個 production recipes 各準備 PASS/NG 樣本，檢查 tile、PASS/NG、defect count、bbox、area、confidence 與 metadata。
 - [x] 新增缺少 DLL 時 CPU fallback 與純 CPU 完整結果一致的自動回歸測試。
@@ -48,19 +48,19 @@
 
 ### Adaptive mean threshold 改 integral image
 
-- [ ] 將目前每 pixel 掃描 `block_size²` 的 adaptive kernel 改成 integral image，讓每個視窗查詢為 O(1)。
-- [ ] 實作 row scan 與 column scan，評估 CUB/自有 scan kernel 的編譯依賴與效能。
-- [ ] 正確重現 OpenCV 邊界延伸行為，不可直接縮小影像邊緣的統計視窗。
-- [ ] 依最大影像尺寸選擇安全的 integral 累加型別，避免 `width * height * 255` 溢位。
+- [x] 將目前每 pixel 掃描 `block_size²` 的 adaptive kernel 改成 integral image，讓每個視窗查詢為 O(1)。
+- [x] 實作不依賴第三方 library 的 block row scan、transpose 與第二次 row scan，建立二維 integral image。
+- [x] 使用 replicate padded border，並以 CPU 模擬確認 block 3/11/35、正負/小數 C、binary/invert 與 OpenCV 結果完全一致。
+- [x] Integral 累加使用 64-bit unsigned 型別，並檢查 padded dimensions 與 allocation size overflow。
 - [ ] 重複使用 integral scratch buffer，不可每次呼叫重新配置。
 - [ ] 用 CUDA event 分別記錄 integral 建立與 threshold kernel 耗時。
 
 ### Gaussian 改 separable kernel
 
-- [ ] 將目前 `kernel_size²` 的二維卷積拆成 horizontal 與 vertical 兩個一維 kernel。
-- [ ] 使用 float 中間 buffer，避免 horizontal pass 提前量化成 `uint8` 擴大 CPU/GPU 差異。
+- [x] 將目前 `kernel_size²` 的二維卷積拆成 horizontal 與 vertical 兩個一維 kernel。
+- [x] 使用 float 中間 buffer，避免 horizontal pass 提前量化成 `uint8` 擴大 CPU/GPU 差異。
 - [ ] 使用 shared memory tile 與 halo，減少重複 global memory load。
-- [ ] Gaussian weights 改成 constant memory 或依 kernel size 快取，避免每次 malloc/copy/free weights。
+- [x] Gaussian weights 改成 constant memory，移除每次呼叫的 device weights malloc/free。
 - [ ] 驗證 kernel 45 等大型 filter 的效能與 shared memory 上限。
 
 ### Morphology
@@ -162,3 +162,5 @@
 
 - [x] 2026-07-14 完成 M0 第一批觀測能力：OOP `PipelineProfiler`、ABI v1 host-side CUDA metrics、GPU crop 負優化警告、Reporter 分項計時及容差判斷修正。
 - [x] 2026-07-14 新增 CPU-only 與缺少 GPU/DLL fallback 等價回歸；確認 PASS/NG、tiles、defects 與 metadata 不因觀測層改變。
+- [x] 2026-07-14 完成 M1 CUDA 原始碼：separable Gaussian、constant weights、64-bit integral adaptive threshold、replicate border 與擴充驗證矩陣；公開 C ABI 與 CPU fallback 保持不變。
+- [ ] 在 RTX 3090 重新編譯 M1 DLL，執行新增 primitive matrix、4K CPU/GPU benchmark 與五個 recipe 全流程等價測試後，才能將 M1 標示完成。

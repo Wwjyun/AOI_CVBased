@@ -53,6 +53,8 @@
 
 ## 5. Primitive 數值與效能測試
 
+M1 已將 Gaussian 改為 separable kernels、Adaptive Mean 改為 64-bit integral image；執行本節前必須用目前 commit 重新編譯 DLL，不可沿用舊 DLL。
+
 ```powershell
 .\env\Scripts\python.exe .\gpu\validate_cuda_dll.py `
   --dll .\gpu\visionflow_cuda.dll `
@@ -68,6 +70,7 @@
 - [ ] Adaptive mean threshold mismatch ratio 不超過 2%。
 - [ ] Open/close/dilate/erode 與 OpenCV 完全相同。
 - [ ] 記錄 4K BGR→Gray（包含上傳/下載）的平均毫秒數。
+- [ ] 記錄 4K Gray Gaussian k45 與 Adaptive Mean block 35 的 CPU/GPU 平均毫秒數及 speedup。
 - [ ] 連續執行測試三次，沒有 CUDA error、VRAM 持續成長或程序崩潰。
 
 ## 6. 真實 AOI CPU/GPU 全流程比對
