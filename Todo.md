@@ -223,3 +223,4 @@
 - [x] 2026-07-14：完成 M2 第一個垂直切片：persistent context、grow-only buffers、context stats 與 401-2 fused preprocessing。
 - [x] 2026-07-14：建立通用 `PreprocessPlan`、typed operators、CPU/CUDA executors，並遷移 401-2。
 - [x] 2026-07-14：將 CPU、GPU、CUDA、GUI、CI、打包與 RTX 3090 驗收清單合併為唯一 `Todo.md`。
+- [x] 2026-07-14：更新 `AGENT.md`，統一 Todo 紀律、模組責任、PreprocessPlan/CPU fallback 架構、驗證矩陣、安全 staging 與 commit/push 規範。
