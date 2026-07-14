@@ -68,6 +68,8 @@ M1 已將 Gaussian 改為 separable kernels、Adaptive Mean 改為 64-bit integr
 - [ ] Gaussian blur 在設定容差內。
 - [ ] Global threshold 與 OpenCV 完全相同。
 - [ ] Adaptive mean threshold mismatch ratio 不超過 2%。
+- [ ] Fused 401-2 與 CPU gray → Gaussian → Adaptive Threshold 結果在設定容差內。
+- [ ] 相同尺寸連續執行 fused 401-2 時，`vf_context_stats` allocation count 不再增加。
 - [ ] Open/close/dilate/erode 與 OpenCV 完全相同。
 - [ ] 記錄 4K BGR→Gray（包含上傳/下載）的平均毫秒數。
 - [ ] 記錄 4K Gray Gaussian k45 與 Adaptive Mean block 35 的 CPU/GPU 平均毫秒數及 speedup。

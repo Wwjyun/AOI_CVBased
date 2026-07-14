@@ -5,6 +5,7 @@
 #include <climits>
 #include <cmath>
 #include <cstring>
+#include <new>
 #include <vector>
 
 namespace {
@@ -16,6 +17,92 @@ constexpr int TRANSPOSE_ROWS = 8;
 constexpr int MAX_GAUSSIAN_KERNEL = 127;
 
 __constant__ float gaussian_weights[MAX_GAUSSIAN_KERNEL];
+
+struct PersistentContext {
+    uint8_t* u8[4]{};
+    size_t u8_capacity[4]{};
+    float* float_buffer = nullptr;
+    size_t float_capacity = 0;
+    unsigned long long* u64[2]{};
+    size_t u64_capacity[2]{};
+    unsigned long long allocation_count = 0;
+
+    ~PersistentContext() {
+        for (void* pointer : u8) visionflow_cuda::free_device(pointer);
+        visionflow_cuda::free_device(float_buffer);
+        for (void* pointer : u64) visionflow_cuda::free_device(pointer);
+    }
+};
+
+template <typename T>
+int reserve_device(
+    T** pointer,
+    size_t* capacity,
+    size_t count,
+    unsigned long long* allocation_count = nullptr) {
+    if (pointer == nullptr || capacity == nullptr || count == 0 || count > SIZE_MAX / sizeof(T)) {
+        return VF_CUDA_INVALID_ARGUMENT;
+    }
+    if (*pointer != nullptr && *capacity >= count) return VF_CUDA_OK;
+    T* replacement = nullptr;
+    cudaError_t error = cudaMalloc(&replacement, count * sizeof(T));
+    if (error != cudaSuccess) return visionflow_cuda::runtime_error(error);
+    visionflow_cuda::free_device(*pointer);
+    *pointer = replacement;
+    *capacity = count;
+    if (allocation_count != nullptr) ++(*allocation_count);
+    return VF_CUDA_OK;
+}
+
+int prepare_gaussian_weights(int kernel, int* radius_out) {
+    if (radius_out == nullptr || kernel < 3 || kernel % 2 == 0 || kernel > MAX_GAUSSIAN_KERNEL) {
+        return VF_CUDA_INVALID_ARGUMENT;
+    }
+    double sigma = 0.3 * ((kernel - 1) * 0.5 - 1) + 0.8;
+    std::vector<float> weights(kernel);
+    float total = 0.0f;
+    int radius = kernel / 2;
+    for (int i = -radius; i <= radius; ++i) {
+        weights[i + radius] = expf(-(i * i) / static_cast<float>(2.0 * sigma * sigma));
+        total += weights[i + radius];
+    }
+    for (float& value : weights) value /= total;
+    cudaError_t error = cudaMemcpyToSymbol(
+        gaussian_weights, weights.data(), static_cast<size_t>(kernel) * sizeof(float));
+    if (error != cudaSuccess) return visionflow_cuda::runtime_error(error);
+    *radius_out = radius;
+    return VF_CUDA_OK;
+}
+
+int adaptive_layout(
+    int width,
+    int height,
+    int block,
+    int* radius_out,
+    int* padded_width_out,
+    int* padded_height_out,
+    size_t* padded_count_out) {
+    if (width <= 0 || height <= 0 || block < 3 || block % 2 == 0 || radius_out == nullptr ||
+        padded_width_out == nullptr || padded_height_out == nullptr || padded_count_out == nullptr) {
+        return VF_CUDA_INVALID_ARGUMENT;
+    }
+    int radius = block / 2;
+    if (radius > (INT_MAX - width) / 2 || radius > (INT_MAX - height) / 2) {
+        return VF_CUDA_INVALID_ARGUMENT;
+    }
+    int padded_width = width + radius * 2;
+    int padded_height = height + radius * 2;
+    if (static_cast<size_t>(padded_width) > SIZE_MAX / static_cast<size_t>(padded_height)) {
+        return VF_CUDA_INVALID_ARGUMENT;
+    }
+    size_t padded_count = static_cast<size_t>(padded_width) * static_cast<size_t>(padded_height);
+    if (padded_count > SIZE_MAX / sizeof(unsigned long long)) return VF_CUDA_INVALID_ARGUMENT;
+    *radius_out = radius;
+    *padded_width_out = padded_width;
+    *padded_height_out = padded_height;
+    *padded_count_out = padded_count;
+    return VF_CUDA_OK;
+}
 
 int cuda_result(cudaError_t error) { return visionflow_cuda::runtime_error(error); }
 
@@ -350,6 +437,39 @@ VF_CUDA_API int vf_gpu_error_message(int error_code, char* output, int capacity)
     return VF_CUDA_OK;
 }
 
+VF_CUDA_API int vf_context_create(void** context) {
+    if (context == nullptr) return VF_CUDA_INVALID_ARGUMENT;
+    *context = nullptr;
+    PersistentContext* created = new (std::nothrow) PersistentContext();
+    if (created == nullptr) return VF_CUDA_ALLOCATION_FAILED;
+    *context = created;
+    return VF_CUDA_OK;
+}
+
+VF_CUDA_API int vf_context_destroy(void* context) {
+    delete static_cast<PersistentContext*>(context);
+    return VF_CUDA_OK;
+}
+
+VF_CUDA_API int vf_context_stats(
+    void* context,
+    uint64_t* reserved_bytes,
+    uint64_t* allocation_count) {
+    if (context == nullptr || reserved_bytes == nullptr || allocation_count == nullptr) {
+        return VF_CUDA_INVALID_ARGUMENT;
+    }
+    PersistentContext* persistent = static_cast<PersistentContext*>(context);
+    uint64_t bytes = 0;
+    for (size_t capacity : persistent->u8_capacity) bytes += static_cast<uint64_t>(capacity);
+    bytes += static_cast<uint64_t>(persistent->float_capacity) * sizeof(float);
+    for (size_t capacity : persistent->u64_capacity) {
+        bytes += static_cast<uint64_t>(capacity) * sizeof(unsigned long long);
+    }
+    *reserved_bytes = bytes;
+    *allocation_count = persistent->allocation_count;
+    return VF_CUDA_OK;
+}
+
 VF_CUDA_API int vf_bgr_to_gray_u8(const uint8_t* src, int w, int h, int stride, int sc, uint8_t* dst, int dstride, int dc) {
     if (sc != 3 || dc != 1) return VF_CUDA_INVALID_ARGUMENT;
     uint8_t *ds = nullptr, *dd = nullptr;
@@ -429,22 +549,13 @@ VF_CUDA_API int vf_gaussian_blur_u8(const uint8_t* src,int w,int h,int stride,in
         return cuda_result(error);
     }
 
-    double sigma = 0.3 * ((kernel - 1) * 0.5 - 1) + 0.8;
-    std::vector<float> weights(kernel);
-    float total = 0.0f;
-    int radius = kernel / 2;
-    for (int i = -radius; i <= radius; ++i) {
-        weights[i + radius] = expf(-(i * i) / static_cast<float>(2.0 * sigma * sigma));
-        total += weights[i + radius];
-    }
-    for (float& value : weights) value /= total;
-
-    error = cudaMemcpyToSymbol(gaussian_weights, weights.data(), static_cast<size_t>(kernel) * sizeof(float));
-    if (error != cudaSuccess) {
+    int radius = 0;
+    result = prepare_gaussian_weights(kernel, &radius);
+    if (result != VF_CUDA_OK) {
         visionflow_cuda::free_device(intermediate);
         visionflow_cuda::free_device(dd);
         visionflow_cuda::free_device(ds);
-        return cuda_result(error);
+        return result;
     }
     gaussian_horizontal_kernel<<<grid2d(w, h), dim3(BLOCK_X, BLOCK_Y)>>>(ds, intermediate, w, h, sc, radius);
     gaussian_vertical_kernel<<<grid2d(w, h), dim3(BLOCK_X, BLOCK_Y)>>>(intermediate, dd, w, h, sc, radius);
@@ -477,20 +588,16 @@ VF_CUDA_API int vf_adaptive_mean_u8(const uint8_t* src,int w,int h,int stride,in
         max_value < 0 || max_value > 255 || !std::isfinite(c)) {
         return VF_CUDA_INVALID_ARGUMENT;
     }
-    int radius = block / 2;
-    if (radius > (INT_MAX - w) / 2 || radius > (INT_MAX - h) / 2) return VF_CUDA_INVALID_ARGUMENT;
-    int padded_width = w + radius * 2;
-    int padded_height = h + radius * 2;
-    if (static_cast<size_t>(padded_width) > SIZE_MAX / static_cast<size_t>(padded_height)) {
-        return VF_CUDA_INVALID_ARGUMENT;
-    }
-    size_t padded_count = static_cast<size_t>(padded_width) * static_cast<size_t>(padded_height);
-    if (padded_count > SIZE_MAX / sizeof(unsigned long long)) return VF_CUDA_INVALID_ARGUMENT;
+    int radius = 0, padded_width = 0, padded_height = 0;
+    size_t padded_count = 0;
+    int result = adaptive_layout(
+        w, h, block, &radius, &padded_width, &padded_height, &padded_count);
+    if (result != VF_CUDA_OK) return result;
     uint8_t *ds = nullptr, *dd = nullptr;
     uint8_t* padded = nullptr;
     unsigned long long* row_prefix = nullptr;
     unsigned long long* integral_transposed = nullptr;
-    int result = alloc_copy(src, w, h, stride, 1, &ds);
+    result = alloc_copy(src, w, h, stride, 1, &ds);
     if (result != VF_CUDA_OK) return result;
     result = visionflow_cuda::allocate_bytes(&dd, static_cast<size_t>(w) * h);
     if (result != VF_CUDA_OK) { visionflow_cuda::free_device(ds); return result; }
@@ -531,6 +638,148 @@ VF_CUDA_API int vf_adaptive_mean_u8(const uint8_t* src,int w,int h,int stride,in
     else visionflow_cuda::free_device(dd);
     visionflow_cuda::free_device(ds);
     return result;
+}
+
+VF_CUDA_API int vf_preprocess_401_2_u8(
+    void* context,
+    const uint8_t* src,
+    int w,
+    int h,
+    int stride,
+    int sc,
+    uint8_t* dst,
+    int dstride,
+    int gaussian_kernel,
+    int adaptive_block,
+    float adaptive_c,
+    int max_value,
+    int invert) {
+    if (context == nullptr || w <= 0 || h <= 0 || (sc != 1 && sc != 3) ||
+        w > INT_MAX / sc || !visionflow_cuda::valid_image(src, w, h, stride, sc) ||
+        !visionflow_cuda::valid_image(dst, w, h, dstride, 1) ||
+        max_value < 0 || max_value > 255 || !std::isfinite(adaptive_c)) {
+        return VF_CUDA_INVALID_ARGUMENT;
+    }
+    if (static_cast<size_t>(w) > SIZE_MAX / static_cast<size_t>(h)) return VF_CUDA_INVALID_ARGUMENT;
+    size_t pixel_count = static_cast<size_t>(w) * static_cast<size_t>(h);
+    if (pixel_count > SIZE_MAX / static_cast<size_t>(sc)) return VF_CUDA_INVALID_ARGUMENT;
+    size_t source_count = pixel_count * static_cast<size_t>(sc);
+
+    int radius = 0;
+    int result = prepare_gaussian_weights(gaussian_kernel, &radius);
+    if (result != VF_CUDA_OK) return result;
+    int adaptive_radius = 0, padded_width = 0, padded_height = 0;
+    size_t padded_count = 0;
+    result = adaptive_layout(
+        w,
+        h,
+        adaptive_block,
+        &adaptive_radius,
+        &padded_width,
+        &padded_height,
+        &padded_count);
+    if (result != VF_CUDA_OK) return result;
+
+    PersistentContext* persistent = static_cast<PersistentContext*>(context);
+    result = reserve_device(
+        &persistent->u8[0], &persistent->u8_capacity[0], source_count, &persistent->allocation_count);
+    if (result == VF_CUDA_OK) {
+        result = reserve_device(
+            &persistent->u8[1], &persistent->u8_capacity[1], pixel_count, &persistent->allocation_count);
+    }
+    if (result == VF_CUDA_OK) {
+        result = reserve_device(
+            &persistent->u8[2], &persistent->u8_capacity[2], pixel_count, &persistent->allocation_count);
+    }
+    if (result == VF_CUDA_OK) {
+        result = reserve_device(
+            &persistent->u8[3], &persistent->u8_capacity[3], padded_count, &persistent->allocation_count);
+    }
+    if (result == VF_CUDA_OK) {
+        result = reserve_device(
+            &persistent->float_buffer,
+            &persistent->float_capacity,
+            pixel_count,
+            &persistent->allocation_count);
+    }
+    if (result == VF_CUDA_OK) {
+        result = reserve_device(
+            &persistent->u64[0],
+            &persistent->u64_capacity[0],
+            padded_count,
+            &persistent->allocation_count);
+    }
+    if (result == VF_CUDA_OK) {
+        result = reserve_device(
+            &persistent->u64[1],
+            &persistent->u64_capacity[1],
+            padded_count,
+            &persistent->allocation_count);
+    }
+    if (result != VF_CUDA_OK) return result;
+
+    size_t source_row_bytes = static_cast<size_t>(w) * static_cast<size_t>(sc);
+    cudaError_t error = cudaMemcpy2D(
+        persistent->u8[0],
+        source_row_bytes,
+        src,
+        stride,
+        source_row_bytes,
+        h,
+        cudaMemcpyHostToDevice);
+    if (error != cudaSuccess) return cuda_result(error);
+
+    uint8_t* gray = persistent->u8[0];
+    if (sc == 3) {
+        gray = persistent->u8[1];
+        bgr_gray_kernel<<<grid2d(w, h), dim3(BLOCK_X, BLOCK_Y)>>>(
+            persistent->u8[0], gray, w, h);
+    }
+    gaussian_horizontal_kernel<<<grid2d(w, h), dim3(BLOCK_X, BLOCK_Y)>>>(
+        gray, persistent->float_buffer, w, h, 1, radius);
+    gaussian_vertical_kernel<<<grid2d(w, h), dim3(BLOCK_X, BLOCK_Y)>>>(
+        persistent->float_buffer, gray, w, h, 1, radius);
+    replicate_border_kernel<<<grid2d(padded_width, padded_height), dim3(BLOCK_X, BLOCK_Y)>>>(
+        gray,
+        persistent->u8[3],
+        w,
+        h,
+        padded_width,
+        padded_height,
+        adaptive_radius);
+    row_prefix_u8_kernel<<<padded_height, SCAN_THREADS>>>(
+        persistent->u8[3], persistent->u64[0], padded_width, padded_height);
+    dim3 transpose_block(TRANSPOSE_TILE, TRANSPOSE_ROWS);
+    dim3 transpose_grid(
+        (padded_width + TRANSPOSE_TILE - 1) / TRANSPOSE_TILE,
+        (padded_height + TRANSPOSE_TILE - 1) / TRANSPOSE_TILE);
+    transpose_u64_kernel<<<transpose_grid, transpose_block>>>(
+        persistent->u64[0], persistent->u64[1], padded_width, padded_height);
+    row_prefix_u64_inplace_kernel<<<padded_width, SCAN_THREADS>>>(
+        persistent->u64[1], padded_height, padded_width);
+    adaptive_integral_kernel<<<grid2d(w, h), dim3(BLOCK_X, BLOCK_Y)>>>(
+        gray,
+        persistent->u64[1],
+        persistent->u8[2],
+        w,
+        h,
+        padded_height,
+        adaptive_block,
+        adaptive_c,
+        max_value,
+        invert);
+    result = visionflow_cuda::kernel_result();
+    if (result != VF_CUDA_OK) return result;
+
+    error = cudaMemcpy2D(
+        dst,
+        dstride,
+        persistent->u8[2],
+        static_cast<size_t>(w),
+        static_cast<size_t>(w),
+        h,
+        cudaMemcpyDeviceToHost);
+    return cuda_result(error);
 }
 
 VF_CUDA_API int vf_morphology_rect_u8(const uint8_t* src,int w,int h,int stride,int sc,uint8_t* dst,int dstride,int dc,int operation,int kernel,int iterations) {

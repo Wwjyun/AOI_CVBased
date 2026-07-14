@@ -17,6 +17,10 @@
  * - The Python bridge serializes calls sharing one GpuRuntime. Native callers
  *   should also serialize calls unless they provide their own higher-level
  *   synchronization.
+ * - Context APIs are additive ABI v1 extensions. Callers may probe their
+ *   exports and keep using the stateless primitive APIs with an older DLL.
+ * - A context owns reusable device buffers and must be destroyed by the same
+ *   module with vf_context_destroy(). It is not safe for concurrent calls.
  */
 
 #if defined(_WIN32)
@@ -45,6 +49,11 @@ VF_CUDA_API int vf_gpu_device_count(void);
 VF_CUDA_API int vf_gpu_compute_capability(void);
 VF_CUDA_API int vf_gpu_device_name(char* output, int capacity);
 VF_CUDA_API int vf_gpu_error_message(int error_code, char* output, int capacity);
+
+VF_CUDA_API int vf_context_create(void** context);
+VF_CUDA_API int vf_context_destroy(void* context);
+VF_CUDA_API int vf_context_stats(
+    void* context, uint64_t* reserved_bytes, uint64_t* allocation_count);
 
 VF_CUDA_API int vf_bgr_to_gray_u8(
     const uint8_t* src, int width, int height, int src_stride, int src_channels,
@@ -83,6 +92,14 @@ VF_CUDA_API int vf_morphology_rect_u8(
     const uint8_t* src, int width, int height, int src_stride, int src_channels,
     uint8_t* dst, int dst_stride, int dst_channels,
     int operation, int kernel_size, int iterations);
+
+VF_CUDA_API int vf_preprocess_401_2_u8(
+    void* context,
+    const uint8_t* src, int width, int height, int src_stride, int src_channels,
+    uint8_t* dst, int dst_stride,
+    int gaussian_kernel_size,
+    int adaptive_block_size, float adaptive_c,
+    int max_value, int invert);
 
 #ifdef __cplusplus
 }

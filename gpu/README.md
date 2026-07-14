@@ -4,6 +4,8 @@
 
 目前 Gaussian blur 使用 horizontal/vertical separable kernels 與 constant weights；Adaptive Mean Threshold 使用 replicate-border 64-bit integral image。公開 C ABI 維持 v1，因此 Python bridge 與既有打包版介面不需修改，但更新原始碼後必須重新編譯 DLL。
 
+新版 DLL 另外提供可選的 persistent context exports。Detector 401-2 會在 capability 可用時，以一次同步呼叫完成 BGR/gray、Gaussian 與 Integral Adaptive Threshold；context buffers 只在容量不足時成長。Python bridge 若載入舊 DLL，會自動保留原本 stateless primitive 路徑。
+
 ## 檔案
 
 ```text

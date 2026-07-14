@@ -74,22 +74,25 @@
 
 ### ABI 與資源生命週期
 
-- [ ] 保留現有 ABI v1 host-pointer API，讓既有 GUI、打包版與測試程式保持相容。
-- [ ] 新增 opaque context/handle API，例如 `vf_context_create`、`vf_context_destroy`、`vf_buffer_reserve`。
-- [ ] context 擁有 stream、輸入 buffer、輸出 buffer、兩個 scratch buffers、integral buffer 與 filter weights cache。
-- [ ] buffer 容量不足時才成長，正常處理下一張影像時不得重複 `cudaMalloc/cudaFree`。
-- [ ] `GpuRuntime` 跨多張圖片重複使用 context，提供明確 `close()`、錯誤清理與程序結束釋放。
-- [ ] 保持目前 lock/單一 GPU queue 的 thread safety；不可使用無 owner 的全域 raw device pointer。
+- [x] 保留現有 ABI v1 host-pointer API；新功能採 optional export probe，舊 DLL 仍可走 stateless primitives。
+- [x] 新增 opaque `vf_context_create/destroy/stats` API 與 DLL 內部 grow-only typed buffer reserve。
+- [x] 第一版 context 擁有 reusable uint8、float Gaussian、64-bit integral scratch buffers 與 allocation/reserved-bytes counters。
+- [ ] 將 CUDA stream 與其餘 detector 所需 ping-pong buffers 納入同一 context。
+- [x] buffer 容量不足時才成長；相同或較小尺寸的後續 fused 呼叫不再 `cudaMalloc/cudaFree`。
+- [x] `GpuRuntime` 提供明確 `close()`、context manager 與 destructor 安全釋放。
+- [ ] 讓 monitor/batch 的 `GpuRuntime` 跨多張圖片重複使用同一 context；目前先在單次 pipeline 的多 tile 間重用。
+- [x] 保持目前 `RLock` 序列化 context/fused calls；context 不暴露 raw device pointer 給 Python。
 - [ ] 測試尺寸變大、變小、切換 channel、CUDA error、OOM 與 fallback 後沒有 stale pointer 或 VRAM leak。
 
 ### Detector fused preprocessing
 
 - [ ] 401：單次 upload 後在 GPU 完成 Gaussian → morphology → gray → adaptive threshold，只下載 binary mask。
 - [ ] 401-1：單次 upload 後完成 gray → resize → Gaussian → adaptive threshold → morphology，只下載 binary mask。
-- [ ] 401-2：單次 upload 後完成 gray → Gaussian → adaptive threshold，只下載 binary mask。
+- [x] 401-2：單次 upload BGR/gray 後完成 gray → Gaussian → integral adaptive threshold，只下載 binary mask。
 - [ ] 900：gray 只建立一次，在同一份 device gray 上產生 outer global mask 與 inner adaptive mask，再一次下載兩張 mask。
-- [ ] fused API 失敗時不輸出部分結果；清除 CUDA error state 後整個 detector 重跑 CPU。
-- [ ] 比較「現有逐 primitive API」與「fused API」的 upload 次數、傳輸量、kernel 時間及端到端時間。
+- [x] 新增 fused failure 回歸：失敗時不採用部分 mask，`BaseDetector` 將整個 detector 重跑 CPU。
+- [ ] 在 RTX 3090 注入實際 CUDA kernel/OOM error，確認 error state、context 與後續 CPU/GPU 呼叫可恢復。
+- [x] 驗證工具加入 fused 401-2 CPU 等價、相同尺寸 allocation count 不成長，以及 4K CPU/GPU speedup benchmark。
 
 ## P1：Tiling 與 ROI 資料流
 
@@ -164,3 +167,4 @@
 - [x] 2026-07-14 新增 CPU-only 與缺少 GPU/DLL fallback 等價回歸；確認 PASS/NG、tiles、defects 與 metadata 不因觀測層改變。
 - [x] 2026-07-14 完成 M1 CUDA 原始碼：separable Gaussian、constant weights、64-bit integral adaptive threshold、replicate border 與擴充驗證矩陣；公開 C ABI 與 CPU fallback 保持不變。
 - [ ] 在 RTX 3090 重新編譯 M1 DLL，執行新增 primitive matrix、4K CPU/GPU benchmark 與五個 recipe 全流程等價測試後，才能將 M1 標示完成。
+- [x] 2026-07-14 完成 M2 第一個垂直切片：optional persistent context ABI、grow-only buffers/context stats、401-2 fused BGR/gray preprocessing、舊 DLL legacy GPU 路由與 fused failure 全 detector CPU fallback。

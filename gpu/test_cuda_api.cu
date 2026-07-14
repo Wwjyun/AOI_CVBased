@@ -43,6 +43,31 @@ int main() {
         return 5;
     }
 
-    std::cout << "C ABI and grayscale smoke passed\n";
+    void* context = nullptr;
+    result = vf_context_create(&context);
+    if (result != VF_CUDA_OK || context == nullptr) {
+        std::cerr << "Persistent context creation failed\n";
+        return 6;
+    }
+    std::vector<uint8_t> fused_binary(width * height, 0);
+    result = vf_preprocess_401_2_u8(
+        context,
+        bgr.data(), width, height, width * 3, 3,
+        fused_binary.data(), width,
+        3, 3, -2.0f, 255, 1);
+    uint64_t reserved_bytes = 0;
+    uint64_t allocation_count = 0;
+    int stats_result = vf_context_stats(context, &reserved_bytes, &allocation_count);
+    int destroy_result = vf_context_destroy(context);
+    if (result != VF_CUDA_OK || stats_result != VF_CUDA_OK || destroy_result != VF_CUDA_OK ||
+        reserved_bytes == 0 || allocation_count == 0) {
+        char message[256]{};
+        int failed = result != VF_CUDA_OK ? result : stats_result != VF_CUDA_OK ? stats_result : destroy_result;
+        vf_gpu_error_message(failed, message, static_cast<int>(sizeof(message)));
+        std::cerr << "Fused 401-2 smoke failed: " << message << "\n";
+        return 7;
+    }
+
+    std::cout << "C ABI, grayscale and fused 401-2 smoke passed\n";
     return 0;
 }

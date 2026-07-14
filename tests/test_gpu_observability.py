@@ -12,6 +12,7 @@ import yaml
 from core.gpu_runtime import GpuRuntime
 from core.performance import PipelineProfiler
 from core.pipeline import AOIPipeline
+from detectors.detector_401_2 import Detector401_2
 from gpu.validate_cuda_dll import compare
 
 
@@ -19,6 +20,59 @@ class _SuccessfulDll:
     @staticmethod
     def vf_bgr_to_gray_u8(*_args):
         return 0
+
+
+class _Function:
+    def __init__(self, callback):
+        self.callback = callback
+
+    def __call__(self, *args):
+        return self.callback(*args)
+
+
+class _FusedDll:
+    def __init__(self):
+        self.destroyed = []
+        self.vf_context_create = _Function(self._create)
+        self.vf_context_destroy = _Function(self._destroy)
+        self.vf_context_stats = _Function(self._stats)
+        self.vf_preprocess_401_2_u8 = _Function(lambda *_args: 0)
+
+    @staticmethod
+    def _create(output):
+        output._obj.value = 1234
+        return 0
+
+    def _destroy(self, context):
+        self.destroyed.append(context.value if hasattr(context, "value") else int(context))
+        return 0
+
+    @staticmethod
+    def _stats(_context, reserved_bytes, allocation_count):
+        reserved_bytes._obj.value = 4096
+        allocation_count._obj.value = 7
+        return 0
+
+
+class _FusedRuntimeStub:
+    available = True
+    supports_fused_401_2 = True
+
+    def __init__(self):
+        self.calls = 0
+
+    def preprocess_401_2(self, image, *_args):
+        self.calls += 1
+        return np.zeros(image.shape[:2], dtype=np.uint8)
+
+
+class _FailingFusedRuntimeStub:
+    available = True
+    supports_fused_401_2 = True
+
+    @staticmethod
+    def preprocess_401_2(*_args):
+        raise RuntimeError("injected fused failure")
 
 
 class PipelineProfilerTests(unittest.TestCase):
@@ -56,6 +110,7 @@ class GpuRuntimeMetricsTests(unittest.TestCase):
         runtime.device_count = 1
         image = np.zeros((2, 3, 3), dtype=np.uint8)
 
+        self.assertFalse(runtime.supports_fused_401_2)
         runtime.bgr_to_gray(image)
         metrics = runtime.performance_stats()
 
@@ -64,6 +119,53 @@ class GpuRuntimeMetricsTests(unittest.TestCase):
         self.assertEqual(metrics["host_to_device_bytes"], image.nbytes)
         self.assertEqual(metrics["device_to_host_bytes"], 6)
         self.assertEqual(metrics["functions"]["vf_bgr_to_gray_u8"]["calls"], 1)
+
+    def test_optional_context_enables_fused_call_and_is_destroyed(self):
+        runtime = GpuRuntime(enabled=False)
+        dll = _FusedDll()
+        runtime._dll = dll
+        runtime.device_count = 1
+        runtime._load_optional_context()
+
+        self.assertTrue(runtime.supports_fused_401_2)
+        output = runtime.preprocess_401_2(np.zeros((4, 5, 3), dtype=np.uint8), 3, 3, -2.0, 255)
+        self.assertEqual(output.shape, (4, 5))
+        metrics = runtime.performance_stats()
+        self.assertEqual(metrics["functions"]["vf_preprocess_401_2_u8"]["calls"], 1)
+        self.assertEqual(metrics["persistent_context"]["reserved_bytes"], 4096)
+        self.assertEqual(metrics["persistent_context"]["allocation_count"], 7)
+
+        runtime.close()
+        self.assertFalse(runtime.supports_fused_401_2)
+        self.assertEqual(dll.destroyed, [1234])
+
+
+class DetectorFusedRoutingTests(unittest.TestCase):
+    def test_detector_401_2_uses_fused_preprocessing_without_changing_cpu_contract(self):
+        runtime = _FusedRuntimeStub()
+        detector = Detector401_2(use_gpu=True, gpu_runtime=runtime)
+        image = np.zeros((16, 20, 3), dtype=np.uint8)
+
+        processed = detector.preprocess(image)
+        binary = detector._make_binary(processed)
+
+        self.assertEqual(processed.shape, image.shape)
+        self.assertEqual(binary.shape, image.shape[:2])
+        self.assertEqual(runtime.calls, 1)
+
+    def test_detector_401_2_fused_failure_restarts_entire_detector_on_cpu(self):
+        detector = Detector401_2(
+            use_gpu=True,
+            gpu_runtime=_FailingFusedRuntimeStub(),
+            params={"blur_size": 3, "adaptive_block_size": 3, "roi_inset_px": 0},
+        )
+        image = np.zeros((16, 20, 3), dtype=np.uint8)
+
+        result = detector.run(image)
+
+        self.assertFalse(result["execution"]["gpu_active"])
+        self.assertEqual(result["execution"]["backend"], "cpu")
+        self.assertIn("injected fused failure", result["execution"]["fallback_reason"])
 
 
 class ComparisonToleranceTests(unittest.TestCase):

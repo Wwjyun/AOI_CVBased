@@ -143,6 +143,45 @@ def validate_primitives(runtime: GpuRuntime) -> list[dict]:
                 mismatch_ratio=0.02,
             )
         )
+    if runtime.supports_fused_401_2:
+        fused_gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY)
+        fused_expected = cv2.adaptiveThreshold(
+            cv2.GaussianBlur(fused_gray, (25, 25), 0),
+            255,
+            cv2.ADAPTIVE_THRESH_MEAN_C,
+            cv2.THRESH_BINARY_INV,
+            35,
+            -2.0,
+        )
+        metrics.append(
+            compare(
+                "fused_401_2_bgr",
+                runtime.preprocess_401_2(bgr, 25, 35, -2.0, 255, True),
+                fused_expected,
+                max_diff=0,
+                mismatch_ratio=0.02,
+            )
+        )
+        first_context_stats = runtime.performance_stats()["persistent_context"]
+        repeated = runtime.preprocess_401_2(bgr, 25, 35, -2.0, 255, True)
+        metrics.append(
+            compare(
+                "fused_401_2_bgr_reused_context",
+                repeated,
+                fused_expected,
+                max_diff=0,
+                mismatch_ratio=0.02,
+            )
+        )
+        second_context_stats = runtime.performance_stats()["persistent_context"]
+        if first_context_stats.get("allocation_count") != second_context_stats.get("allocation_count"):
+            raise AssertionError(
+                "fused_401_2 context allocated again for an unchanged image shape: "
+                f"first={first_context_stats}, second={second_context_stats}"
+            )
+        print(f"PASS fused_401_2 persistent context reuse: {second_context_stats}")
+    else:
+        print(f"SKIP fused_401_2_bgr: {runtime.fused_unavailable_reason}")
     kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 3))
     for operation, cv_operation in (
         ("open", cv2.MORPH_OPEN),
@@ -185,6 +224,21 @@ def benchmark(runtime: GpuRuntime, repetitions: int) -> dict:
             lambda: runtime.adaptive_threshold(gray, 35, -2.0, 255, False),
         ),
     )
+    if runtime.supports_fused_401_2:
+        operations += (
+            (
+                "fused_401_2_bgr_4k",
+                lambda: cv2.adaptiveThreshold(
+                    cv2.GaussianBlur(cv2.cvtColor(image, cv2.COLOR_BGR2GRAY), (25, 25), 0),
+                    255,
+                    cv2.ADAPTIVE_THRESH_MEAN_C,
+                    cv2.THRESH_BINARY_INV,
+                    35,
+                    -2.0,
+                ),
+                lambda: runtime.preprocess_401_2(image, 25, 35, -2.0, 255, True),
+            ),
+        )
     measurements = []
     for name, cpu_operation, gpu_operation in operations:
         cpu_ms = _average_ms(cpu_operation, repetitions)

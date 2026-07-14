@@ -26,11 +26,13 @@ class GpuRuntime:
         self.dll_path = self._resolve_path(self.requested_path)
         self._lock = threading.RLock()
         self._dll = None
+        self._context = None
         self.device_count = 0
         self.device_name = ""
         self.compute_capability = ""
         self.unavailable_reason = ""
         self.last_error = ""
+        self.fused_unavailable_reason = ""
         self._performance = {
             "load_sec": 0.0,
             "call_count": 0,
@@ -53,6 +55,14 @@ class GpuRuntime:
     def backend(self) -> str:
         return "cuda_dll" if self.available else "cpu"
 
+    @property
+    def supports_fused_401_2(self) -> bool:
+        return bool(
+            self.available
+            and self._context is not None
+            and getattr(self._dll, "vf_preprocess_401_2_u8", None) is not None
+        )
+
     def status(self, requested: bool = False) -> dict:
         active = bool(requested and self.available and not self.last_error)
         return {
@@ -63,12 +73,14 @@ class GpuRuntime:
             "device_count": self.device_count,
             "device_name": self.device_name,
             "compute_capability": self.compute_capability,
+            "capabilities": {"persistent_context": self._context is not None, "fused_401_2": self.supports_fused_401_2},
             "fallback_reason": (self.unavailable_reason if not self.available else self.last_error) if requested else "",
         }
 
     def performance_stats(self) -> dict:
         """Return host-observed CUDA call metrics; DLL-internal phases are not separable in ABI v1."""
         with self._lock:
+            context_stats = self._context_stats_unlocked()
             functions = {
                 name: {
                     "calls": int(values["calls"]),
@@ -81,7 +93,7 @@ class GpuRuntime:
             }
             return {
                 "measurement_scope": "synchronous_host_wrapper_estimate",
-                "note": "ABI v1 combines allocation, H2D, kernel, synchronize, D2H and free in one call.",
+                "note": "Host timing combines H2D, kernels, synchronize and D2H; stateless ABI calls also allocate/free.",
                 "load_sec": round(float(self._performance["load_sec"]), 6),
                 "call_count": int(self._performance["call_count"]),
                 "estimated_round_trips": int(self._performance["estimated_round_trips"]),
@@ -89,6 +101,7 @@ class GpuRuntime:
                 "device_to_host_bytes": int(self._performance["device_to_host_bytes"]),
                 "wall_sec": round(float(self._performance["wall_sec"]), 6),
                 "lock_wait_sec": round(float(self._performance["lock_wait_sec"]), 6),
+                "persistent_context": context_stats,
                 "functions": functions,
             }
 
@@ -170,6 +183,80 @@ class GpuRuntime:
         )
         return output
 
+    def preprocess_401_2(
+        self,
+        image: np.ndarray,
+        gaussian_kernel_size: int,
+        adaptive_block_size: int,
+        adaptive_c: float,
+        max_value: int,
+        invert: bool = True,
+    ) -> np.ndarray:
+        if not self.supports_fused_401_2:
+            raise GpuRuntimeError(self.fused_unavailable_reason or "CUDA DLL does not support fused 401-2 preprocessing")
+        source = self._u8_image(image, channels=(1, 3))
+        output = np.empty(source.shape[:2], dtype=np.uint8)
+        channels = 1 if source.ndim == 2 else source.shape[2]
+        function_name = "vf_preprocess_401_2_u8"
+        function = getattr(self._dll, function_name)
+        arguments = (
+            self._context,
+            source.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
+            int(source.shape[1]),
+            int(source.shape[0]),
+            int(source.strides[0]),
+            int(channels),
+            output.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
+            int(output.strides[0]),
+            int(gaussian_kernel_size),
+            int(adaptive_block_size),
+            ctypes.c_float(float(adaptive_c)),
+            int(max_value),
+            int(bool(invert)),
+        )
+        queued = time.perf_counter()
+        with self._lock:
+            lock_acquired = time.perf_counter()
+            result = int(function(*arguments))
+            completed = time.perf_counter()
+            self._record_performance(
+                function_name,
+                int(source.nbytes),
+                int(output.nbytes),
+                completed - lock_acquired,
+                lock_acquired - queued,
+            )
+        if result != 0:
+            raise GpuRuntimeError(
+                f"{function_name} failed with CUDA DLL error {result}: {self._error_message(result)}"
+            )
+        return output
+
+    def close(self) -> None:
+        with self._lock:
+            context = self._context
+            self._context = None
+            if context is None or self._dll is None:
+                return
+            destroy = getattr(self._dll, "vf_context_destroy", None)
+            if destroy is None:
+                return
+            result = int(destroy(context))
+            if result != 0:
+                self.last_error = f"vf_context_destroy failed with CUDA DLL error {result}: {self._error_message(result)}"
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()
+
+    def __del__(self):
+        try:
+            self.close()
+        except (AttributeError, OSError, TypeError, ValueError):
+            pass
+
     def _load(self) -> None:
         if not self.dll_path.exists():
             self.unavailable_reason = f"CUDA DLL not found: {self.dll_path}"
@@ -201,8 +288,54 @@ class GpuRuntime:
             if capability is not None:
                 encoded = int(capability())
                 self.compute_capability = f"{encoded // 10}.{encoded % 10}" if encoded > 0 else ""
+            self._load_optional_context()
         except (OSError, AttributeError) as exc:
             self.unavailable_reason = f"CUDA DLL load failed: {exc}"
+
+    def _load_optional_context(self) -> None:
+        create = getattr(self._dll, "vf_context_create", None)
+        destroy = getattr(self._dll, "vf_context_destroy", None)
+        fused = getattr(self._dll, "vf_preprocess_401_2_u8", None)
+        if create is None or destroy is None or fused is None:
+            self.fused_unavailable_reason = "CUDA DLL uses legacy stateless ABI without fused 401-2 exports"
+            return
+        create.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
+        create.restype = ctypes.c_int
+        destroy.argtypes = [ctypes.c_void_p]
+        destroy.restype = ctypes.c_int
+        stats = getattr(self._dll, "vf_context_stats", None)
+        if stats is not None:
+            stats.argtypes = [
+                ctypes.c_void_p,
+                ctypes.POINTER(ctypes.c_uint64),
+                ctypes.POINTER(ctypes.c_uint64),
+            ]
+            stats.restype = ctypes.c_int
+        context = ctypes.c_void_p()
+        result = int(create(ctypes.byref(context)))
+        if result != 0 or not context.value:
+            self.fused_unavailable_reason = (
+                f"CUDA persistent context creation failed with error {result}: {self._error_message(result)}"
+            )
+            return
+        self._context = context
+
+    def _context_stats_unlocked(self) -> dict:
+        if self._context is None or self._dll is None:
+            return {"active": False, "reserved_bytes": 0, "allocation_count": 0}
+        stats = getattr(self._dll, "vf_context_stats", None)
+        if stats is None:
+            return {"active": True, "reserved_bytes": None, "allocation_count": None}
+        reserved_bytes = ctypes.c_uint64()
+        allocation_count = ctypes.c_uint64()
+        result = int(stats(self._context, ctypes.byref(reserved_bytes), ctypes.byref(allocation_count)))
+        if result != 0:
+            return {"active": True, "reserved_bytes": None, "allocation_count": None, "error_code": result}
+        return {
+            "active": True,
+            "reserved_bytes": int(reserved_bytes.value),
+            "allocation_count": int(allocation_count.value),
+        }
 
     def _call_image(self, function_name: str, source: np.ndarray, output: np.ndarray, *extra) -> None:
         if not self.available:
