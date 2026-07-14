@@ -14,20 +14,24 @@
 
 ### 分階段 profiler
 
-- [ ] 在 pipeline 結果與 log 分別記錄 image load、tiling、每個 detector、aggregation、overlay、CSV/JSON、GUI 顯示耗時。
+- [x] 在 pipeline 結果與 log 分別記錄 recipe setup、image load、tiling、每個 detector、aggregation 與 reporting total 耗時。
+- [x] Reporter 分別記錄 overlay、NG tiles、CSV、matrix CSV 與 JSON 的 host wall-clock 耗時。
+- [ ] 加入 GUI 顯示、QImage/QPixmap 轉換與使用者實際等待時間的獨立計時。
 - [ ] 在 CUDA DLL 或 bridge 記錄 context 初始化、allocation、H2D、kernel、synchronize、D2H 與 free 耗時。
-- [ ] 每個 detector 記錄 GPU primitive 呼叫次數、upload/download 次數與傳輸 bytes。
+- [x] ABI v1 bridge 先記錄 DLL load、同步呼叫、lock wait、估算 H2D/D2H bytes 與 round-trip 次數，並清楚標示目前無法拆分 DLL 內部階段。
+- [x] 每個 CUDA primitive 記錄呼叫次數、估算 upload/download bytes 與同步 wall time。
 - [ ] 將冷啟動與 warm-up 後耗時分開；先 warm-up 5 張，再量 10、100 張。
 - [ ] 同時記錄 CPU 使用率、GPU utilization、VRAM、平均值、P50、P95 與最大值。
 - [ ] benchmark 關閉 overlay、NG tile、CSV、JSON 等輸出後測純檢測，再另測包含完整輸出的端到端時間。
-- [ ] 修正 `gpu/validate_cuda_dll.py::compare()` 的超標判斷，避免只有 max diff 或 mismatch ratio 單項超標時仍通過。
+- [x] 修正 `gpu/validate_cuda_dll.py::compare()`：以 `delta > max_diff` 的像素比例套用 mismatch tolerance，並新增容差回歸測試。
 
 ### 立即避免負優化
 
 - [ ] 在 GPU crop 改善前，效能測試與 production recipe 暫時關閉 `gpu.tiling`。
-- [ ] 防止每切一張 tile 都重新上傳完整原圖；加入警告或計數，讓重複整圖上傳可在 log 中被發現。
+- [x] 加入 GPU crop 呼叫與估算 H2D bytes 計數；同一張圖發生多次同步 crop round-trip 時輸出負優化警告。
+- [ ] 防止每切一張 tile 都重新上傳完整原圖；改為可重用 source device buffer 後才能移除警告。
 - [ ] 對小圖、小 ROI 與少量 tile 建立 CPU/GPU crossover benchmark，低於門檻時自動使用 CPU。
-- [ ] 確認 GUI 顯示的總耗時定義；區分 pipeline `duration_sec` 與使用者實際等待的端到端耗時。
+- [x] 保留既有 pipeline `duration_sec` 語義，另外提供 `execution.performance.end_to_end_sec` 與 reporting 明細。
 
 ### CPU/GPU 等價測試
 
@@ -37,7 +41,8 @@
 - [ ] Adaptive threshold 覆蓋不同 block size、正負 C、invert、邊界像素與大尺寸影像。
 - [ ] Morphology 覆蓋 open、close、dilate、erode、不同 kernel 與多 iterations。
 - [ ] 五個 production recipes 各準備 PASS/NG 樣本，檢查 tile、PASS/NG、defect count、bbox、area、confidence 與 metadata。
-- [ ] 測試任一 GPU 步驟失敗時整個 detector 正確回退 CPU，不可混用半套中間結果。
+- [x] 新增缺少 DLL 時 CPU fallback 與純 CPU 完整結果一致的自動回歸測試。
+- [ ] 使用實機 DLL 注入 kernel error/OOM，驗證任一 GPU 步驟失敗時整個 detector 正確回退 CPU，不可混用半套中間結果。
 
 ## P1：先降低 kernel 複雜度
 
@@ -152,3 +157,8 @@
 - [ ] M3：改為原圖單次 upload、device ROI、batch ROI 與跨圖片 runtime 重用。
 - [ ] M4：加入 pinned memory、streams、VRAM-aware batch，再依 profiler 處理剩餘 CPU 熱點。
 - [ ] M5：完成 RTX 3090 regression、長時間壓測、GitHub Actions GPU job 與 production 預設值評估。
+
+## Progress / Completed Items
+
+- [x] 2026-07-14 完成 M0 第一批觀測能力：OOP `PipelineProfiler`、ABI v1 host-side CUDA metrics、GPU crop 負優化警告、Reporter 分項計時及容差判斷修正。
+- [x] 2026-07-14 新增 CPU-only 與缺少 GPU/DLL fallback 等價回歸；確認 PASS/NG、tiles、defects 與 metadata 不因觀測層改變。

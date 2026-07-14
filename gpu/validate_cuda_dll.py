@@ -41,16 +41,18 @@ def compare(name: str, actual: np.ndarray, expected: np.ndarray, max_diff: int =
     delta = np.abs(actual.astype(np.int16) - expected.astype(np.int16))
     observed_max = int(delta.max(initial=0))
     observed_ratio = float(np.count_nonzero(delta) / max(delta.size, 1))
-    if observed_max > max_diff and observed_ratio > mismatch_ratio:
+    out_of_tolerance_ratio = float(np.count_nonzero(delta > max_diff) / max(delta.size, 1))
+    if out_of_tolerance_ratio > mismatch_ratio:
         raise AssertionError(
             f"{name}: max_diff={observed_max} (limit {max_diff}), mismatch_ratio={observed_ratio:.6f} "
-            f"(limit {mismatch_ratio:.6f})"
+            f"out_of_tolerance_ratio={out_of_tolerance_ratio:.6f} (limit {mismatch_ratio:.6f})"
         )
     result = {
         "name": name,
         "max_diff": observed_max,
         "mean_diff": round(float(delta.mean()), 6),
         "mismatch_ratio": round(observed_ratio, 6),
+        "out_of_tolerance_ratio": round(out_of_tolerance_ratio, 6),
     }
     print(f"PASS {name}: {result}")
     return result

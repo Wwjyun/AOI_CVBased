@@ -144,3 +144,4 @@
 - [ ] 完成 CPU/GPU 數值比對、分階段 benchmark、效能優化與打包實機驗證；目前跨機測試尚未縮短端到端耗時。
 - [x] 2026-07-14 完成可攜式 CUDA 編譯套件：正式 `.cu`、公開 C ABI/error/internal headers、C++ smoke、Python primitive/全流程比對，以及獨立 `cuda-Todo.md`。
 - [x] 2026-07-14 依跨機 DLL 啟用但端到端未加速的實測結果，重整 `GPU-Todo.md`：納入 profiler、integral adaptive threshold、separable Gaussian、persistent buffers、fused detector pipeline、batch ROI、CPU/GPU 等價與效能驗收門檻。
+- [x] 2026-07-14 啟動 GPU M0 優化：新增 OOP pipeline/reporter profiler、ABI v1 CUDA 呼叫與估算傳輸統計、重複 GPU crop 警告、容差測試修正，以及 CPU-only/缺 DLL fallback 等價回歸。

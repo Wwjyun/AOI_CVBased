@@ -3,18 +3,24 @@ from __future__ import annotations
 import csv
 import json
 import uuid
+from contextlib import nullcontext
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import cv2
 
 from core.logging_system import LogMixin
 
+if TYPE_CHECKING:
+    from core.performance import PipelineProfiler
+
 
 class Reporter(LogMixin):
-    def __init__(self, output_dir: Path, output_config: dict):
+    def __init__(self, output_dir: Path, output_config: dict, profiler: PipelineProfiler | None = None):
         self.output_dir = Path(output_dir)
         self.output_config = output_config or {}
+        self.profiler = profiler
         self.overlay_dir = self.output_dir / "overlay"
         self.ng_tiles_dir = self.output_dir / "ng_tiles"
         self.csv_dir = self.output_dir / "csv"
@@ -31,32 +37,44 @@ class Reporter(LogMixin):
         self.logger.info("Writing report outputs: image=%s base=%s", result.get("image_name"), base_name)
 
         if self.output_config.get("save_overlay", True):
-            overlay_path = self.overlay_dir / f"{base_name}_overlay.png"
-            self._write_png(overlay_path, self._make_overlay(image, result))
-            outputs["overlay"] = str(overlay_path)
+            with self._measure("overlay"):
+                overlay_path = self.overlay_dir / f"{base_name}_overlay.png"
+                self._write_png(overlay_path, self._make_overlay(image, result))
+                outputs["overlay"] = str(overlay_path)
 
         if self.output_config.get("save_ng_tiles", True):
-            self._write_ng_tiles(result, base_name)
-            outputs["ng_tiles_dir"] = str(self.ng_tiles_dir)
+            with self._measure("ng_tiles"):
+                self._write_ng_tiles(result, base_name)
+                outputs["ng_tiles_dir"] = str(self.ng_tiles_dir)
 
         if self.output_config.get("save_csv", True):
-            csv_path = self.csv_dir / f"{base_name}.csv"
-            self._write_csv(csv_path, result)
-            outputs["csv"] = str(csv_path)
+            with self._measure("csv"):
+                csv_path = self.csv_dir / f"{base_name}.csv"
+                self._write_csv(csv_path, result)
+                outputs["csv"] = str(csv_path)
 
         if self.output_config.get("save_matrix_csv", True):
-            matrix_csv_path = self.matrix_csv_dir / f"{base_name}_matrix.csv"
-            self._write_matrix_csv(matrix_csv_path, result)
-            outputs["matrix_csv"] = str(matrix_csv_path)
+            with self._measure("matrix_csv"):
+                matrix_csv_path = self.matrix_csv_dir / f"{base_name}_matrix.csv"
+                self._write_matrix_csv(matrix_csv_path, result)
+                outputs["matrix_csv"] = str(matrix_csv_path)
 
         if self.output_config.get("save_json", True):
-            json_path = self.json_dir / f"{base_name}.json"
-            with json_path.open("w", encoding="utf-8") as handle:
-                json.dump(self._json_safe_result(result, outputs), handle, ensure_ascii=False, indent=2)
-            outputs["json"] = str(json_path)
+            if self.profiler is not None:
+                result.setdefault("execution", {})["performance"] = self.profiler.snapshot()
+            with self._measure("json"):
+                json_path = self.json_dir / f"{base_name}.json"
+                with json_path.open("w", encoding="utf-8") as handle:
+                    json.dump(self._json_safe_result(result, outputs), handle, ensure_ascii=False, indent=2)
+                outputs["json"] = str(json_path)
 
         self.logger.info("Report outputs written: outputs=%s", outputs)
         return outputs
+
+    def _measure(self, name: str):
+        if self.profiler is None:
+            return nullcontext()
+        return self.profiler.measure(f"report:{name}")
 
     @staticmethod
     def _json_safe_result(result: dict, outputs: dict[str, str]) -> dict:

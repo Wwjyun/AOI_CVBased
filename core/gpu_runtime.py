@@ -3,6 +3,7 @@ from __future__ import annotations
 import ctypes
 import sys
 import threading
+import time
 from pathlib import Path
 
 import numpy as np
@@ -19,6 +20,7 @@ class GpuRuntime:
     ABI_VERSION = 1
 
     def __init__(self, dll_path: str | Path = DEFAULT_DLL, fallback_to_cpu: bool = True, enabled: bool = True):
+        load_started = time.perf_counter()
         self.requested_path = str(dll_path or self.DEFAULT_DLL)
         self.fallback_to_cpu = bool(fallback_to_cpu)
         self.dll_path = self._resolve_path(self.requested_path)
@@ -29,8 +31,19 @@ class GpuRuntime:
         self.compute_capability = ""
         self.unavailable_reason = ""
         self.last_error = ""
+        self._performance = {
+            "load_sec": 0.0,
+            "call_count": 0,
+            "estimated_round_trips": 0,
+            "host_to_device_bytes": 0,
+            "device_to_host_bytes": 0,
+            "wall_sec": 0.0,
+            "lock_wait_sec": 0.0,
+            "functions": {},
+        }
         if enabled:
             self._load()
+            self._performance["load_sec"] = time.perf_counter() - load_started
 
     @property
     def available(self) -> bool:
@@ -52,6 +65,32 @@ class GpuRuntime:
             "compute_capability": self.compute_capability,
             "fallback_reason": (self.unavailable_reason if not self.available else self.last_error) if requested else "",
         }
+
+    def performance_stats(self) -> dict:
+        """Return host-observed CUDA call metrics; DLL-internal phases are not separable in ABI v1."""
+        with self._lock:
+            functions = {
+                name: {
+                    "calls": int(values["calls"]),
+                    "host_to_device_bytes": int(values["host_to_device_bytes"]),
+                    "device_to_host_bytes": int(values["device_to_host_bytes"]),
+                    "wall_sec": round(float(values["wall_sec"]), 6),
+                    "lock_wait_sec": round(float(values["lock_wait_sec"]), 6),
+                }
+                for name, values in sorted(self._performance["functions"].items())
+            }
+            return {
+                "measurement_scope": "synchronous_host_wrapper_estimate",
+                "note": "ABI v1 combines allocation, H2D, kernel, synchronize, D2H and free in one call.",
+                "load_sec": round(float(self._performance["load_sec"]), 6),
+                "call_count": int(self._performance["call_count"]),
+                "estimated_round_trips": int(self._performance["estimated_round_trips"]),
+                "host_to_device_bytes": int(self._performance["host_to_device_bytes"]),
+                "device_to_host_bytes": int(self._performance["device_to_host_bytes"]),
+                "wall_sec": round(float(self._performance["wall_sec"]), 6),
+                "lock_wait_sec": round(float(self._performance["lock_wait_sec"]), 6),
+                "functions": functions,
+            }
 
     def crop(self, image: np.ndarray, x: int, y: int, width: int, height: int) -> np.ndarray:
         source = self._u8_image(image, channels=(1, 3))
@@ -183,12 +222,53 @@ class GpuRuntime:
             int(output.strides[0]),
             int(dst_channels),
         )
+        queued = time.perf_counter()
         with self._lock:
+            lock_acquired = time.perf_counter()
             result = int(function(*common, *extra))
+            completed = time.perf_counter()
+            self._record_performance(
+                function_name,
+                int(source.nbytes),
+                int(output.nbytes),
+                completed - lock_acquired,
+                lock_acquired - queued,
+            )
         if result != 0:
             raise GpuRuntimeError(
                 f"{function_name} failed with CUDA DLL error {result}: {self._error_message(result)}"
             )
+
+    def _record_performance(
+        self,
+        function_name: str,
+        host_to_device_bytes: int,
+        device_to_host_bytes: int,
+        wall_sec: float,
+        lock_wait_sec: float,
+    ) -> None:
+        functions = self._performance["functions"]
+        values = functions.setdefault(
+            function_name,
+            {
+                "calls": 0,
+                "host_to_device_bytes": 0,
+                "device_to_host_bytes": 0,
+                "wall_sec": 0.0,
+                "lock_wait_sec": 0.0,
+            },
+        )
+        values["calls"] += 1
+        values["host_to_device_bytes"] += host_to_device_bytes
+        values["device_to_host_bytes"] += device_to_host_bytes
+        values["wall_sec"] += wall_sec
+        values["lock_wait_sec"] += lock_wait_sec
+        self._performance["call_count"] += 1
+        self._performance["estimated_round_trips"] += 1
+        self._performance["host_to_device_bytes"] += host_to_device_bytes
+        self._performance["device_to_host_bytes"] += device_to_host_bytes
+        self._performance["wall_sec"] += wall_sec
+        self._performance["lock_wait_sec"] += lock_wait_sec
 
     def _error_message(self, error_code: int) -> str:
         function = getattr(self._dll, "vf_gpu_error_message", None)

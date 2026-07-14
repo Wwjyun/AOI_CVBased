@@ -9,6 +9,7 @@ from core.detector_manager import DetectorManager
 from core.image_loader import load_image
 from core.gpu_runtime import GpuRuntime, GpuRuntimeError
 from core.logging_system import LogMixin
+from core.performance import PipelineProfiler
 from core.recipe_manager import RecipeManager
 from core.recipe_builder import RecipeTemplatePathSync
 from core.reporter import Reporter
@@ -35,6 +36,7 @@ class AOIPipeline(LogMixin):
 
     def run(self, image_path: Path) -> dict:
         started = time.perf_counter()
+        profiler = PipelineProfiler()
         self.logger.info(
             "Inspection started: image=%s recipe=%s output=%s debug=%s",
             image_path,
@@ -43,20 +45,21 @@ class AOIPipeline(LogMixin):
             self.debug,
         )
         self._progress(0, "Starting inspection")
-        recipe = self.recipe_manager.load(self.recipe_path)
-        if self.output_overrides:
-            recipe["output"] = {**recipe.get("output", {}), **self.output_overrides}
-        recipe = RecipeTemplatePathSync.from_recipe(recipe).apply(recipe)
-        gpu_config = recipe.get("gpu", {}) or {}
-        detector_configs = self.recipe_manager.enabled_detectors(recipe)
-        gpu_requested = bool(gpu_config.get("tiling", False)) or any(
-            bool(config.get("use_gpu", False)) for config in detector_configs.values()
-        )
-        gpu_runtime = GpuRuntime(
-            gpu_config.get("dll_path", GpuRuntime.DEFAULT_DLL),
-            fallback_to_cpu=gpu_config.get("fallback_to_cpu", True),
-            enabled=gpu_requested,
-        )
+        with profiler.measure("recipe_setup"):
+            recipe = self.recipe_manager.load(self.recipe_path)
+            if self.output_overrides:
+                recipe["output"] = {**recipe.get("output", {}), **self.output_overrides}
+            recipe = RecipeTemplatePathSync.from_recipe(recipe).apply(recipe)
+            gpu_config = recipe.get("gpu", {}) or {}
+            detector_configs = self.recipe_manager.enabled_detectors(recipe)
+            gpu_requested = bool(gpu_config.get("tiling", False)) or any(
+                bool(config.get("use_gpu", False)) for config in detector_configs.values()
+            )
+            gpu_runtime = GpuRuntime(
+                gpu_config.get("dll_path", GpuRuntime.DEFAULT_DLL),
+                fallback_to_cpu=gpu_config.get("fallback_to_cpu", True),
+                enabled=gpu_requested,
+            )
         if gpu_requested and not gpu_runtime.available and not gpu_runtime.fallback_to_cpu:
             raise GpuRuntimeError(gpu_runtime.unavailable_reason)
         if gpu_requested and gpu_runtime.available:
@@ -70,55 +73,69 @@ class AOIPipeline(LogMixin):
             self.logger.warning("CUDA requested; falling back to CPU: %s", gpu_runtime.unavailable_reason)
         self.logger.info("Recipe loaded: name=%s version=%s", recipe.get("recipe_name"), recipe.get("version"))
         self._progress(5, "Recipe loaded")
-        image = load_image(image_path)
+        with profiler.measure("image_load"):
+            image = load_image(image_path)
         self.logger.info("Image loaded: image=%s shape=%s", image_path, getattr(image, "shape", None))
         self._progress(10, "Image loaded")
-        tile_config = recipe["tile"]
-        tiler = create_tiler(tile_config, gpu_runtime=gpu_runtime if gpu_config.get("tiling", False) else None)
-        detectors = self.detector_manager.create_enabled(detector_configs, gpu_runtime=gpu_runtime)
+        with profiler.measure("initialization"):
+            tile_config = recipe["tile"]
+            tiler = create_tiler(tile_config, gpu_runtime=gpu_runtime if gpu_config.get("tiling", False) else None)
+            detectors = self.detector_manager.create_enabled(detector_configs, gpu_runtime=gpu_runtime)
         self.logger.info("Detectors initialized: count=%s ids=%s", len(detectors), [d.detector_id for d in detectors])
         self._progress(15, "Detectors initialized")
 
-        tiles = list(tiler.iter_tiles(image))
+        with profiler.measure("tiling"):
+            tiles = list(tiler.iter_tiles(image))
+        tiling_gpu_metrics = gpu_runtime.performance_stats()
+        crop_metrics = tiling_gpu_metrics.get("functions", {}).get("vf_crop_u8", {})
+        if gpu_config.get("tiling", False) and crop_metrics.get("calls", 0) > 1:
+            self.logger.warning(
+                "CUDA tiling performed %s synchronous crop round trips and estimated %s H2D bytes; "
+                "keep gpu.tiling disabled for performance until source buffers are reusable",
+                crop_metrics["calls"],
+                crop_metrics["host_to_device_bytes"],
+            )
         self.logger.info("Tiles prepared: count=%s mode=%s", len(tiles), tile_config.get("mode", "grid"))
         self._progress(20, f"Tiles prepared: {len(tiles)}")
 
         tile_results = []
         total_work = max(len(tiles) * max(len(detectors), 1), 1)
         completed_work = 0
-        for tile_index, tile in enumerate(tiles, start=1):
-            detector_results = []
-            for detector in detectors:
-                detector_result = detector.run(tile.image)
-                detector_results.append(map_tile_result_to_global(tile, detector_result))
-                completed_work += 1
-                percent = 20 + int(completed_work / total_work * 60)
-                self._progress(
-                    min(percent, 80),
-                    f"Inspecting tile {tile_index}/{len(tiles)} with detector {detector.detector_id}",
+        with profiler.measure("detectors_total"):
+            for tile_index, tile in enumerate(tiles, start=1):
+                detector_results = []
+                for detector in detectors:
+                    with profiler.measure(f"detector:{detector.detector_id}"):
+                        detector_result = detector.run(tile.image)
+                        detector_results.append(map_tile_result_to_global(tile, detector_result))
+                    completed_work += 1
+                    percent = 20 + int(completed_work / total_work * 60)
+                    self._progress(
+                        min(percent, 80),
+                        f"Inspecting tile {tile_index}/{len(tiles)} with detector {detector.detector_id}",
+                    )
+
+                if not detectors:
+                    completed_work += 1
+                    percent = 20 + int(completed_work / total_work * 60)
+                    self._progress(min(percent, 80), f"Preparing tile {tile_index}/{len(tiles)}")
+
+                tile_results.append(
+                    {
+                        "tile": {
+                            "tile_id": tile.tile_id,
+                            "x": tile.x,
+                            "y": tile.y,
+                            "width": tile.width,
+                            "height": tile.height,
+                            "row": tile.row,
+                            "col": tile.col,
+                            "metadata": tile.metadata or {},
+                        },
+                        "detectors": detector_results,
+                        "_tile_image": tile.image,
+                    }
                 )
-
-            if not detectors:
-                completed_work += 1
-                percent = 20 + int(completed_work / total_work * 60)
-                self._progress(min(percent, 80), f"Preparing tile {tile_index}/{len(tiles)}")
-
-            tile_results.append(
-                {
-                    "tile": {
-                        "tile_id": tile.tile_id,
-                        "x": tile.x,
-                        "y": tile.y,
-                        "width": tile.width,
-                        "height": tile.height,
-                        "row": tile.row,
-                        "col": tile.col,
-                        "metadata": tile.metadata or {},
-                    },
-                    "detectors": detector_results,
-                    "_tile_image": tile.image,
-                }
-            )
 
         detector_fallbacks = {
             detector.detector_id: detector.gpu_fallback_reason
@@ -131,7 +148,8 @@ class AOIPipeline(LogMixin):
             not gpu_runtime.available or gpu_runtime.last_error or detector_fallbacks
         ) else ""
         self._progress(85, f"Aggregating PASS / NG result{fallback_message}")
-        aggregate = Aggregator(recipe["decision"]).aggregate(tile_results)
+        with profiler.measure("aggregation"):
+            aggregate = Aggregator(recipe["decision"]).aggregate(tile_results)
         result = {
             "image_name": Path(image_path).name,
             "recipe_name": recipe["recipe_name"],
@@ -156,14 +174,19 @@ class AOIPipeline(LogMixin):
                         }
                         for detector in detectors
                     },
-                }
+                    "metrics": gpu_runtime.performance_stats(),
+                },
+                "performance": profiler.snapshot(),
             },
         }
 
         serializable_result = self._without_runtime_images(result)
         self._progress(92, "Writing overlay, CSV, and JSON")
-        outputs = Reporter(self.output_dir, recipe["output"]).write(image, result)
+        with profiler.measure("reporting_total"):
+            outputs = Reporter(self.output_dir, recipe["output"], profiler=profiler).write(image, result)
         serializable_result["outputs"] = outputs
+        serializable_result["execution"]["gpu"]["metrics"] = gpu_runtime.performance_stats()
+        serializable_result["execution"]["performance"] = profiler.snapshot()
         self.logger.info(
             "Inspection completed: image=%s final=%s defects=%s ng_tiles=%s duration=%.3fs",
             Path(image_path).name,
@@ -172,6 +195,9 @@ class AOIPipeline(LogMixin):
             serializable_result["summary"].get("ng_count", 0),
             serializable_result["duration_sec"],
         )
+        self.logger.info("Inspection performance: %s", serializable_result["execution"]["performance"])
+        if gpu_requested:
+            self.logger.info("CUDA host metrics: %s", serializable_result["execution"]["gpu"]["metrics"])
         self._progress(100, "Inspection complete")
         return serializable_result
 
