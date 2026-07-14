@@ -1,5 +1,11 @@
 # VisionFlow CUDA DLL
 
+## Preprocessing architecture
+
+Detectors must describe preprocessing with the backend-neutral operators in `core/preprocess_plan.py`. The CPU executor defines OpenCV fallback semantics; the CUDA executor may use reusable primitives or a compatible fused adapter. New detectors should compose existing operators instead of adding detector-named DLL exports. The planned native direction is a versioned generic plan ABI with persistent context buffers and one upload/download per supported plan.
+
+`vf_preprocess_401_2_u8` remains an additive ABI v1 compatibility adapter. It is not the template for future detector APIs.
+
 `visionflow_cuda.dll` 是 AOI 的可選 CUDA backend。Recipe 未勾選 GPU 時不載入它；勾選但 DLL/裝置不可用時，依 `fallback_to_cpu` 決定回退 CPU 或明確失敗。
 
 目前 Gaussian blur 使用 horizontal/vertical separable kernels 與 constant weights；Adaptive Mean Threshold 使用 replicate-border 64-bit integral image。公開 C ABI 維持 v1，因此 Python bridge 與既有打包版介面不需修改，但更新原始碼後必須重新編譯 DLL。

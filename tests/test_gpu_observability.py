@@ -12,6 +12,16 @@ import yaml
 from core.gpu_runtime import GpuRuntime
 from core.performance import PipelineProfiler
 from core.pipeline import AOIPipeline
+from core.preprocess_plan import (
+    AdaptiveMean,
+    CpuPreprocessExecutor,
+    CudaPreprocessExecutor,
+    Gaussian,
+    Gray,
+    PreprocessPlan,
+    Resize,
+    UnsupportedPreprocessPlan,
+)
 from detectors.detector_401_2 import Detector401_2
 from gpu.validate_cuda_dll import compare
 
@@ -73,6 +83,28 @@ class _FailingFusedRuntimeStub:
     @staticmethod
     def preprocess_401_2(*_args):
         raise RuntimeError("injected fused failure")
+
+
+class _PrimitiveRuntimeStub:
+    supports_fused_401_2 = False
+
+    def __init__(self):
+        self.calls = []
+
+    def bgr_to_gray(self, image):
+        self.calls.append("gray")
+        return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+    def gaussian_blur(self, image, kernel_size):
+        self.calls.append("gaussian")
+        return cv2.GaussianBlur(image, (kernel_size, kernel_size), 0)
+
+    def adaptive_threshold(self, image, block_size, c, max_value, invert):
+        self.calls.append("adaptive_mean")
+        threshold_type = cv2.THRESH_BINARY_INV if invert else cv2.THRESH_BINARY
+        return cv2.adaptiveThreshold(
+            image, max_value, cv2.ADAPTIVE_THRESH_MEAN_C, threshold_type, block_size, c
+        )
 
 
 class PipelineProfilerTests(unittest.TestCase):
@@ -166,6 +198,45 @@ class DetectorFusedRoutingTests(unittest.TestCase):
         self.assertFalse(result["execution"]["gpu_active"])
         self.assertEqual(result["execution"]["backend"], "cpu")
         self.assertIn("injected fused failure", result["execution"]["fallback_reason"])
+
+
+class PreprocessPlanTests(unittest.TestCase):
+    @staticmethod
+    def _plan():
+        return PreprocessPlan(
+            name="shared_threshold_plan",
+            operations=(Gray(), Gaussian(3), AdaptiveMean(3, -2.0, 255, True)),
+        )
+
+    def test_cpu_executor_matches_direct_opencv_pipeline(self):
+        image = np.random.default_rng(17).integers(0, 256, size=(31, 37, 3), dtype=np.uint8)
+        expected_gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        expected_blur = cv2.GaussianBlur(expected_gray, (3, 3), 0)
+        expected = cv2.adaptiveThreshold(
+            expected_blur, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, 3, -2.0
+        )
+
+        actual = CpuPreprocessExecutor().execute(image, self._plan())
+
+        np.testing.assert_array_equal(actual, expected)
+
+    def test_cuda_executor_uses_reusable_primitives_when_fused_export_is_missing(self):
+        image = np.random.default_rng(18).integers(0, 256, size=(21, 25, 3), dtype=np.uint8)
+        runtime = _PrimitiveRuntimeStub()
+
+        actual = CudaPreprocessExecutor(runtime).execute(image, self._plan())
+        expected = CpuPreprocessExecutor().execute(image, self._plan())
+
+        np.testing.assert_array_equal(actual, expected)
+        self.assertEqual(runtime.calls, ["gray", "gaussian", "adaptive_mean"])
+
+    def test_cuda_executor_rejects_non_equivalent_area_resize(self):
+        plan = PreprocessPlan(operations=(Gray(), Resize(10, 10, "area")))
+
+        with self.assertRaisesRegex(UnsupportedPreprocessPlan, "cannot preserve area"):
+            CudaPreprocessExecutor(_PrimitiveRuntimeStub()).execute(
+                np.zeros((20, 20, 3), dtype=np.uint8), plan
+            )
 
 
 class ComparisonToleranceTests(unittest.TestCase):

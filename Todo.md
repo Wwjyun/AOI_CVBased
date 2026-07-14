@@ -147,3 +147,4 @@
 - [x] 2026-07-14 啟動 GPU M0 優化：新增 OOP pipeline/reporter profiler、ABI v1 CUDA 呼叫與估算傳輸統計、重複 GPU crop 警告、容差測試修正，以及 CPU-only/缺 DLL fallback 等價回歸。
 - [x] 2026-07-14 完成 GPU M1 原始碼：Gaussian 改 separable/constant weights，Adaptive Mean 改 64-bit integral image，擴充 structured CPU/GPU 測例與 4K kernel benchmark；待 RTX 3090 重編 DLL 實測。
 - [x] 2026-07-14 完成 GPU M2 第一階段：新增 optional persistent context ABI、grow-only device buffers/context stats、401-2 單次 upload fused preprocessing；保留舊 DLL stateless GPU 與無 GPU 純 CPU fallback。
+- [x] 2026-07-14 啟動通用 GPU preprocessing 長期架構：新增 immutable PreprocessPlan、typed operators、CPU/CUDA executors，並將 401-2 改為宣告共用 plan；既有 detector-specific fused export 降為相容 adapter，後續改走 generic native plan ABI。

@@ -1,5 +1,37 @@
 # VisionFlow AOI GPU 優化清單
 
+## 長期架構：可組合 Preprocess Plan（2026-07-14 更新）
+
+原則：不得再以「一個 detector 對應一個 CUDA workflow/export」作為主要擴充方式。Detector 只宣告 backend-neutral plan；CPU/CUDA executor 共用同一份算子與參數語意。既有 `vf_preprocess_401_2_u8` 暫時保留為相容與效能 adapter，不再照此模式增加 detector-specific exports。
+
+### Python/OOP execution layer
+
+- [x] 建立 immutable `PreprocessPlan` 與 typed operators：Gray、Resize、Gaussian、Threshold、AdaptiveMean、Morphology。
+- [x] 建立 `CpuPreprocessExecutor`，以 OpenCV 結果作為 CPU fallback 與等價基準。
+- [x] 建立 `CudaPreprocessExecutor`；可重用 stateless primitives，並將符合的 plan 導向既有 401-2 fused adapter。
+- [x] `BaseDetector.execute_preprocess_plan()` 統一選擇 executor；GPU 失敗仍由整個 detector CPU 重跑。
+- [x] 第一個遷移案例：401-2 只宣告 Gray → Gaussian → AdaptiveMean，不再直接呼叫 CUDA primitives/export。
+- [x] CUDA executor 遇到尚未等價的 `INTER_AREA` resize 時拒絕執行並 fallback，不靜默改成 nearest-neighbor。
+- [ ] 將 401-1、401 與 900 preprocessing 依序遷移為 plan；遷移期間保持 recipe 與 CPU 結果相容。
+- [ ] 將 plan 建立移出每次 tile 熱路徑，依 detector params/shape cache immutable plan。
+
+### Generic native plan ABI
+
+- [ ] 定義 versioned C structs：operator kind、input node、參數、output node；不得包含 detector ID/name。
+- [ ] 新增通用 `vf_plan_create/execute/destroy` optional exports，舊 ABI v1 primitive 與 401-2 adapter 保持可用。
+- [ ] DLL 在 plan create 階段驗證 operator、channel、shape、參數與輸出，execute 階段只處理資料。
+- [ ] 將 Gray、Gaussian、AdaptiveMean、Threshold、Morphology 接入通用 native executor，一次 H2D、最後一次 D2H。
+- [ ] 實作 OpenCV `INTER_AREA` 等價 resize 後再開放 CUDA Resize(area)，不得以 nearest 取代。
+- [ ] plan/context 共用 grow-only buffer pool、Gaussian weights cache、integral scratch 與 morphology ping-pong buffers。
+- [ ] 加入 plan capability query；任何不支援算子都讓整份 plan CPU fallback，不混用部分 CPU/GPU round trips。
+
+### DAG、重用與退場條件
+
+- [ ] 線性 plan 穩定後擴充 DAG/multi-output，讓 900 共用一份 device gray 產生 global/adaptive masks。
+- [ ] 以 plan signature + input shape cache native plan；跨 tiles/圖片重用，參數或 shape 改變時安全重建。
+- [ ] CPU/CUDA executor 對每個 operator 與完整 plan 建立 structured、edge-case、production recipe 等價矩陣。
+- [ ] 401/401-1/401-2/900 全部遷移且 RTX 3090 驗收後，才評估 deprecated detector-specific adapter 的移除版本。
+
 ## 目前實測結論
 
 - [x] `visionflow_cuda.dll` 已成功編譯。

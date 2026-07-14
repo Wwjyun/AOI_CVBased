@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 
+from core.preprocess_plan import CpuPreprocessExecutor, CudaPreprocessExecutor, PreprocessPlan
+
 
 class BaseDetector:
     detector_id = ""
@@ -18,6 +20,8 @@ class BaseDetector:
         self.gpu_fallback_reason = ""
         if self.use_gpu and (gpu_runtime is None or not gpu_runtime.available):
             self.gpu_fallback_reason = getattr(gpu_runtime, "unavailable_reason", "CUDA runtime was not created")
+        self._cpu_preprocess_executor = CpuPreprocessExecutor()
+        self._cuda_preprocess_executor = CudaPreprocessExecutor(gpu_runtime) if gpu_runtime is not None else None
 
     @property
     def gpu_active(self) -> bool:
@@ -28,6 +32,11 @@ class BaseDetector:
 
     def detect(self, image) -> list[dict]:
         raise NotImplementedError
+
+    def execute_preprocess_plan(self, image, plan: PreprocessPlan):
+        if self.gpu_active and self._cuda_preprocess_executor is not None:
+            return self._cuda_preprocess_executor.execute(image, plan)
+        return self._cpu_preprocess_executor.execute(image, plan)
 
     def run(self, image) -> dict:
         try:

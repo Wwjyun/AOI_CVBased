@@ -3,6 +3,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+from core.preprocess_plan import AdaptiveMean, Gaussian, Gray, PreprocessPlan
 from detectors.base_detector import BaseDetector
 
 
@@ -23,10 +24,8 @@ class Detector401_2(BaseDetector):
     }
 
     def preprocess(self, image):
-        if self.gpu_active and self.gpu_runtime.supports_fused_401_2:
+        if self.gpu_active:
             return image.copy()
-        if self.gpu_active and image.ndim == 3:
-            return self.gpu_runtime.bgr_to_gray(image)
         return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image.copy()
 
     def detect(self, image) -> list[dict]:
@@ -104,33 +103,20 @@ class Detector401_2(BaseDetector):
     def _make_binary(self, gray):
         blur_size = self._odd_at_least(int(self.params.get("blur_size", 25)), 3)
         block_size = self._odd_at_least(int(self.params.get("adaptive_block_size", 35)), 3)
-        if self.gpu_active and self.gpu_runtime.supports_fused_401_2:
-            return self.gpu_runtime.preprocess_401_2(
-                gray,
-                blur_size,
-                block_size,
-                float(self.params.get("adaptive_c", -2.0)),
-                int(self.params.get("max_value", 255)),
-                True,
-            )
-        if self.gpu_active:
-            blurred = self.gpu_runtime.gaussian_blur(gray, blur_size)
-            return self.gpu_runtime.adaptive_threshold(
-                blurred,
-                block_size,
-                float(self.params.get("adaptive_c", -2.0)),
-                int(self.params.get("max_value", 255)),
-                True,
-            )
-        blurred = cv2.GaussianBlur(gray, (blur_size, blur_size), 0)
-        return cv2.adaptiveThreshold(
-            blurred,
-            int(self.params.get("max_value", 255)),
-            cv2.ADAPTIVE_THRESH_MEAN_C,
-            cv2.THRESH_BINARY_INV,
-            block_size,
-            float(self.params.get("adaptive_c", -2.0)),
+        plan = PreprocessPlan(
+            name="gray_gaussian_adaptive_mean",
+            operations=(
+                Gray(),
+                Gaussian(blur_size),
+                AdaptiveMean(
+                    block_size=block_size,
+                    c=float(self.params.get("adaptive_c", -2.0)),
+                    max_value=int(self.params.get("max_value", 255)),
+                    invert=True,
+                ),
+            ),
         )
+        return self.execute_preprocess_plan(gray, plan)
 
     def _contour_mode(self) -> int:
         mode = str(self.params.get("contour_mode", "list")).lower()
