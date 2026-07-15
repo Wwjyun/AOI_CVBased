@@ -1,62 +1,52 @@
 # VisionFlow AOI
 
-Recipe-based AOI computer vision framework built with Python, OpenCV, and PySide6.
+以 Python、OpenCV 與 PySide6 打造的配方驅動 AOI（自動光學檢測）系統。
 
-This repository is a practical AOI inspection system, not just a detector demo. It contains a reusable inspection pipeline, YAML recipe configuration, multiple tiling strategies, pluggable classical CV detectors, a desktop GUI, batch inspection, folder monitoring, report export, rotating logs, and Windows executable packaging.
+VisionFlow AOI 不只是單一 Detector 範例，而是一套可實際延伸的檢測框架：同一條核心 Pipeline 可供 CLI、桌面 GUI、批次檢測與資料夾監控共用，並透過 YAML 配方調整切圖、Detector、判定及輸出行為。系統以 CPU 為正確性基準，另提供可選的 CUDA DLL 加速後端；未安裝 NVIDIA GPU 或 DLL 時，仍可完整使用 CPU 模式。
 
-The current implementation is aimed at small-to-medium production inspection scenarios where the defect rules can be described by deterministic computer vision logic and tuned through recipes.
+## 目前功能
 
-## Current Status
+- CLI 單張影像檢測。
+- PySide6 桌面 GUI。
+- YAML 配方載入、驗證、編輯與儲存。
+- 固定網格、模板定位網格、輪廓及模板比對四種切圖方式。
+- `401`、`401-1`、`401-2`、`900` 四個傳統電腦視覺 Detector。
+- 單張檢測、批次資料夾檢測及新檔案監控。
+- OP、Engineer、Admin 三種 GUI 操作模式。
+- Overlay、NG 小圖、缺陷 CSV、矩陣 CSV、JSON 與輪替日誌。
+- 批次統計 Dashboard 與散佈圖。
+- PyInstaller Windows 執行檔打包。
+- 可選 CUDA DLL、CPU fallback、效能觀測及 CPU/GPU 前處理抽象層。
 
-The project has moved beyond the original CLI MVP. The current scope includes:
+目前仍待完成的重點包括：建立正式標註資料集、五份 production recipes 的完整 CPU/GPU 等價驗收、RTX 3090 長時間穩定度與效能測試、完整 CI，以及更多 Detector 的通用 CUDA plan 遷移。詳細進度以 [`Todo.md`](Todo.md) 為準。
 
-- CLI single-image inspection through `main.py`.
-- PySide6 desktop GUI launched by `python main.py --gui`.
-- Recipe-driven detector and tiling configuration.
-- Grid, template-anchored grid, contour, and pattern-match tiling.
-- Detector registry with production-oriented detectors `401`, `401-1`, `401-2`, and `900`.
-- Single-image GUI inspection with overlay, result table, thumbnails, and report links.
-- Recipe Designer with tiling preview, detector enable/disable, editable parameters, and YAML saving.
-- Batch folder inspection with optional recursive scan and parallel workers.
-- Batch Dashboard with pass rate, tile statistics, defect ranking, and scatter chart.
-- Folder monitor mode that watches for newly added stable images and processes them one by one.
-- OP / Engineer / Admin mode separation in the GUI.
-- Output toggles for overlay, NG tiles, CSV, matrix CSV, and JSON.
-- Rotating file logging for CLI, GUI workers, pipeline, reporter, batch, and monitor processors.
-- Windows executable packaging through PyInstaller.
-- Release packages named `VisionFlow-AOI-vX.Y.Z-windows-x64.zip`.
+## 設計目標
 
-Known remaining work:
+AOI 專案若將每種產品的規則硬寫在程式內，往往很快就難以維護。VisionFlow AOI 將可調整的檢測行為放進 YAML 配方，讓工程人員可在不改動核心 Pipeline 的情況下調整產品規格。
 
-- Build a formal validation dataset with expected PASS / NG labels.
-- Add full per-detector debug image export for all detectors.
-- Add AI detector plugin support when model-based inspection is needed.
-- Improve long-term production integrations such as MES, operator ID, lot ID, station ID, and recipe history.
+主要原則如下：
 
-## Why This Project Exists
+- GUI 與檢測核心分離，所有執行方式共用 `AOIPipeline`。
+- Detector 參數可見、可調且可保存。
+- 以影像、CSV、JSON、矩陣 CSV 與日誌保留追溯資料。
+- 同時支援工程調機及產線 OP 工作流程。
+- 新 Detector 可透過統一介面加入，不必修改 Pipeline。
+- CPU-only 是完整支援的產品模式，也是結果正確性的基準。
+- GPU 發生載入、初始化、kernel 或記憶體錯誤時，可依配方安全回退 CPU。
 
-AOI projects often fail when every product variant requires hard-coded inspection logic. This project uses a recipe-based architecture so inspection behavior can be changed by editing YAML instead of rewriting the pipeline.
+## 技術與環境
 
-The design goals are:
+- Windows 10／11
+- Python 3.10 以上版本（建議）
+- OpenCV：影像處理與傳統 CV Detector
+- NumPy：數值運算
+- Pillow：大型影像載入與預覽轉換
+- PyYAML：配方讀寫
+- PySide6：桌面 GUI
+- PyInstaller：Windows 打包
+- CUDA Toolkit 與 NVIDIA GPU：僅 CUDA 加速功能需要
 
-- Keep the inspection core independent from the GUI.
-- Make detector parameters visible and tunable.
-- Preserve traceability through JSON, CSV, images, matrix CSV, and logs.
-- Support both engineering workflows and OP production workflows.
-- Allow new classical CV detectors to be added without changing the pipeline.
-- Keep outputs readable by engineers, production staff, and downstream tools.
-
-## Technology Stack
-
-- Python 3.10 or newer recommended.
-- OpenCV for image processing and detector implementation.
-- NumPy for numeric operations.
-- Pillow for safer large-image loading and preview conversion.
-- PyYAML for recipe loading.
-- PySide6 for the desktop GUI.
-- PyInstaller for Windows executable packaging.
-
-Dependencies are declared in `requirements.txt`:
+相依套件定義在 `requirements.txt`：
 
 ```text
 opencv-python>=4.9.0
@@ -67,448 +57,152 @@ PySide6>=6.7.0
 PyInstaller>=6.14.0
 ```
 
-## Repository Layout
+## 快速開始
+
+### 1. 建立環境並安裝套件
+
+專案已預期使用根目錄下的 `env` 虛擬環境：
+
+```powershell
+cd C:\Users\王\Desktop\AOI_CVbased
+py -m venv env
+.\env\Scripts\python.exe -m pip install -r requirements.txt
+```
+
+若 `env` 已存在，只需執行安裝指令。
+
+### 2. 啟動 GUI
+
+```powershell
+.\env\Scripts\python.exe main.py --gui
+```
+
+### 3. 執行 CLI 單張檢測
+
+```powershell
+.\env\Scripts\python.exe main.py `
+  --image C:\path\to\image.png `
+  --recipe recipes\PRODUCT_A_FRAME_900_AOI_01.yaml `
+  --output outputs
+```
+
+CLI 會將摘要輸出為 JSON。最終結果為 `PASS` 時結束碼是 `0`，為 `NG` 時是 `2`；配方、影像或執行階段錯誤則會回傳其他非零結束碼。
+
+除錯與日誌選項：
+
+```powershell
+.\env\Scripts\python.exe main.py `
+  --image C:\path\to\image.png `
+  --recipe recipes\PRODUCT_A_FRAME_900_AOI_01.yaml `
+  --output outputs `
+  --debug `
+  --log-level DEBUG `
+  --log-dir outputs\logs
+```
+
+也可透過環境變數設定日誌：
+
+```powershell
+$env:AOI_LOG_LEVEL = 'DEBUG'
+$env:AOI_LOG_DIR = 'outputs\logs'
+```
+
+## 專案結構
 
 ```text
-.
-|-- main.py                         # CLI and GUI entry point
-|-- gui_launcher.py                 # GUI launcher helper for packaging
-|-- build_exe.ps1                   # PyInstaller build script
-|-- VisionFlow AOI.spec             # PyInstaller spec
+AOI_CVbased/
+|-- main.py                         # CLI／GUI 入口
+|-- gui_launcher.py                 # 打包用 GUI 啟動器
+|-- build_exe.ps1                   # PyInstaller 打包腳本
+|-- VisionFlow AOI.spec             # PyInstaller 設定
 |-- requirements.txt
-|-- README.md
-|-- PROJECT_REPORT.md               # project report notes
-|-- WEEKLY_UPDATE_2026-06-24_to_2026-07-01.md
-|-- export_scatter_plots.py         # standalone scatter plot exporter
-|-- export_matrix_summary.py        # standalone matrix summary exporter
+|-- Todo.md                         # 唯一專案工作清單
 |-- core/
-|   |-- image_loader.py             # image loading, supported extensions, PIL/OpenCV bridge
-|   |-- tiler.py                    # grid, anchored grid, contour, pattern-match tilers
-|   |-- pipeline.py                 # inspection orchestration
-|   |-- recipe_manager.py           # YAML loading and validation
-|   |-- recipe_builder.py           # GUI recipe construction / template path sync
-|   |-- detector_manager.py         # detector registry and factory
-|   |-- aggregator.py               # tile/final PASS-NG aggregation
-|   |-- result_mapper.py            # local bbox to global bbox mapping
-|   |-- result_compactor.py         # compact GUI batch/monitor result representation
-|   |-- reporter.py                 # overlay, NG tile, CSV, matrix CSV, JSON output
-|   |-- logging_system.py           # OOP logging facade and rotating logs
-|   |-- batch_processor.py          # parallel batch folder inspection
-|   |-- batch_dashboard.py          # dashboard statistics and scatter model
-|   `-- monitor_processor.py        # folder monitor processing loop
+|   |-- pipeline.py                 # 檢測流程協調
+|   |-- recipe_manager.py           # 配方載入與驗證
+|   |-- recipe_builder.py           # GUI 配方建立
+|   |-- image_loader.py             # 影像載入
+|   |-- tiler.py                    # 四種切圖策略
+|   |-- detector_manager.py         # Detector registry／factory
+|   |-- preprocess_plan.py          # CPU／CUDA 共用前處理描述與 executor
+|   |-- gpu_runtime.py              # CUDA DLL bridge、能力偵測與 fallback
+|   |-- aggregator.py               # Tile 與整張影像 PASS／NG 彙總
+|   |-- result_mapper.py            # 區域座標映射至原圖座標
+|   |-- reporter.py                 # PNG、CSV、JSON 報告
+|   |-- performance.py              # 效能與 GPU 傳輸觀測
+|   |-- batch_processor.py          # 平行批次處理
+|   `-- monitor_processor.py        # 資料夾監控
 |-- detectors/
-|   |-- base_detector.py            # detector API contract
-|   |-- detector_401.py             # negative-pole rotated rectangle NG detector
-|   |-- detector_401_1.py           # adaptive circle contour NG detector
-|   |-- detector_401_2.py           # adaptive white-ratio contour NG detector
-|   `-- detector_900.py             # dual-frame spacing detector
+|   |-- base_detector.py            # Detector 共用介面
+|   |-- detector_401.py
+|   |-- detector_401_1.py
+|   |-- detector_401_2.py
+|   `-- detector_900.py
 |-- gui/
-|   |-- main_window.py              # desktop app shell, state, threads, mode permissions
-|   |-- workers.py                  # QThread worker objects
-|   |-- image_viewer.py             # image display, overlay interaction
-|   |-- detector_labels.py
-|   |-- icons.py
-|   |-- theme.py
-|   |-- screens/
-|   |   |-- run_screen.py           # single inspection, OP panel, batch controls
-|   |   |-- results_screen.py       # result table, thumbnails, output links
-|   |   |-- designer_screen.py      # recipe designer and tiling preview
-|   |   |-- batch_dashboard_screen.py
-|   |   `-- monitor_screen.py
-|   `-- widgets/
-|       |-- rail.py
-|       |-- topbar.py
-|       |-- panel.py
-|       |-- drawer.py
-|       |-- scatter_chart.py
-|       `-- common.py
-|-- recipes/
-|   |-- PRODUCT_A_AOI_01.yaml
-|   |-- PRODUCT_A_CIRCLE_401_1_AOI_01.yaml
-|   |-- PRODUCT_A_NEGATIVE_401_AOI_01.yaml
-|   |-- PRODUCT_A_WHITE_RATIO_401_2_AOI_01.yaml
-|   `-- PRODUCT_A_FRAME_900_AOI_01.yaml
-|-- outputs/
-|   |-- overlay/
-|   |-- ng_tiles/
-|   |-- csv/
-|   |-- matrix_csv/
-|   |-- json/
-|   `-- logs/
-`-- outputs_validation/              # local validation output, not product data
+|   |-- main_window.py
+|   |-- workers.py                  # Qt 背景工作執行緒
+|   |-- image_viewer.py
+|   |-- screens/                    # Run、Results、Designer、Monitor、Dashboard
+|   `-- widgets/                    # 共用 GUI 元件
+|-- gpu/
+|   |-- include/                    # 公開 C ABI 與內部 CUDA headers
+|   |-- visionflow_cuda.cu          # CUDA kernels 與 DLL exports
+|   |-- test_cuda_api.cu            # C++ smoke test
+|   |-- validate_cuda_dll.py        # CPU／GPU 比對工具
+|   `-- build_cuda_dll.ps1          # CUDA 編譯入口
+|-- recipes/                        # 範例 YAML 配方
+|-- tests/                          # 自動化測試
+|-- outputs/                        # 正式執行輸出
+`-- outputs_validation/             # 本機驗證輸出，不納入版本控制
 ```
 
-## System Architecture
-
-The core inspection flow is intentionally separated from the GUI:
+## 系統流程
 
 ```text
-Image + Recipe
-    |
-    v
-RecipeManager
-    |
-    v
-ImageLoader
-    |
-    v
-create_tiler(recipe["tile"])
-    |
-    v
-DetectorManager.create_enabled(recipe["detectors"])
-    |
-    v
-for each tile:
-    for each detector:
-        detector.run(tile.image)
-        map bbox_local -> bbox_global
-    aggregate tile PASS / NG
-    |
-    v
-Aggregator
-    |
-    v
-Reporter
-    |
-    v
-overlay / NG tiles / CSV / matrix CSV / JSON / logs
+影像 + YAML 配方
+       |
+       v
+RecipeManager -> ImageLoader -> Tiler
+                                  |
+                                  v
+                         DetectorManager
+                                  |
+                         逐 Tile 執行 Detector
+                                  |
+                   bbox_local -> bbox_global
+                                  |
+                                  v
+                       Aggregator -> Reporter
+                                  |
+              Overlay / NG Tiles / CSV / JSON / Logs
 ```
 
-The GUI does not duplicate inspection logic. It calls the same `AOIPipeline` used by CLI and runs the work in Qt worker threads so the UI remains responsive during image loading, inspection, batch processing, and monitor processing.
+GUI 不會複製另一套檢測邏輯，而是由 Qt worker 執行相同的 `AOIPipeline`，因此單張、批次及監控模式能維持一致的配方語意與輸出格式。
 
-## Core Design Concepts
+## YAML 配方
 
-### Recipe-Based Configuration
+配方至少包含下列區段：
 
-A recipe is a YAML file that describes:
+- `recipe_name`、`product_id`、`machine_id`、`version`
+- `tile`：切圖方式及參數
+- `decision`：整張影像的判定規則
+- `detectors`：啟用的 Detector 與參數
+- `output`：輸出開關
+- `gpu`：可選的 CUDA 設定
 
-- Product and machine metadata.
-- Tiling strategy.
-- Decision rule.
-- Enabled detectors.
-- Detector display names.
-- Detector parameters.
-- Output toggles.
-- Optional asset/template paths.
-
-The pipeline reads the recipe at runtime, validates required sections, creates the requested tiler, creates enabled detectors, and writes outputs according to the recipe and GUI override options.
-
-### Tiling Strategies
-
-The project supports four practical tiling styles:
-
-- Basic grid tiling: fixed `width`, `height`, `overlap_x`, and `overlap_y`.
-- Template-anchored grid: find an anchor by template matching in a search ROI, then create a row/column ROI grid using offsets, ROI size, and gaps.
-- Contour tiling: segment the image, find contours, filter by shape/size/circularity, and crop accepted regions as inspection tiles.
-- Pattern-match tiling: find repeated template matches, apply local-peak filtering and NMS, sort top-to-bottom / left-to-right, then inspect each match crop.
-
-Each tile carries metadata:
-
-- `tile_id`
-- `x`, `y`, `width`, `height`
-- `row`, `col`
-- `metadata.mode`
-- mode-specific details such as template score, match bbox, shape, contour geometry, or anchor ROI.
-
-### Detector Contract
-
-All detectors inherit from `BaseDetector` and expose a shared interface:
-
-- `detector_id`
-- `detector_name`
-- `display_name`
-- `default_params`
-- `preprocess(image)`
-- `detect(image)`
-- `run(image)`
-
-Detector output is normalized so the rest of the pipeline can treat all detectors the same:
-
-```python
-{
-    "detector_id": "401-1",
-    "display_name": "401-1 adaptive circle contour detector",
-    "pass": False,
-    "score": 0.92,
-    "defects": [
-        {
-            "type": "401_1_circle_detected_ng",
-            "bbox_local": [x, y, w, h],
-            "bbox_global": [global_x, global_y, w, h],
-            "area": 120.0,
-            "confidence": 0.92,
-            "tile_id": "r0000_c0000",
-            "metadata": {}
-        }
-    ]
-}
-```
-
-### Local-to-Global Mapping
-
-Detectors work on tile-local images. `core/result_mapper.py` maps every defect from tile-local coordinates back to original-image coordinates:
-
-```text
-global_x = tile_x + local_x
-global_y = tile_y + local_y
-```
-
-This allows overlay images, CSV rows, JSON reports, and GUI interactions to refer back to the original image coordinate system.
-
-### Aggregation
-
-`core/aggregator.py` summarizes detector results at tile and image level:
-
-- A tile is `NG` if any enabled detector returns NG for that tile.
-- A tile is `PASS` if all enabled detectors pass.
-- `decision.max_ng_count` controls final image tolerance.
-- Current final rule is effectively `PASS` when `ng_tile_count <= max_ng_count`, otherwise `NG`.
-
-The summary includes:
-
-- `tile_count`
-- `ng_count`
-- `defect_count`
-- `detector_ng_counts`
-
-## Available Detectors
-
-The active detector registry is defined in `core/detector_manager.py`. Current detectors are:
-
-### Detector `401`: Negative-Pole Rotated Rectangle Detector
-
-File: `detectors/detector_401.py`
-
-Purpose:
-
-- Detect negative-pole NG regions represented by rotated rectangle-like contours.
-
-Main processing:
-
-- Optional ROI inset.
-- Gaussian blur.
-- Morphological operation, default open.
-- Grayscale conversion.
-- Adaptive mean threshold.
-- Binary INV can be toggled.
-- Contour retrieval.
-- Rotated rectangle fitting with `cv2.minAreaRect`.
-- Area filtering.
-
-Important parameters:
-
-- `roi_inset_px`
-- `blur_size`
-- `morph_operation`
-- `morph_kernel`
-- `morph_iterations`
-- `adaptive_block_size`
-- `adaptive_c`
-- `binary_inv`
-- `max_value`
-- `contour_mode`
-- `min_area`
-- `max_area`
-
-Defect type:
-
-```text
-401_negative_rect_detected_ng
-```
-
-Sample recipe:
-
-```text
-recipes/PRODUCT_A_NEGATIVE_401_AOI_01.yaml
-```
-
-### Detector `401-1`: Adaptive Circle Contour Detector
-
-File: `detectors/detector_401_1.py`
-
-Purpose:
-
-- Detect circular contour NG regions using adaptive thresholding and circle-like contour filters.
-
-Main processing:
-
-- Grayscale preprocessing.
-- Optional ROI inset.
-- Optional process downscale.
-- Gaussian blur.
-- Adaptive mean threshold.
-- Optional morphology.
-- Contour retrieval.
-- Area, circularity, and fill-ratio filtering.
-- Circle center/radius metadata.
-
-Important parameters:
-
-- `threshold_method`
-- `max_value`
-- `invert`
-- `blur_size`
-- `adaptive_block_size`
-- `adaptive_c`
-- `roi_inset_px`
-- `contour_mode`
-- `morph_operation`
-- `morph_kernel`
-- `morph_iterations`
-- `process_scale`
-- `min_area`
-- `max_area`
-- `min_circularity`
-- `min_fill_ratio`
-- `max_fill_ratio`
-
-Defect type:
-
-```text
-401_1_circle_detected_ng
-```
-
-Sample recipe:
-
-```text
-recipes/PRODUCT_A_CIRCLE_401_1_AOI_01.yaml
-```
-
-### Detector `401-2`: Adaptive White-Ratio Contour Detector
-
-File: `detectors/detector_401_2.py`
-
-Purpose:
-
-- Detect NG contours based on the ratio of white pixels inside a contour after adaptive inverse thresholding.
-
-Main processing:
-
-- Grayscale preprocessing.
-- Optional ROI inset.
-- Gaussian blur.
-- Adaptive mean inverse threshold.
-- Contour retrieval.
-- Optional area filtering.
-- Filled contour mask.
-- White pixel count divided by contour pixel count.
-- NG if ratio is above `white_pixel_ratio_threshold`.
-
-Important parameters:
-
-- `max_value`
-- `blur_size`
-- `adaptive_block_size`
-- `adaptive_c`
-- `roi_inset_px`
-- `contour_mode`
-- `min_area`
-- `max_area`
-- `white_pixel_ratio_threshold`
-
-Default threshold:
-
-```text
-white_pixel_ratio_threshold = 0.625
-```
-
-Defect type:
-
-```text
-401_2_white_pixel_ratio_ng
-```
-
-Sample recipe:
-
-```text
-recipes/PRODUCT_A_WHITE_RATIO_401_2_AOI_01.yaml
-```
-
-### Detector `900`: Dual-Frame Spacing Detector
-
-File: `detectors/detector_900.py`
-
-Purpose:
-
-- Inspect a two-frame structure by finding an outer frame and an inner frame, then verifying their relative spacing.
-
-Main processing:
-
-- Grayscale preprocessing.
-- Optional ROI inset.
-- Outer frame detection with global threshold.
-- Inner frame detection with adaptive mean threshold.
-- Candidate collection by contour bounding boxes.
-- Width/height tolerance filtering for outer and inner candidates.
-- Pairing logic that requires the inner frame to sit inside the outer frame.
-- Edge gap calculation: left, top, right, bottom.
-- PASS only when max edge gap is within `max_edge_gap`.
-- NG metadata includes best candidates, rejected candidates, pair debug data, and reason.
-
-Important parameters:
-
-- `outer_threshold`
-- `outer_invert`
-- `outer_contour_mode`
-- `outer_target_width`
-- `outer_width_tolerance`
-- `outer_target_height`
-- `outer_height_tolerance`
-- `inner_adaptive_block_size`
-- `inner_adaptive_c`
-- `inner_invert`
-- `inner_contour_mode`
-- `inner_target_width`
-- `inner_width_tolerance`
-- `inner_target_height`
-- `inner_height_tolerance`
-- `max_edge_gap`
-- `roi_inset_px`
-
-Default frame targets:
-
-```text
-outer: 1033 +- 33 wide, 1211 +- 33 high
-inner: 998 +- 33 wide, 1164 +- 33 high
-max_edge_gap: 31 px
-```
-
-Defect type:
-
-```text
-900_frame_spacing_ng
-```
-
-Sample recipe:
-
-```text
-recipes/PRODUCT_A_FRAME_900_AOI_01.yaml
-```
-
-Special output behavior:
-
-- NG tile output for Detector 900 draws outer candidates, inner candidates, rejected candidates, edge-gap guides, and reason text to help tune the recipe.
-
-## Recipe Format
-
-A recipe must include:
-
-- `recipe_name`
-- `product_id`
-- `machine_id`
-- `version`
-- `tile`
-- `decision`
-- `detectors`
-- `output`
-
-Minimal example:
+最小範例：
 
 ```yaml
 recipe_name: "PRODUCT_A_CIRCLE_401_1_AOI_01"
 product_id: "PRODUCT_A"
 machine_id: "AOI_01"
 version: "0.1.0"
+
+gpu:
+  tiling: false
+  display: false
+  dll_path: "gpu/visionflow_cuda.dll"
+  fallback_to_cpu: true
 
 tile:
   mode: "grid"
@@ -526,6 +220,7 @@ decision:
 detectors:
   "401-1":
     enabled: true
+    use_gpu: false
     display_name: "401-1 adaptive circle contour detector"
     params:
       threshold_method: "adaptive_mean"
@@ -554,9 +249,13 @@ output:
   save_json: true
 ```
 
-## Tiling Recipe Examples
+`decision.max_ng_count` 控制整張影像可容許的 NG Tile 數量。目前判定邏輯為：`ng_count <= max_ng_count` 時 `PASS`，否則為 `NG`。
 
-### Fixed Grid
+## 切圖策略
+
+每個 Tile 都會記錄 `tile_id`、位置、寬高、列／欄與模式專屬 metadata。Detector 在 Tile 區域內工作，`core/result_mapper.py` 再將 `bbox_local` 映射回原圖的 `bbox_global`。
+
+### 固定網格 `grid`
 
 ```yaml
 tile:
@@ -567,13 +266,9 @@ tile:
   overlap_y: 64
 ```
 
-Best for:
+適合均勻產品、全畫面掃描或不需要定位基準的檢測。
 
-- Large images where every region should be inspected.
-- Simple fallback inspection.
-- Uniform products without strong alignment requirements.
-
-### Template-Anchored Grid
+### 模板定位網格
 
 ```yaml
 tile:
@@ -594,13 +289,9 @@ tile:
   match_threshold: 0.8
 ```
 
-Best for:
+先在搜尋區域找出模板錨點，再依偏移、列欄數、ROI 大小及間距產生規則網格，適合有小幅位置漂移的重複工件。
 
-- Products with repeated units arranged in rows and columns.
-- Images with small position drift.
-- Inspection where a known anchor must define the ROI grid.
-
-### Contour Tiling
+### 輪廓切圖 `contour`
 
 ```yaml
 tile:
@@ -612,22 +303,10 @@ tile:
     adaptive_block_size: 31
     adaptive_c: 5.0
     blur_size: 3
-    morph_open_kernel: 0
-    morph_open_iterations: 1
-    morph_close_kernel: 0
-    morph_close_iterations: 1
   shapes:
     enabled_shapes: ["rectangle", "circle", "polygon"]
     min_area: 100
     max_area: 0
-    min_width: 0
-    max_width: 0
-    min_height: 0
-    max_height: 0
-    min_aspect_ratio: 0
-    max_aspect_ratio: 0
-    min_radius: 0
-    max_radius: 0
     min_circularity: 0.75
     polygon_min_vertices: 3
     polygon_max_vertices: 99
@@ -637,13 +316,9 @@ tile:
     crop_padding: 0
 ```
 
-Best for:
+適合依可見零件輪廓擷取 ROI，或重複工件並非整齊排列的情境。
 
-- ROI extraction from visible part contours.
-- Products where repeated units are not arranged in a clean grid.
-- Engineering exploration and recipe creation.
-
-### Pattern-Match Tiling
+### 模板比對切圖 `pattern_match`
 
 ```yaml
 tile:
@@ -658,166 +333,98 @@ tile:
     max_candidates: 20000
 ```
 
-Best for:
+找出多個模板匹配位置，經局部峰值與 NMS 過濾後，由上而下、由左而右排序，適合重複視覺結構。
 
-- Repeated visual structures.
-- Multi-match ROI discovery.
-- Cases where template matching is more stable than contour segmentation.
+## Detector
 
-## CLI Usage
+所有 Detector 都繼承 `BaseDetector`，並輸出統一格式，包含 Detector ID、PASS／NG、分數、缺陷類型、區域座標、面積及 metadata。如此 Reporter、Aggregator 與 GUI 不需要知道個別演算法細節。
 
-Install dependencies first:
+### `401`：負極旋轉矩形檢測
 
-```powershell
-pip install -r requirements.txt
-```
+- 檔案：`detectors/detector_401.py`
+- 用途：透過自適應閾值、形態學與旋轉矩形擬合偵測負極矩形 NG 區域。
+- 主要參數：`roi_inset_px`、`blur_size`、`morph_operation`、`morph_kernel`、`morph_iterations`、`adaptive_block_size`、`adaptive_c`、`binary_inv`、`min_area`、`max_area`。
+- 缺陷類型：`401_negative_rect_detected_ng`
+- 範例配方：`recipes/PRODUCT_A_NEGATIVE_401_AOI_01.yaml`
 
-Run a single image:
+### `401-1`：自適應圓形輪廓檢測
 
-```powershell
-python main.py --image C:\path\to\image.png --recipe recipes\PRODUCT_A_CIRCLE_401_1_AOI_01.yaml --output outputs
-```
+- 檔案：`detectors/detector_401_1.py`
+- 用途：以面積、圓度與填充比篩選圓形 NG 區域。
+- 主要參數：`blur_size`、`adaptive_block_size`、`adaptive_c`、`roi_inset_px`、`process_scale`、`min_area`、`max_area`、`min_circularity`、`min_fill_ratio`、`max_fill_ratio`。
+- 缺陷類型：`401_1_circle_detected_ng`
+- 範例配方：`recipes/PRODUCT_A_CIRCLE_401_1_AOI_01.yaml`
 
-Run with debug flag:
+### `401-2`：自適應白像素比例檢測
 
-```powershell
-python main.py --image C:\path\to\image.png --recipe recipes\PRODUCT_A_FRAME_900_AOI_01.yaml --output outputs --debug
-```
+- 檔案：`detectors/detector_401_2.py`
+- 用途：計算輪廓範圍內的白像素比例，超過 `white_pixel_ratio_threshold` 時判定 NG。
+- 主要參數：`blur_size`、`adaptive_block_size`、`adaptive_c`、`roi_inset_px`、`min_area`、`max_area`、`white_pixel_ratio_threshold`。
+- 預設白像素比例門檻：`0.625`
+- 缺陷類型：`401_2_white_pixel_ratio_ng`
+- 範例配方：`recipes/PRODUCT_A_WHITE_RATIO_401_2_AOI_01.yaml`
 
-Set log options:
+### `900`：雙框間距檢測
 
-```powershell
-python main.py --image C:\path\to\image.png --recipe recipes\PRODUCT_A_FRAME_900_AOI_01.yaml --output outputs --log-level DEBUG --log-dir outputs\logs
-```
+- 檔案：`detectors/detector_900.py`
+- 用途：找出外框與內框，檢查左、上、右、下四個邊距。
+- 流程：外框全域閾值、內框自適應閾值、候選框尺寸過濾、內外框配對及最大邊距判定。
+- 主要參數：`outer_threshold`、內外框目標寬高與容差、`inner_adaptive_block_size`、`inner_adaptive_c`、`max_edge_gap`、`roi_inset_px`。
+- 缺陷類型：`900_frame_spacing_ng`
+- 範例配方：`recipes/PRODUCT_A_FRAME_900_AOI_01.yaml`
 
-Environment overrides:
+Detector 900 的 NG Tile 會額外繪出內外框候選、被拒絕候選、間距輔助線與失敗原因，方便調整配方。
 
-```powershell
-$env:AOI_LOG_LEVEL='DEBUG'
-$env:AOI_LOG_DIR='outputs\logs'
-```
+## GUI 使用方式
 
-CLI output is a JSON summary:
+主視窗標題為 `VisionFlow AOI`，包含下列畫面：
 
-```json
-{
-  "image_name": "sample.png",
-  "recipe_name": "PRODUCT_A_FRAME_900_AOI_01",
-  "final_result": "PASS",
-  "ng_count": 0,
-  "defect_count": 0,
-  "duration_sec": 0.423,
-  "outputs": {
-    "overlay": "outputs\\overlay\\...",
-    "ng_tiles_dir": "outputs\\ng_tiles",
-    "csv": "outputs\\csv\\...",
-    "matrix_csv": "outputs\\matrix_csv\\...",
-    "json": "outputs\\json\\..."
-  }
-}
-```
+- **Run**：載入影像與配方、執行單張或資料夾批次檢測、查看最近紀錄。
+- **Monitor**：監控資料夾並逐張處理新加入且已穩定的影像。
+- **Recipe Designer**：設定配方 metadata、切圖方式、Detector 開關與參數，並預覽 Tile。
+- **Results**：查看最終結果、缺陷表格、縮圖及輸出路徑。
+- **Batch Dashboard**：查看批次總量、PASS／NG、缺陷統計與 Tile 散佈圖。
 
-Exit code behavior:
+### 操作模式
 
-- `0`: final result is `PASS`.
-- `2`: final result is `NG`.
-- Other non-zero errors may occur for invalid recipe, invalid image, or runtime exceptions.
+- **OP**：產線導向的限制模式，主要顯示監控工作流程。
+- **Engineer**：工程調機模式，隱藏部分進階 Detector 參數。
+- **Admin**：完整的配方與 Detector 參數權限。
 
-## GUI Usage
+這些模式是避免誤操作的 UI 分流，並不是帳號驗證或安全邊界。
 
-Launch:
+### 單張檢測
 
-```powershell
-python main.py --gui
-```
+1. 載入影像。
+2. 載入配方。
+3. 在設定抽屜確認輸出項目。
+4. 執行檢測。
+5. 查看 PASS／NG、Tile、NG 及缺陷數量與耗時。
+6. 檢查 Overlay、缺陷表格與輸出檔案。
 
-The GUI window title is `VisionFlow AOI`.
+### 批次資料夾
 
-Main screens:
+1. 載入配方並選擇影像資料夾。
+2. 選擇是否遞迴掃描子資料夾。
+3. 啟動批次檢測。
+4. 結果寫入 `outputs\batch\<timestamp>\`。
+5. 在 Batch Dashboard 檢查整批摘要。
 
-- Run: load image, load recipe, run single inspection, view overlay, inspect recent history, run batch folder inspection.
-- Monitor: watch a folder and process new stable images.
-- Recipe Designer: edit recipe metadata, tiling mode, detector enablement, and detector parameters.
-- Results: inspect final result, defect table, thumbnails, and output paths.
-- Batch Dashboard: analyze batch result summary and per-image tile scatter.
+Worker 預設最多使用 4 個執行緒，並受 CPU 數與影像數限制；可用 `AOI_BATCH_WORKERS` 環境變數覆寫。記憶體內結果會壓縮以降低長時間執行的負擔，完整資料仍保留在 JSON 報告。
 
-### GUI Modes
+### 資料夾監控
 
-The GUI supports three operating modes:
+1. 載入配方並選擇監控資料夾。
+2. 可選擇處理後影像的移動資料夾。
+3. 啟動監控；既有檔案會視為已看過。
+4. 新影像通過檔案大小與修改時間的穩定檢查後，依序執行檢測。
+5. 結果顯示在監控表格與散佈圖。
 
-- OP mode: restricted production-facing mode; only monitor workflow is visible.
-- Engineer mode: engineering workflow with advanced detector parameters partially hidden in the designer.
-- Admin mode: full recipe and detector parameter access.
+監控預設每秒輪詢一次，需連續通過 2 次穩定檢查；若設定移動資料夾，會保留子資料夾結構並處理同名衝突。
 
-This is UI-level permission separation for workflow safety. It is not a security boundary.
+## 輸出內容
 
-### Single Inspection Workflow
-
-1. Launch GUI.
-2. Load an inspection image.
-3. Load a recipe.
-4. Confirm output toggles in the settings drawer.
-5. Run inspection.
-6. Review PASS / NG, tile count, NG count, defect count, and duration.
-7. Inspect overlay and defect table.
-8. Open generated output files from the result panel.
-
-### Recipe Designer Workflow
-
-1. Load an image.
-2. Open Recipe Designer.
-3. Choose tiling mode: pattern match, grid, or contour.
-4. Configure template path, search ROI, grid rows/cols, contour threshold, or shape filters.
-5. Preview tiles on the loaded image.
-6. Enable detectors.
-7. Tune detector parameters.
-8. Save the recipe YAML.
-9. The saved recipe is loaded back into the GUI.
-
-### Batch Folder Workflow
-
-1. Load a recipe.
-2. Choose a folder of images.
-3. Choose whether to scan recursively.
-4. Start batch inspection.
-5. Each supported image is processed by the same `AOIPipeline`.
-6. Results are written under `outputs\batch\<timestamp>\`.
-7. Batch Dashboard summarizes total images, PASS, NG, ERROR, defects, tiles, and NG tiles.
-
-Batch worker behavior:
-
-- Supported extensions come from `core.image_loader.SUPPORTED_EXTENSIONS`.
-- Worker count defaults to up to 4 workers, bounded by CPU count and image count.
-- `AOI_BATCH_WORKERS` can override the worker count.
-- Each image result is compacted in memory to reduce long-run GUI slowdown.
-- Full detail remains in the JSON report output.
-
-### Monitor Workflow
-
-1. Load a recipe.
-2. Choose a monitor input folder.
-3. Optionally choose a processed-image move folder.
-4. Start monitoring.
-5. Existing images are treated as already seen.
-6. Newly added images are processed after they pass stable-file checks.
-7. Images are processed one by one.
-8. Results appear in the monitor table and scatter chart.
-9. If a move folder is configured, processed images are moved while preserving subfolders.
-
-Monitor behavior:
-
-- Recursive folder scan is used.
-- File stability is checked by size and modified time.
-- Poll interval defaults to 1 second.
-- Stable checks default to 2.
-- Processed image moves use unique filenames when collisions occur.
-- The monitor table can open processed/original image paths.
-
-## Outputs
-
-`core/reporter.py` writes output files into the configured output directory.
-
-Default folders:
+`core/reporter.py` 依配方寫入：
 
 ```text
 outputs/
@@ -831,240 +438,38 @@ outputs/
 
 ### Overlay PNG
 
-Path pattern:
-
-```text
-outputs/overlay/<image>_<recipe>_<timestamp>_<uuid>_overlay.png
-```
-
-Behavior:
-
-- For status-tile modes such as grid and pattern match, overlay draws tile-level OK/NG frames.
-- OK tiles are green.
-- NG tiles are red.
-- For defect-bbox overlays, detected defects are drawn on original image coordinates.
-- Circle metadata is drawn with a circle plus bbox when available.
+- OK Tile 使用綠框、NG Tile 使用紅框。
+- 缺陷框會繪製在原始影像座標。
+- 若 metadata 包含圓形資訊，會同時繪製圓與 bbox。
 
 ### NG Tiles
 
-Folder:
+- 只保存 NG Tile 裁切影像。
+- 缺陷框以 Tile 區域座標繪製。
+- Detector 900 額外提供內外框及邊距除錯標記。
 
-```text
-outputs/ng_tiles/
-```
+### 缺陷 CSV
 
-Behavior:
+包含影像、配方、機台、產品、最終結果、Detector、缺陷類型、全域／區域 bbox、Tile ID、分數與面積。檔案使用帶 BOM 的 UTF-8（`utf-8-sig`），方便 Excel 直接開啟。
 
-- Only NG tile crops are written.
-- Local defect boxes are drawn on the tile crop.
-- Detector 900 NG tiles include additional debug overlays for outer/inner candidates, rejected candidates, gap lines, and reason text.
+### 矩陣 CSV
 
-### Defect CSV
+將具列欄資訊的 Tile NG 狀態轉成矩陣，欄位為 `c1`、`c2` 等，NG 儲存格以勾號標示，適合對照產品的實體排列。
 
-Folder:
+### JSON
 
-```text
-outputs/csv/
-```
+JSON 是最完整的追溯格式，包含影像與配方 metadata、最終結果、耗時、統計、輸出路徑、Tile、Detector、缺陷、區域／全域座標及 Detector 專屬 metadata。
 
-Fields:
+### 日誌
 
-- `image_name`
-- `recipe_name`
-- `machine_id`
-- `product_id`
-- `final_result`
-- `detector_id`
-- `defect_type`
-- `bbox_global`
-- `bbox_local`
-- `tile_id`
-- `score`
-- `area`
+- CLI 預設：`<output>\logs\aoi.log`
+- GUI 預設：`outputs\logs\aoi.log`
 
-Encoding:
+日誌採輪替檔案，涵蓋 Pipeline、Reporter、批次、監控、GUI workers 與主程式。
 
-- UTF-8 with BOM (`utf-8-sig`) for easier Excel opening.
+## 可選 CUDA 加速
 
-### Matrix CSV
-
-Folder:
-
-```text
-outputs/matrix_csv/
-```
-
-Purpose:
-
-- Convert row/column tile NG status into a matrix-style CSV.
-- Columns are named `c1`, `c2`, `c3`, etc.
-- Row IDs include the source image stem and reversed row numbering.
-- NG cells are marked with a check mark.
-
-This format is useful when a product has a physical row/column layout and production staff need a compact defect map.
-
-### JSON Report
-
-Folder:
-
-```text
-outputs/json/
-```
-
-The JSON report contains:
-
-- Image metadata.
-- Recipe metadata.
-- Final result.
-- Runtime duration.
-- Summary counts.
-- Output paths.
-- Tile list.
-- Detector results.
-- Defect lists.
-- Local/global coordinates.
-- Detector-specific metadata.
-
-JSON is the richest output and should be used for traceability or downstream processing.
-
-### Logs
-
-Default log paths:
-
-- CLI: `<output>\logs\aoi.log`
-- GUI: `outputs\logs\aoi.log`
-
-The logging system is implemented in `core/logging_system.py` and provides:
-
-- OOP logging facade.
-- Shared logger access through `LogMixin`.
-- Rotating file handler.
-- Console handler.
-- Environment variable overrides.
-- Named loggers for pipeline, reporter, batch, monitor, GUI workers, and main entry point.
-
-## Standalone Export Tools
-
-Two helper tools are included:
-
-```powershell
-python export_scatter_plots.py
-python export_matrix_summary.py
-```
-
-Their purpose:
-
-- Export scatter-style visual summaries from folders containing JSON and/or CSV reports.
-- Combine matrix CSV outputs into summary reports.
-- Support recursive folder selection and practical post-inspection review.
-
-These are separate from the main GUI pipeline so analysis/reporting utilities can evolve without complicating the inspection core.
-
-## Build Windows EXE
-
-Build from the project virtual environment:
-
-```powershell
-.\build_exe.ps1
-```
-
-The executable is created under:
-
-```text
-dist\VisionFlow AOI\VisionFlow AOI.exe
-```
-
-Important:
-
-- Copy or zip the whole `dist\VisionFlow AOI` folder.
-- The executable depends on the `_internal` runtime directory next to it.
-- Do not distribute only the `.exe`.
-
-Release package naming:
-
-```text
-VisionFlow-AOI-vX.Y.Z-windows-x64.zip
-```
-
-Packages currently present in the workspace include:
-
-- `VisionFlow-AOI-v1.0.0-windows-x64.zip`
-- `VisionFlow-AOI-v1.1.0-windows-x64.zip`
-
-Older pre-product-name packages are also present:
-
-- `AOI_GUI-v0.2.0-windows-x64.zip`
-- `AOI_GUI-v0.3.0-windows-x64.zip`
-
-## Validation
-
-Basic compile validation:
-
-```powershell
-.\env\Scripts\python.exe -m compileall main.py core detectors gui
-```
-
-GUI offscreen smoke test:
-
-```powershell
-$env:QT_QPA_PLATFORM='offscreen'
-.\env\Scripts\python.exe -c "from pathlib import Path; from PySide6.QtWidgets import QApplication; from gui.main_window import MainWindow; app=QApplication([]); w=MainWindow(); w.recipe_panel.load_recipe(Path('recipes/PRODUCT_A_AOI_01.yaml')); print(w.windowTitle(), w.recipe_panel.detector_list.count())"
-```
-
-CLI smoke testing can be done with a temporary synthetic image and output directed to:
-
-```text
-outputs_validation/
-```
-
-Recommended validation before release:
-
-- Compile all modules.
-- Launch GUI in offscreen mode.
-- Run CLI on known PASS image.
-- Run CLI on known NG image.
-- Verify overlay, NG tiles, CSV, matrix CSV, JSON.
-- Verify batch folder run with at least two images.
-- Verify monitor mode can process a newly copied image.
-- Verify packaged executable opens and can run one recipe.
-
-## Engineering Notes
-
-### Strengths in the Current Codebase
-
-- The pipeline is separated from UI code and can run from CLI, GUI, batch, and monitor workflows.
-- Detector outputs are normalized, which keeps reporter and aggregator logic detector-agnostic.
-- Recipe files make product tuning possible without editing Python code.
-- Tiling is extensible and supports real alignment problems beyond simple fixed grids.
-- Batch and monitor processors reuse the same single-image pipeline.
-- Output reports include both visual and machine-readable formats.
-- Rotating logs make long-running GUI/batch/monitor diagnosis practical.
-- GUI workers keep expensive image and inspection work outside the main Qt UI thread.
-- Memory compaction was added for batch/monitor result storage to reduce long-run slowdown.
-
-### Current Tradeoffs
-
-- Detectors are currently classical CV rules, so quality depends heavily on lighting, threshold tuning, and fixture consistency.
-- The project does not yet include a formal labeled validation dataset, so performance claims should be verified per product.
-- GUI mode permissions are workflow restrictions, not authentication/security controls.
-- Some legacy notes and reports in the repository have encoding damage; the current README and source code should be treated as the reliable reference.
-- `--debug` exists at CLI level, but complete per-detector debug image export is still planned work. Detector 900 already writes rich NG tile debug overlays.
-
-### Good Next Improvements
-
-- Create `tests/` with unit tests for tiler, aggregator, recipe validation, result mapping, and detector edge cases.
-- Create a small synthetic validation dataset committed to the repo or generated by test fixtures.
-- Add golden-output smoke tests for report files.
-- Add per-detector debug artifact export controlled by recipe/output settings.
-- Add recipe version history and signed/locked production recipes.
-- Add operator/lot/station metadata to reports.
-- Add a plugin layer for YOLO/RT-DETR/segmentation detectors while preserving the current detector result format.
-
-## Quick Start
-
-### Optional CUDA DLL
-
-Recipe Designer 可分別勾選切小圖 GPU、GUI 預覽 GPU，以及每一個 detector 的 GPU。設定會保存為：
+`gpu/visionflow_cuda.dll` 是可選後端。未啟用 GPU 時不會載入 DLL；啟用但 DLL、CUDA 裝置或運算不可用時，會依 `fallback_to_cpu` 回退整個 Detector 至 CPU，或明確回報錯誤。系統不會把失敗前的部分 GPU 中間結果和 CPU 後續流程混用。
 
 ```yaml
 gpu:
@@ -1074,38 +479,124 @@ gpu:
   fallback_to_cpu: true
 
 detectors:
-  "401-1":
+  "401-2":
     enabled: true
-    use_gpu: false
+    use_gpu: true
 ```
 
-所有開關預設關閉。勾選後會透過額外的 CUDA DLL 執行；DLL 或 CUDA device 不可用時預設回退 CPU，實際 backend 與原因會寫入結果的 `execution.gpu`。
+前處理由 backend-neutral `PreprocessPlan` 描述：
 
-RTX 3090 (`sm_86`) 主機安裝 CUDA Toolkit 後可執行：
+- `CpuPreprocessExecutor` 定義 OpenCV 正確性語意。
+- `CudaPreprocessExecutor` 依 DLL 能力選擇通用 primitive、相容的 fused adapter 或 CPU fallback。
+- Detector 401-2 已有一次呼叫完成灰階、Gaussian 與 Adaptive Mean 的 persistent context 相容路徑。
+- 舊版 DLL 缺少新 exports 時仍保留既有路徑或 CPU fallback。
+
+目前 CUDA 原始碼包含 separable Gaussian、constant weights、64-bit integral Adaptive Mean Threshold、persistent context 與 grow-only buffers。這些功能仍需在目標 RTX 3090（`sm_86`）完成正式編譯、五份配方等價、效能、VRAM 與壓力驗收後，才能視為 production-ready 或預設啟用。
+
+### RTX 3090 編譯與驗證
+
+安裝 NVIDIA Driver、CUDA Toolkit、Visual Studio 2022 C++ Build Tools 與 Windows SDK 後，在 x64 Native Tools PowerShell 執行：
 
 ```powershell
-.\gpu\build_cuda_dll.ps1
+.\gpu\build_cuda_dll.ps1 -Architecture sm_86
 ```
 
-Qt 的 QImage/QPixmap、overlay、文字與檔案輸出仍由 CPU 處理；GPU 顯示選項加速的是預覽影像的色彩轉換。CPU/GPU 功能進度、CUDA 編譯與完整實機驗收步驟統一維護在 [`Todo.md`](Todo.md)。
+執行 C++ smoke、structured primitive matrix 與 benchmark：
 
 ```powershell
-cd C:\Users\王\Desktop\AOI_CVbased
-.\env\Scripts\python.exe -m pip install -r requirements.txt
-.\env\Scripts\python.exe main.py --gui
+.\gpu\build_cuda_dll.ps1 -RunTests
 ```
 
-Or run CLI:
+加入真實影像與配方進行 AOI CPU／GPU 比對：
 
 ```powershell
-.\env\Scripts\python.exe main.py --image C:\path\to\image.png --recipe recipes\PRODUCT_A_FRAME_900_AOI_01.yaml --output outputs
+.\gpu\build_cuda_dll.ps1 -RunTests `
+  -Image C:\AOI_TEST\sample.png `
+  -Recipe .\recipes\PRODUCT_A_AOI_01.yaml
 ```
 
-For reviewers evaluating the project, start with:
+CUDA 詳細架構及操作請參考 [`gpu/README.md`](gpu/README.md)，完整實機驗收矩陣請參考 [`Todo.md`](Todo.md)。
 
-- `core/pipeline.py` for the inspection orchestration.
-- `core/tiler.py` for ROI generation strategies.
-- `detectors/` for detector implementations.
-- `core/reporter.py` for output generation and traceability.
-- `core/batch_processor.py` and `core/monitor_processor.py` for production-style workflows.
-- `gui/main_window.py` and `gui/screens/` for the desktop application.
+## 獨立匯出工具
+
+```powershell
+.\env\Scripts\python.exe export_scatter_plots.py
+.\env\Scripts\python.exe export_matrix_summary.py
+```
+
+- `export_scatter_plots.py`：從 JSON／CSV 報告匯出散佈圖摘要。
+- `export_matrix_summary.py`：整合多個矩陣 CSV 為彙總報表。
+
+兩者獨立於主 Pipeline，讓後處理工具可自行演進。
+
+## 建立 Windows 執行檔
+
+```powershell
+.\build_exe.ps1
+```
+
+輸出位置：
+
+```text
+dist\VisionFlow AOI\VisionFlow AOI.exe
+```
+
+發佈時必須複製或壓縮整個 `dist\VisionFlow AOI` 資料夾，不能只取出 `.exe`，因為執行檔需要相鄰的 `_internal` runtime 目錄。
+
+發行檔命名格式：
+
+```text
+VisionFlow-AOI-vX.Y.Z-windows-x64.zip
+```
+
+## 驗證
+
+所有 Python 指令應使用專案虛擬環境。修改完成後的基本驗證：
+
+```powershell
+.\env\Scripts\python.exe -m unittest discover -s tests -v
+.\env\Scripts\python.exe -m compileall main.py core detectors gui
+git diff --check
+```
+
+GUI offscreen smoke：
+
+```powershell
+$env:QT_QPA_PLATFORM = 'offscreen'
+.\env\Scripts\python.exe -c "from pathlib import Path; from PySide6.QtWidgets import QApplication; from gui.main_window import MainWindow; app=QApplication([]); w=MainWindow(); w.recipe_panel.load_recipe(Path('recipes/PRODUCT_A_AOI_01.yaml')); print(w.windowTitle(), w.recipe_panel.detector_list.count())"
+```
+
+正式發行前還應完成：
+
+- 已知 PASS 與 NG 影像的 CLI 檢測。
+- Overlay、NG Tiles、CSV、矩陣 CSV 與 JSON 檢查。
+- 至少兩張影像的批次處理。
+- 監控模式新檔案處理與移動。
+- 打包版啟動及單張配方執行。
+- 有／無 NVIDIA GPU 電腦的啟動與 fallback 測試。
+- RTX 3090 的 CPU／GPU 等價、效能及長時間穩定性測試。
+
+## 目前限制
+
+- Detector 目前以傳統 CV 規則為主，效果高度依賴光源、治具穩定度及配方門檻。
+- 尚未建立正式且具預期 PASS／NG 標籤的驗證資料集，因此不可將範例結果直接視為量產良率證明。
+- GUI 模式僅是工作流程限制，不是資安權限系統。
+- `--debug` 已存在，但尚未為所有 Detector 提供完整的中間影像輸出。
+- GPU 預設啟用前仍需完成 `Todo.md` 中的 RTX 3090 驗收門檻。
+
+## 延伸開發
+
+- 新增 Detector 時，實作應放在 `detectors/` 並透過 `DetectorManager` 註冊。
+- 可重用的前處理應使用或擴充 `PreprocessPlan` typed operators，不要為每個 Detector 建立獨立 CUDA workflow。
+- Reporter、Aggregator、GUI 與 Detector 之間應維持統一結果格式。
+- 所有 GPU 功能都必須保留 CPU 等價語意及可測試的 fallback。
+- 未來可加入 YOLO、RT-DETR 或 segmentation plugin，但仍應沿用既有 Detector 輸出格式、GPU 排程與 VRAM 管理原則。
+
+初次閱讀程式碼時，建議依序查看：
+
+1. `core/pipeline.py`：完整檢測協調流程。
+2. `core/tiler.py`：ROI 與 Tile 產生方式。
+3. `detectors/`：各檢測演算法。
+4. `core/preprocess_plan.py` 與 `core/gpu_runtime.py`：CPU／CUDA 前處理架構。
+5. `core/reporter.py`：追溯輸出。
+6. `gui/main_window.py` 與 `gui/screens/`：桌面應用程式。
