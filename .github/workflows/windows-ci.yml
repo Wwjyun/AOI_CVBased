@@ -30,7 +30,8 @@ jobs:
           New-Item -ItemType Directory -Force outputs_validation | Out-Null
           python -c "import cv2,numpy as np; cv2.imwrite('outputs_validation/ci_input.png', np.zeros((128,128,3),np.uint8))"
           python main.py --image outputs_validation/ci_input.png --recipe recipes/PRODUCT_A_NEGATIVE_401_AOI_01.yaml --output outputs_validation/ci_cli
-          if ($LASTEXITCODE -gt 1) { exit $LASTEXITCODE }
+          $cliExitCode = $LASTEXITCODE
+          if ($cliExitCode -notin @(0, 2)) { exit $cliExitCode }
           exit 0
       - name: GUI offscreen smoke
         shell: pwsh
