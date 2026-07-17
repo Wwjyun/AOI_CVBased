@@ -188,6 +188,7 @@ class DetectorFusedRoutingTests(unittest.TestCase):
         self.assertEqual(processed.shape, image.shape)
         self.assertEqual(binary.shape, image.shape[:2])
         self.assertEqual(runtime.calls, 1)
+        self.assertEqual(detector.last_preprocess_capability["route"], "fused")
 
     def test_detector_401_2_fused_failure_restarts_entire_detector_on_cpu(self):
         detector = Detector401_2(
@@ -202,6 +203,19 @@ class DetectorFusedRoutingTests(unittest.TestCase):
         self.assertFalse(result["execution"]["gpu_active"])
         self.assertEqual(result["execution"]["backend"], "cpu")
         self.assertIn("injected fused failure", result["execution"]["fallback_reason"])
+        capability = result["execution"]["preprocess_capability"]
+        self.assertEqual(capability["route"], "fallback")
+        self.assertEqual(capability["selected_backend"], "cpu")
+        self.assertIn("injected fused failure", capability["reason"])
+
+    def test_detector_401_2_cpu_execution_reports_cpu_route(self):
+        detector = Detector401_2(params={"blur_size": 3, "adaptive_block_size": 3})
+
+        result = detector.run(np.zeros((16, 20, 3), dtype=np.uint8))
+
+        capability = result["execution"]["preprocess_capability"]
+        self.assertEqual(capability["route"], "cpu")
+        self.assertEqual(capability["requested_backend"], "cpu")
 
 
 class PreprocessPlanTests(unittest.TestCase):
@@ -233,6 +247,9 @@ class PreprocessPlanTests(unittest.TestCase):
 
         np.testing.assert_array_equal(actual, expected)
         self.assertEqual(runtime.calls, ["gray", "gaussian", "adaptive_mean"])
+        report = CudaPreprocessExecutor(runtime).capability_report(self._plan(), image).to_dict()
+        self.assertEqual(report["route"], "primitive")
+        self.assertEqual(report["selected_backend"], "cuda")
 
     def test_cuda_executor_rejects_non_equivalent_area_resize(self):
         plan = PreprocessPlan(operations=(Gray(), Resize(10, 10, "area")))
@@ -241,6 +258,10 @@ class PreprocessPlanTests(unittest.TestCase):
             CudaPreprocessExecutor(_PrimitiveRuntimeStub()).execute(
                 np.zeros((20, 20, 3), dtype=np.uint8), plan
             )
+        report = CudaPreprocessExecutor(_PrimitiveRuntimeStub()).capability_report(plan).to_dict()
+        self.assertEqual(report["route"], "fallback")
+        self.assertEqual(report["selected_backend"], "cpu")
+        self.assertIn("Resize(area)", report["reason"])
 
     def test_plan_cache_reuses_shape_and_signature_with_lru_bound(self):
         cache = PreprocessPlanCache(max_entries=2)
@@ -270,6 +291,10 @@ class PreprocessPlanTests(unittest.TestCase):
         class CapturingExecutor:
             def __init__(self):
                 self.plans = []
+
+            @staticmethod
+            def capability_report(plan):
+                return CpuPreprocessExecutor.capability_report(plan)
 
             def execute(self, image, plan):
                 self.plans.append(plan)
@@ -315,6 +340,9 @@ class PreprocessPlanTests(unittest.TestCase):
         self.assertEqual(spec.shape, (8, 10))
         self.assertEqual(spec.dtype, "uint8")
         self.assertEqual(spec.channels, 1)
+        cpu_report = CpuPreprocessExecutor.capability_report(first).to_dict()
+        self.assertEqual(cpu_report["route"], "cpu")
+        self.assertEqual(cpu_report["plan_signature"], first.signature)
 
     def test_invalid_operator_parameters_are_rejected_at_plan_creation(self):
         invalid_operators = (

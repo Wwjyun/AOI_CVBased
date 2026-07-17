@@ -67,6 +67,29 @@ class PreprocessTensorSpec:
     channels: int
 
 
+@dataclass(frozen=True, slots=True)
+class PreprocessCapabilityReport:
+    requested_backend: str
+    selected_backend: str
+    route: str
+    reason: str
+    plan_signature: tuple
+    unsupported_operators: tuple[str, ...] = ()
+
+    SCHEMA_VERSION = 1
+
+    def to_dict(self) -> dict:
+        return {
+            "schema_version": self.SCHEMA_VERSION,
+            "requested_backend": self.requested_backend,
+            "selected_backend": self.selected_backend,
+            "route": self.route,
+            "reason": self.reason,
+            "plan_signature": self.plan_signature,
+            "unsupported_operators": list(self.unsupported_operators),
+        }
+
+
 def operator_signature(operator: PreprocessOperator) -> tuple:
     if isinstance(operator, Gray):
         return ("gray",)
@@ -229,6 +252,16 @@ class CpuPreprocessExecutor:
         "nearest": cv2.INTER_NEAREST,
     }
 
+    @staticmethod
+    def capability_report(plan: PreprocessPlan) -> PreprocessCapabilityReport:
+        return PreprocessCapabilityReport(
+            requested_backend="cpu",
+            selected_backend="cpu",
+            route="cpu",
+            reason="CPU OpenCV reference executor selected",
+            plan_signature=plan.signature,
+        )
+
     def execute(self, image: np.ndarray, plan: PreprocessPlan) -> np.ndarray:
         expected = plan.validate_input(image)
         output = np.asarray(image)
@@ -291,6 +324,60 @@ class CudaPreprocessExecutor:
     def __init__(self, runtime):
         self.runtime = runtime
 
+    def capability_report(self, plan: PreprocessPlan, image: np.ndarray | None = None) -> PreprocessCapabilityReport:
+        if self._is_legacy_fused_plan(plan) and bool(getattr(self.runtime, "supports_fused_401_2", False)):
+            return PreprocessCapabilityReport(
+                requested_backend="cuda",
+                selected_backend="cuda",
+                route="fused",
+                reason="Legacy 401-2 fused export supports the complete plan",
+                plan_signature=plan.signature,
+            )
+
+        unsupported = []
+        method_by_type = {
+            Resize: "resize_gray",
+            Gaussian: "gaussian_blur",
+            Threshold: "threshold",
+            AdaptiveMean: "adaptive_threshold",
+            Morphology: "morphology",
+        }
+        for operator in plan.operations:
+            if isinstance(operator, Gray):
+                if image is not None and image.ndim == 2:
+                    continue
+                method_name = "bgr_to_gray"
+            elif isinstance(operator, Resize) and operator.interpolation != "nearest":
+                unsupported.append(f"Resize({operator.interpolation}) semantics unavailable")
+                continue
+            elif isinstance(operator, Morphology) and (
+                operator.operation.lower() in {"", "none"}
+                or operator.iterations <= 0
+                or operator.kernel_size <= 1
+            ):
+                continue
+            else:
+                method_name = method_by_type[type(operator)]
+            if not callable(getattr(self.runtime, method_name, None)):
+                unsupported.append(f"missing runtime primitive: {method_name}")
+
+        if unsupported:
+            return PreprocessCapabilityReport(
+                requested_backend="cuda",
+                selected_backend="cpu",
+                route="fallback",
+                reason="; ".join(unsupported),
+                plan_signature=plan.signature,
+                unsupported_operators=tuple(unsupported),
+            )
+        return PreprocessCapabilityReport(
+            requested_backend="cuda",
+            selected_backend="cuda",
+            route="primitive",
+            reason="All operators are supported by reusable CUDA primitives",
+            plan_signature=plan.signature,
+        )
+
     def execute(self, image: np.ndarray, plan: PreprocessPlan) -> np.ndarray:
         expected = plan.validate_input(image)
         fused = self._execute_legacy_fused(image, plan)
@@ -303,13 +390,7 @@ class CudaPreprocessExecutor:
 
     def _execute_legacy_fused(self, image: np.ndarray, plan: PreprocessPlan) -> np.ndarray | None:
         operations = plan.operations
-        if (
-            len(operations) == 3
-            and isinstance(operations[0], Gray)
-            and isinstance(operations[1], Gaussian)
-            and isinstance(operations[2], AdaptiveMean)
-            and self.runtime.supports_fused_401_2
-        ):
+        if self._is_legacy_fused_plan(plan) and self.runtime.supports_fused_401_2:
             gaussian = operations[1]
             adaptive = operations[2]
             return self.runtime.preprocess_401_2(
@@ -321,6 +402,16 @@ class CudaPreprocessExecutor:
                 adaptive.invert,
             )
         return None
+
+    @staticmethod
+    def _is_legacy_fused_plan(plan: PreprocessPlan) -> bool:
+        operations = plan.operations
+        return (
+            len(operations) == 3
+            and isinstance(operations[0], Gray)
+            and isinstance(operations[1], Gaussian)
+            and isinstance(operations[2], AdaptiveMean)
+        )
 
     def _execute_operator(self, image: np.ndarray, operator: PreprocessOperator) -> np.ndarray:
         if isinstance(operator, Gray):

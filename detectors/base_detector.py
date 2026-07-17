@@ -28,6 +28,7 @@ class BaseDetector:
         self._cpu_preprocess_executor = CpuPreprocessExecutor()
         self._cuda_preprocess_executor = CudaPreprocessExecutor(gpu_runtime) if gpu_runtime is not None else None
         self._preprocess_plan_cache = PreprocessPlanCache()
+        self.last_preprocess_capability: dict = {}
 
     @property
     def gpu_active(self) -> bool:
@@ -41,7 +42,19 @@ class BaseDetector:
 
     def execute_preprocess_plan(self, image, plan: PreprocessPlan):
         if self.gpu_active and self._cuda_preprocess_executor is not None:
+            self.last_preprocess_capability = self._cuda_preprocess_executor.capability_report(
+                plan, image
+            ).to_dict()
             return self._cuda_preprocess_executor.execute(image, plan)
+        report = self._cpu_preprocess_executor.capability_report(plan).to_dict()
+        if self.use_gpu and self.gpu_fallback_reason:
+            report.update(
+                requested_backend="cuda",
+                selected_backend="cpu",
+                route="fallback",
+                reason=self.gpu_fallback_reason,
+            )
+        self.last_preprocess_capability = report
         return self._cpu_preprocess_executor.execute(image, plan)
 
     def cached_preprocess_plan(self, image, signature, factory) -> PreprocessPlan:
@@ -74,5 +87,6 @@ class BaseDetector:
                 "gpu_active": self.gpu_active,
                 "backend": "cuda_dll" if self.gpu_active else "cpu",
                 "fallback_reason": self.gpu_fallback_reason,
+                "preprocess_capability": self.last_preprocess_capability,
             },
         }
