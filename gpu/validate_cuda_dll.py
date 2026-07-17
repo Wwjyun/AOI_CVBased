@@ -104,6 +104,53 @@ def compare(name: str, actual: np.ndarray, expected: np.ndarray, max_diff: int =
     return result
 
 
+def validate_context_reuse_matrix(runtime: GpuRuntime) -> list[dict]:
+    if not runtime.supports_native_plan:
+        print(f"SKIP context reuse matrix: {runtime.native_plan_unavailable_reason}")
+        return []
+    cases = (
+        (
+            "bgr_initial",
+            np.zeros((64, 96, 3), dtype=np.uint8),
+            PreprocessPlan((Gray(), Threshold(1, 255, False)), name="reuse_bgr_initial"),
+        ),
+        (
+            "bgr_grow",
+            np.zeros((96, 128, 3), dtype=np.uint8),
+            PreprocessPlan((Gaussian(5), Gray(), Threshold(1, 255, False)), name="reuse_bgr_grow"),
+        ),
+        (
+            "gray_channel_switch",
+            np.zeros((48, 64), dtype=np.uint8),
+            PreprocessPlan((Threshold(1, 255, False), Morphology("close", 3, 2)), name="reuse_gray"),
+        ),
+        (
+            "bgr_shrink_parameter_change",
+            np.zeros((32, 48, 3), dtype=np.uint8),
+            PreprocessPlan((Gray(), Threshold(127, 255, False)), name="reuse_bgr_changed"),
+        ),
+    )
+    executor = CpuPreprocessExecutor()
+    metrics = []
+    for cycle in ("warm", "reused"):
+        for case_name, image, plan in cases:
+            metrics.append(compare(
+                f"context_{cycle}_{case_name}",
+                runtime.execute_plan(image, plan),
+                executor.execute(image, plan),
+            ))
+        if cycle == "warm":
+            warmed = runtime.performance_stats()["persistent_context"]
+    reused = runtime.performance_stats()["persistent_context"]
+    if warmed.get("allocation_count") != reused.get("allocation_count"):
+        raise AssertionError(
+            "Persistent context allocated again after shape/channel/parameter matrix warm-up: "
+            f"warmed={warmed}, reused={reused}"
+        )
+    print(f"PASS context reuse matrix: warmed={warmed}, reused={reused}")
+    return metrics
+
+
 def validate_primitives(runtime: GpuRuntime) -> list[dict]:
     rng = np.random.default_rng(20260714)
     bgr = rng.integers(0, 256, size=(128, 192, 3), dtype=np.uint8)
@@ -379,6 +426,7 @@ def validate_primitives(runtime: GpuRuntime) -> list[dict]:
             print("SKIP ROI coordinate batch: optional exports unavailable")
     else:
         print("SKIP resident image/ROI routing: optional exports unavailable")
+    metrics.extend(validate_context_reuse_matrix(runtime))
     return metrics
 
 

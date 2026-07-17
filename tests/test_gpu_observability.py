@@ -40,6 +40,7 @@ from gpu.validate_cuda_dll import (
     load_production_manifest,
     PRODUCTION_RECIPES,
     stress_persistent_plan,
+    validate_context_reuse_matrix,
     _timing_summary,
 )
 
@@ -480,6 +481,20 @@ class GpuRuntimeMetricsTests(unittest.TestCase):
         self.assertEqual(dll.plan_create_calls, 1)
         self.assertEqual(dll.plan_execute_calls, 2)
         self.assertEqual(len(runtime._native_plans), 1)
+
+    def test_context_reuse_matrix_covers_shape_channel_and_parameter_changes(self):
+        runtime = GpuRuntime(enabled=False)
+        dll = _NativePlanDll()
+        runtime._dll = dll
+        runtime.device_count = 1
+        runtime._load_optional_context()
+
+        metrics = validate_context_reuse_matrix(runtime)
+
+        self.assertEqual(len(metrics), 8)
+        self.assertEqual(dll.plan_create_calls, 4)
+        self.assertEqual(dll.plan_execute_calls, 8)
+        self.assertEqual(len(runtime._native_plans), 4)
 
     def test_native_descriptor_encodes_detector_neutral_nodes_and_parameters(self):
         image = np.zeros((12, 16, 3), dtype=np.uint8)

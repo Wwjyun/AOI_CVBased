@@ -123,6 +123,16 @@ class CudaSourceContractTests(unittest.TestCase):
         self.assertIn("TIMING_THRESHOLD_START", source)
         self.assertIn("TIMING_MORPHOLOGY_START", source)
 
+    def test_grow_only_reserve_keeps_previous_pointer_when_allocation_fails(self):
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "gpu" / "visionflow_cuda.cu").read_text(encoding="utf-8")
+        reserve = source.split("int reserve_device(", 1)[1].split(
+            "int prepare_gaussian_weights", 1
+        )[0]
+
+        self.assertLess(reserve.index("cudaMalloc(&replacement"), reserve.index("free_device(*pointer)"))
+        self.assertLess(reserve.index("if (error != cudaSuccess) return"), reserve.index("free_device(*pointer)"))
+
 
 if __name__ == "__main__":
     unittest.main()

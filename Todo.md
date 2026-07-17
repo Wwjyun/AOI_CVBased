@@ -97,7 +97,7 @@
 - [x] `GpuRuntime` 提供 `close()`、context manager、destructor 與 `RLock` 序列化。
 - [x] 將 CUDA stream、morphology ping-pong 與所有 plan scratch 納入同一 context。
 - [x] monitor/batch 跨多張影像重用同一個長生命週期 `GpuRuntime`/context。
-- [ ] 測試尺寸增減、channel 切換、參數改變、CUDA error/OOM 後的重用與釋放。（fake DLL 已覆蓋 execution error recovery 與 ROI batch OOM 降批；真實 CUDA error/OOM 仍待 RTX）
+- [ ] 測試尺寸增減、channel 切換、參數改變、CUDA error/OOM 後的重用與釋放。（validator 已覆蓋 shape grow/shrink、1/3 channel、參數切換與 warm allocation plateau；fake DLL 已覆蓋 execution error recovery、ROI batch OOM 降批，source contract 固定 allocation-before-free；真實 CUDA error/OOM 仍待 RTX）
 - [ ] 評估 `cudaMallocAsync`/memory pool；只有相容且實測有收益時採用。
 
 ### Morphology
@@ -265,3 +265,4 @@
 - [x] 2026-07-17：RTX validator 新增 64²、128²、256²、512²、1024² 的 401-style native plan CPU/GPU crossover matrix，包含 cold/warm-up/median/P95、含傳輸 speedup、穩定 1.0x/1.5x 門檻候選；只輸出證據、不在 RTX 驗收前改 production routing。
 - [x] 2026-07-17：新增 production acceptance manifest 與 validator 入口，強制五份 production recipes 各具 PASS/NG、唯一 case id、有效檔案與標籤，逐案執行 CPU/GPU 完整 pipeline 等價並核對 expected final；example 已列出 10 個待提供的真實樣本位置。
 - [x] 2026-07-17：`VfCudaTimingsV1` 新增 morphology CUDA event 分項，linear/DAG native plan 均量測完整 morphology passes；RTX validator 加入 detector-401-style close iterations 1/2/4/8 的 CPU/GPU cold/warm/median/P95、含傳輸 speedup 與 morphology/kernel 占比，separable kernel 與 routing threshold 仍待實機數據決策。
+- [x] 2026-07-17：新增 persistent context reuse matrix，依序覆蓋 BGR shape grow、gray channel 切換、BGR shrink 與 plan parameter 改變，第二輪要求 allocation count 不再增加；source contract 證明 grow-only reserve 先成功配置 replacement 才釋放舊 pointer，因此單次 OOM 不會破壞既有 buffer，真實 CUDA error/OOM 注入仍待 RTX。
