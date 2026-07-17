@@ -43,18 +43,16 @@ class Detector401_2(BaseDetector):
             if area <= 0.0 or not self._passes_area_filter(area):
                 continue
 
-            mask = np.zeros(roi.shape[:2], dtype=np.uint8)
-            cv2.drawContours(mask, [contour], -1, 255, thickness=cv2.FILLED)
-            contour_pixel_count = int(np.count_nonzero(mask))
+            x, y, w, h, white_pixel_count, contour_pixel_count = self._contour_white_pixel_stats(
+                binary, contour
+            )
             if contour_pixel_count <= 0:
                 continue
 
-            white_pixel_count = int(np.count_nonzero((binary == 255) & (mask > 0)))
             white_pixel_ratio = white_pixel_count / float(contour_pixel_count)
             if white_pixel_ratio < ratio_threshold:
                 continue
 
-            x, y, w, h = cv2.boundingRect(contour)
             x += offset_x
             y += offset_y
             confidence = min(1.0, white_pixel_ratio)
@@ -88,6 +86,21 @@ class Detector401_2(BaseDetector):
 
         defects.sort(key=lambda item: item["metadata"]["white_pixel_ratio"], reverse=True)
         return defects
+
+    @staticmethod
+    def _contour_white_pixel_stats(binary, contour):
+        x, y, w, h = cv2.boundingRect(contour)
+        local_contour = contour.copy()
+        local_contour[:, 0, 0] -= x
+        local_contour[:, 0, 1] -= y
+
+        mask = np.zeros((h, w), dtype=np.uint8)
+        cv2.drawContours(mask, [local_contour], -1, 255, thickness=cv2.FILLED)
+        contour_pixel_count = int(np.count_nonzero(mask))
+        white_pixel_count = int(
+            np.count_nonzero((binary[y : y + h, x : x + w] == 255) & (mask > 0))
+        )
+        return x, y, w, h, white_pixel_count, contour_pixel_count
 
     def _roi_image(self, gray):
         inset = max(0, int(self.params.get("roi_inset_px", 0)))
