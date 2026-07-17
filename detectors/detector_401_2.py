@@ -103,16 +103,30 @@ class Detector401_2(BaseDetector):
     def _make_binary(self, gray):
         blur_size = self._odd_at_least(int(self.params.get("blur_size", 25)), 3)
         block_size = self._odd_at_least(int(self.params.get("adaptive_block_size", 35)), 3)
-        plan = PreprocessPlan(
-            name="gray_gaussian_adaptive_mean",
-            operations=(
-                Gray(),
-                Gaussian(blur_size),
-                AdaptiveMean(
-                    block_size=block_size,
-                    c=float(self.params.get("adaptive_c", -2.0)),
-                    max_value=int(self.params.get("max_value", 255)),
-                    invert=True,
+        adaptive_c = float(self.params.get("adaptive_c", -2.0))
+        max_value = int(self.params.get("max_value", 255))
+        signature = (
+            "gray_gaussian_adaptive_mean",
+            blur_size,
+            block_size,
+            adaptive_c,
+            max_value,
+            True,
+        )
+        plan = self.cached_preprocess_plan(
+            gray,
+            signature,
+            lambda: PreprocessPlan(
+                name="gray_gaussian_adaptive_mean",
+                operations=(
+                    Gray(),
+                    Gaussian(blur_size),
+                    AdaptiveMean(
+                        block_size=block_size,
+                        c=adaptive_c,
+                        max_value=max_value,
+                        invert=True,
+                    ),
                 ),
             ),
         )

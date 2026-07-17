@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections import OrderedDict
+from collections.abc import Callable, Hashable
 from dataclasses import dataclass
 from typing import TypeAlias
 
@@ -61,6 +63,44 @@ class PreprocessPlan:
     def __post_init__(self) -> None:
         if not self.operations:
             raise ValueError("A preprocessing plan must contain at least one operator")
+
+
+class PreprocessPlanCache:
+    """Small per-detector LRU cache for immutable, shape-aware preprocessing plans."""
+
+    def __init__(self, max_entries: int = 32) -> None:
+        if max_entries <= 0:
+            raise ValueError("Preprocess plan cache size must be positive")
+        self.max_entries = int(max_entries)
+        self._plans: OrderedDict[tuple, PreprocessPlan] = OrderedDict()
+
+    def get_or_create(
+        self,
+        image: np.ndarray,
+        signature: Hashable,
+        factory: Callable[[], PreprocessPlan],
+    ) -> PreprocessPlan:
+        source = np.asarray(image)
+        key = (tuple(int(value) for value in source.shape), source.dtype.str, signature)
+        cached = self._plans.get(key)
+        if cached is not None:
+            self._plans.move_to_end(key)
+            return cached
+
+        plan = factory()
+        if not isinstance(plan, PreprocessPlan):
+            raise TypeError("Preprocess plan cache factory must return PreprocessPlan")
+        self._plans[key] = plan
+        if len(self._plans) > self.max_entries:
+            self._plans.popitem(last=False)
+        return plan
+
+    @property
+    def size(self) -> int:
+        return len(self._plans)
+
+    def clear(self) -> None:
+        self._plans.clear()
 
 
 class CpuPreprocessExecutor:

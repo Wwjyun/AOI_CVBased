@@ -19,6 +19,7 @@ from core.preprocess_plan import (
     Gaussian,
     Gray,
     PreprocessPlan,
+    PreprocessPlanCache,
     Resize,
     UnsupportedPreprocessPlan,
 )
@@ -237,6 +238,61 @@ class PreprocessPlanTests(unittest.TestCase):
             CudaPreprocessExecutor(_PrimitiveRuntimeStub()).execute(
                 np.zeros((20, 20, 3), dtype=np.uint8), plan
             )
+
+    def test_plan_cache_reuses_shape_and_signature_with_lru_bound(self):
+        cache = PreprocessPlanCache(max_entries=2)
+        builds = []
+
+        def build(name):
+            builds.append(name)
+            return PreprocessPlan((Gray(),), name=name)
+
+        image = np.zeros((8, 9, 3), dtype=np.uint8)
+        first = cache.get_or_create(image, ("gray", 1), lambda: build("first"))
+        reused = cache.get_or_create(image, ("gray", 1), lambda: build("unused"))
+        different_shape = cache.get_or_create(image[:7], ("gray", 1), lambda: build("shape"))
+        different_dtype = cache.get_or_create(
+            image.astype(np.float32), ("gray", 1), lambda: build("dtype")
+        )
+        different_params = cache.get_or_create(image, ("gray", 2), lambda: build("params"))
+
+        self.assertIs(first, reused)
+        self.assertIsNot(first, different_shape)
+        self.assertIsNot(first, different_dtype)
+        self.assertIsNot(first, different_params)
+        self.assertEqual(builds, ["first", "shape", "dtype", "params"])
+        self.assertEqual(cache.size, 2)
+
+    def test_detector_401_2_caches_plan_by_shape_and_params(self):
+        class CapturingExecutor:
+            def __init__(self):
+                self.plans = []
+
+            def execute(self, image, plan):
+                self.plans.append(plan)
+                return np.zeros(image.shape[:2], dtype=np.uint8)
+
+        detector = Detector401_2(
+            params={"blur_size": 4, "adaptive_block_size": 6, "adaptive_c": -2.0}
+        )
+        executor = CapturingExecutor()
+        detector._cpu_preprocess_executor = executor
+        image = np.zeros((64, 64), dtype=np.uint8)
+
+        detector._make_binary(image)
+        detector._make_binary(image.copy())
+        detector._make_binary(np.zeros((65, 64), dtype=np.uint8))
+        detector.params["adaptive_c"] = -3.0
+        detector._make_binary(image)
+
+        self.assertIs(executor.plans[0], executor.plans[1])
+        self.assertIsNot(executor.plans[0], executor.plans[2])
+        self.assertIsNot(executor.plans[0], executor.plans[3])
+        self.assertEqual(executor.plans[0].operations[1], Gaussian(5))
+        self.assertEqual(executor.plans[0].operations[2].block_size, 7)
+        self.assertEqual(executor.plans[0].operations[2].c, -2.0)
+        self.assertEqual(executor.plans[3].operations[2].c, -3.0)
+        self.assertEqual(detector.preprocess_plan_cache_size, 3)
 
 
 class ComparisonToleranceTests(unittest.TestCase):

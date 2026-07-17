@@ -2,7 +2,12 @@ from __future__ import annotations
 
 from copy import deepcopy
 
-from core.preprocess_plan import CpuPreprocessExecutor, CudaPreprocessExecutor, PreprocessPlan
+from core.preprocess_plan import (
+    CpuPreprocessExecutor,
+    CudaPreprocessExecutor,
+    PreprocessPlan,
+    PreprocessPlanCache,
+)
 
 
 class BaseDetector:
@@ -22,6 +27,7 @@ class BaseDetector:
             self.gpu_fallback_reason = getattr(gpu_runtime, "unavailable_reason", "CUDA runtime was not created")
         self._cpu_preprocess_executor = CpuPreprocessExecutor()
         self._cuda_preprocess_executor = CudaPreprocessExecutor(gpu_runtime) if gpu_runtime is not None else None
+        self._preprocess_plan_cache = PreprocessPlanCache()
 
     @property
     def gpu_active(self) -> bool:
@@ -37,6 +43,13 @@ class BaseDetector:
         if self.gpu_active and self._cuda_preprocess_executor is not None:
             return self._cuda_preprocess_executor.execute(image, plan)
         return self._cpu_preprocess_executor.execute(image, plan)
+
+    def cached_preprocess_plan(self, image, signature, factory) -> PreprocessPlan:
+        return self._preprocess_plan_cache.get_or_create(image, signature, factory)
+
+    @property
+    def preprocess_plan_cache_size(self) -> int:
+        return self._preprocess_plan_cache.size
 
     def run(self, image) -> dict:
         try:
