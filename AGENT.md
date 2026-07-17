@@ -66,6 +66,17 @@ Put behavior in the narrowest appropriate module. Do not duplicate pipeline or f
 - Avoid module globals that hold mutable detector, recipe, image, or GPU state.
 - Inject runtime/backend dependencies where tests need CPU, fake DLL, legacy DLL, or failing GPU behavior.
 
+## Future detector development contract
+
+- Every new traditional CV detector must express reusable image preprocessing as a cached immutable `PreprocessPlan`; detector code keeps only detector-specific geometry, filtering, PASS/NG decisions, defect metadata, and deterministic ordering.
+- Cache keys must cover the input shape/dtype and every detector parameter that changes preprocessing semantics. Use the bounded shared plan cache rather than mutable module globals or rebuilding plans for every tile.
+- `CpuPreprocessExecutor` is the correctness reference. Optional CUDA execution must use shared typed operators, capability reporting, and full-detector CPU restart on unsupported semantics or failure.
+- Do not add detector-specific CUDA workflows or exports for new detectors. When a reusable operation is missing, add a backend-neutral typed operator and its CPU reference first; temporary compatibility adapters require an explicit migration item in `Todo.md`.
+- A new traditional CV detector is not complete without tests for direct OpenCV/CPU equivalence, plan cache reuse and invalidation, missing/legacy/failing backend routing, PASS/NG, defect count, bbox, area, confidence, metadata, and deterministic ordering as applicable.
+- DL model inference, framework sessions, and TensorRT/ONNX Runtime execution are not required to fit inside `PreprocessPlan`. Reusable traditional CV preprocessing and postprocessing around the model should still use shared typed operators or an equivalent shared DL preprocessing abstraction.
+- DL detectors must share model/session lifecycle, GPU scheduling, VRAM budget, warm-up, capability metrics, error handling, and fallback policy. GUI, monitor, and batch workers must not each load an independent model copy.
+- A DL detector must preserve traceable preprocessing, model version, backend, input/output shape, thresholds, and fallback metadata, with CPU or approved reference-backend accuracy tests before GPU acceleration becomes a default.
+
 ## Required workflow
 
 Before editing:
