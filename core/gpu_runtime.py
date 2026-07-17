@@ -54,6 +54,16 @@ class _VfDagOutputV1(ctypes.Structure):
     ]
 
 
+class _VfRoiV1(ctypes.Structure):
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32),
+        ("x", ctypes.c_int32),
+        ("y", ctypes.c_int32),
+        ("width", ctypes.c_int32),
+        ("height", ctypes.c_int32),
+    ]
+
+
 class GpuRuntimeError(RuntimeError):
     pass
 
@@ -92,6 +102,35 @@ class GpuDeviceRoi:
         return self.image.roi(self.x + int(x), self.y + int(y), int(width), int(height))
 
 
+class GpuRoiBatch:
+    def __init__(self, runtime, handle: ctypes.c_void_p, image: GpuResidentImage, count: int, width: int, height: int):
+        self.runtime = runtime
+        self.handle = handle
+        self.image = image
+        self.count = int(count)
+        self.width = int(width)
+        self.height = int(height)
+        self.channels = int(image.channels)
+        self.offset = 0
+        self._closed = False
+
+    def download(self, index: int) -> np.ndarray:
+        if self._closed:
+            raise GpuRuntimeError("GPU ROI batch is already closed")
+        return self.runtime.download_roi_batch(self, index)
+
+    def close(self) -> None:
+        if not self._closed:
+            self.runtime._destroy_roi_batch(self)
+            self._closed = True
+
+    def __enter__(self) -> "GpuRoiBatch":
+        return self
+
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self.close()
+
+
 class GpuRuntime:
     """Thread-safe ctypes bridge for the optional VisionFlow CUDA DLL."""
 
@@ -121,6 +160,7 @@ class GpuRuntime:
         self._context = None
         self._native_plans: dict[tuple, ctypes.c_void_p] = {}
         self._native_dag_plans: dict[tuple, ctypes.c_void_p] = {}
+        self._roi_batches: dict[int, ctypes.c_void_p] = {}
         self._max_native_plans = 64
         self.device_count = 0
         self.device_name = ""
@@ -187,6 +227,17 @@ class GpuRuntime:
             and all(getattr(self._dll, name, None) is not None for name in required)
         )
 
+    @property
+    def supports_roi_batch(self) -> bool:
+        required = (
+            "vf_roi_batch_create", "vf_roi_batch_info",
+            "vf_roi_batch_download_u8", "vf_roi_batch_destroy",
+        )
+        return bool(
+            self.supports_resident_roi
+            and all(getattr(self._dll, name, None) is not None for name in required)
+        )
+
     def status(self, requested: bool = False) -> dict:
         active = bool(requested and self.available and not self.last_error)
         return {
@@ -202,6 +253,7 @@ class GpuRuntime:
                 "native_plan": self.supports_native_plan,
                 "native_dag_plan": self.supports_native_dag_plan,
                 "resident_roi": self.supports_resident_roi,
+                "roi_batch": self.supports_roi_batch,
                 "fused_401_2": self.supports_fused_401_2,
             },
             "queue": {
@@ -394,6 +446,152 @@ class GpuRuntime:
         return GpuResidentImage(
             self, int(generation.value), int(source.shape[1]), int(source.shape[0]), channels
         )
+
+    def memory_info(self) -> dict[str, int]:
+        if not self.available or getattr(self._dll, "vf_gpu_memory_info", None) is None:
+            return {"free_bytes": 0, "total_bytes": 0}
+        free_bytes = ctypes.c_uint64()
+        total_bytes = ctypes.c_uint64()
+        with self._lock:
+            result = int(self._dll.vf_gpu_memory_info(
+                ctypes.byref(free_bytes), ctypes.byref(total_bytes)
+            ))
+        if result != 0:
+            raise GpuRuntimeError(
+                f"vf_gpu_memory_info failed with CUDA DLL error {result}: {self._error_message(result)}"
+            )
+        return {"free_bytes": int(free_bytes.value), "total_bytes": int(total_bytes.value)}
+
+    def recommended_roi_batch_size(
+        self,
+        width: int,
+        height: int,
+        channels: int,
+        candidates=(8, 16, 32, 64),
+        working_set_multiplier: int = 12,
+        usable_free_ratio: float = 0.5,
+    ) -> int:
+        if width <= 0 or height <= 0 or channels not in (1, 3):
+            raise ValueError("ROI batch shape/channels are invalid")
+        ordered = sorted({max(1, int(value)) for value in candidates})
+        if not ordered:
+            raise ValueError("ROI batch candidates cannot be empty")
+        free_bytes = self.memory_info()["free_bytes"]
+        if free_bytes <= 0:
+            return ordered[0]
+        budget = int(free_bytes * min(max(float(usable_free_ratio), 0.05), 0.9))
+        bytes_per_roi = int(width) * int(height) * int(channels) * max(1, int(working_set_multiplier))
+        fitting = [value for value in ordered if value * bytes_per_roi <= budget]
+        return fitting[-1] if fitting else ordered[0]
+
+    def create_roi_batch(self, image: GpuResidentImage, rois) -> GpuRoiBatch:
+        if not self.supports_roi_batch or image.runtime is not self:
+            raise GpuRuntimeError("CUDA DLL has no compatible ROI batch exports")
+        regions = list(rois)
+        if not regions:
+            raise ValueError("ROI batch cannot be empty")
+        encoded = []
+        expected_shape = None
+        for region in regions:
+            roi = region if isinstance(region, GpuDeviceRoi) else image.roi(*region)
+            if roi.image is not image:
+                raise GpuRuntimeError("Every ROI batch entry must belong to the same resident image")
+            shape = (roi.width, roi.height)
+            if expected_shape is None:
+                expected_shape = shape
+            elif shape != expected_shape:
+                raise ValueError("ROI batch entries must have equal width and height")
+            encoded.append(_VfRoiV1(
+                ctypes.sizeof(_VfRoiV1), roi.x, roi.y, roi.width, roi.height
+            ))
+        descriptors = (_VfRoiV1 * len(encoded))(*encoded)
+        handle = ctypes.c_void_p()
+        queued = time.perf_counter()
+        with self._queue_slots, self._lock:
+            lock_acquired = time.perf_counter()
+            result = int(self._dll.vf_roi_batch_create(
+                self._context, image.generation, descriptors, len(encoded), ctypes.byref(handle)
+            ))
+            completed = time.perf_counter()
+            self._record_performance(
+                "vf_roi_batch_create", 0, 0,
+                completed - lock_acquired, lock_acquired - queued,
+            )
+        if result != 0 or not handle.value:
+            raise GpuRuntimeError(
+                f"vf_roi_batch_create failed with CUDA DLL error {result}: {self._error_message(result)}"
+            )
+        self._roi_batches[int(handle.value)] = handle
+        return GpuRoiBatch(self, handle, image, len(encoded), expected_shape[0], expected_shape[1])
+
+    def iter_roi_batches(
+        self,
+        image: GpuResidentImage,
+        rois,
+        candidates=(8, 16, 32, 64),
+    ):
+        regions = list(rois)
+        if not regions:
+            return
+        first = regions[0] if isinstance(regions[0], GpuDeviceRoi) else image.roi(*regions[0])
+        ordered = sorted({max(1, int(value)) for value in candidates})
+        selected = self.recommended_roi_batch_size(
+            first.width, first.height, image.channels, candidates=ordered
+        )
+        active_index = ordered.index(selected)
+        offset = 0
+        while offset < len(regions):
+            count = min(ordered[active_index], len(regions) - offset)
+            try:
+                batch = self.create_roi_batch(image, regions[offset:offset + count])
+            except GpuRuntimeError:
+                if active_index == 0:
+                    raise
+                active_index -= 1
+                continue
+            batch.offset = offset
+            try:
+                yield batch
+            finally:
+                batch.close()
+            offset += count
+
+    def download_roi_batch(self, batch: GpuRoiBatch, index: int) -> np.ndarray:
+        if batch.runtime is not self or batch._closed or not 0 <= int(index) < batch.count:
+            raise GpuRuntimeError("ROI batch/index is invalid or closed")
+        shape = (batch.height, batch.width) if batch.channels == 1 else (
+            batch.height, batch.width, batch.channels
+        )
+        output = np.empty(shape, dtype=np.uint8)
+        queued = time.perf_counter()
+        with self._queue_slots, self._lock:
+            lock_acquired = time.perf_counter()
+            result = int(self._dll.vf_roi_batch_download_u8(
+                batch.handle, int(index),
+                output.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
+                int(output.strides[0]), batch.channels,
+            ))
+            completed = time.perf_counter()
+            self._record_performance(
+                "vf_roi_batch_download_u8", 0, int(output.nbytes),
+                completed - lock_acquired, lock_acquired - queued,
+            )
+        if result != 0:
+            raise GpuRuntimeError(
+                f"vf_roi_batch_download_u8 failed with CUDA DLL error {result}: {self._error_message(result)}"
+            )
+        return output
+
+    def _destroy_roi_batch(self, batch: GpuRoiBatch) -> None:
+        with self._lock:
+            handle = self._roi_batches.pop(int(batch.handle.value or 0), None)
+            if handle is None:
+                return
+            result = int(self._dll.vf_roi_batch_destroy(handle))
+        if result != 0:
+            raise GpuRuntimeError(
+                f"vf_roi_batch_destroy failed with CUDA DLL error {result}: {self._error_message(result)}"
+            )
 
     def native_plan_capability(self, plan, image: np.ndarray) -> tuple[bool, str]:
         if not self.supports_native_plan:
@@ -590,6 +788,11 @@ class GpuRuntime:
 
     def close(self) -> None:
         with self._lock:
+            destroy_batch = getattr(self._dll, "vf_roi_batch_destroy", None) if self._dll is not None else None
+            if destroy_batch is not None:
+                for handle in self._roi_batches.values():
+                    int(destroy_batch(handle))
+            self._roi_batches.clear()
             destroy_dag_plan = getattr(self._dll, "vf_dag_plan_destroy", None) if self._dll is not None else None
             if destroy_dag_plan is not None:
                 for handle in self._native_dag_plans.values():
@@ -702,6 +905,7 @@ class GpuRuntime:
         self._load_optional_native_plan()
         self._load_optional_native_dag_plan()
         self._load_optional_resident_roi()
+        self._load_optional_roi_batch()
 
     def _load_optional_native_plan(self) -> None:
         query = getattr(self._dll, "vf_plan_query", None)
@@ -779,6 +983,34 @@ class GpuRuntime:
                 ctypes.POINTER(_VfDagOutputV1), ctypes.c_int,
             ]
             dag.restype = ctypes.c_int
+
+    def _load_optional_roi_batch(self) -> None:
+        memory_info = getattr(self._dll, "vf_gpu_memory_info", None)
+        create = getattr(self._dll, "vf_roi_batch_create", None)
+        info = getattr(self._dll, "vf_roi_batch_info", None)
+        download = getattr(self._dll, "vf_roi_batch_download_u8", None)
+        destroy = getattr(self._dll, "vf_roi_batch_destroy", None)
+        if memory_info is not None:
+            memory_info.argtypes = [ctypes.POINTER(ctypes.c_uint64), ctypes.POINTER(ctypes.c_uint64)]
+            memory_info.restype = ctypes.c_int
+        if create is not None:
+            create.argtypes = [
+                ctypes.c_void_p, ctypes.c_uint64, ctypes.POINTER(_VfRoiV1),
+                ctypes.c_int, ctypes.POINTER(ctypes.c_void_p),
+            ]
+            create.restype = ctypes.c_int
+        if info is not None:
+            info.argtypes = [ctypes.c_void_p] + [ctypes.POINTER(ctypes.c_int)] * 4
+            info.restype = ctypes.c_int
+        if download is not None:
+            download.argtypes = [
+                ctypes.c_void_p, ctypes.c_int, ctypes.POINTER(ctypes.c_uint8),
+                ctypes.c_int, ctypes.c_int,
+            ]
+            download.restype = ctypes.c_int
+        if destroy is not None:
+            destroy.argtypes = [ctypes.c_void_p]
+            destroy.restype = ctypes.c_int
 
     @staticmethod
     def _native_plan_descriptor(plan, image: np.ndarray) -> tuple[_VfPlanDescV1, object]:

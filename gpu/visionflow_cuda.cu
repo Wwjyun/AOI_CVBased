@@ -71,6 +71,21 @@ struct NativeDagPlan {
     std::vector<int> output_nodes;
 };
 
+struct NativeRoiBatch {
+    PersistentContext* context = nullptr;
+    uint8_t* data = nullptr;
+    VfRoiV1* device_rois = nullptr;
+    int count = 0;
+    int width = 0;
+    int height = 0;
+    int channels = 0;
+
+    ~NativeRoiBatch() {
+        visionflow_cuda::free_device(data);
+        visionflow_cuda::free_device(device_rois);
+    }
+};
+
 template <typename T>
 int reserve_device(
     T** pointer,
@@ -716,6 +731,28 @@ __global__ void morph_kernel(const uint8_t* src, uint8_t* dst, int width, int he
     }
 }
 
+__global__ void gather_roi_batch_kernel(
+    const uint8_t* source,
+    int source_width,
+    int channels,
+    const VfRoiV1* rois,
+    uint8_t* batch,
+    int roi_width,
+    int roi_height) {
+    int x = blockIdx.x * blockDim.x + threadIdx.x;
+    int y = blockIdx.y * blockDim.y + threadIdx.y;
+    int roi_index = blockIdx.z;
+    if (x >= roi_width || y >= roi_height) return;
+    const VfRoiV1 roi = rois[roi_index];
+    size_t source_pixel =
+        (static_cast<size_t>(roi.y + y) * source_width + roi.x + x) * channels;
+    size_t batch_pixel =
+        ((static_cast<size_t>(roi_index) * roi_height + y) * roi_width + x) * channels;
+    for (int channel = 0; channel < channels; ++channel) {
+        batch[batch_pixel + channel] = source[source_pixel + channel];
+    }
+}
+
 dim3 grid2d(int width, int height) { return dim3((width + BLOCK_X - 1) / BLOCK_X, (height + BLOCK_Y - 1) / BLOCK_Y); }
 }
 
@@ -960,6 +997,17 @@ VF_CUDA_API int vf_gpu_error_message(int error_code, char* output, int capacity)
     return VF_CUDA_OK;
 }
 
+VF_CUDA_API int vf_gpu_memory_info(uint64_t* free_bytes, uint64_t* total_bytes) {
+    if (free_bytes == nullptr || total_bytes == nullptr) return VF_CUDA_INVALID_ARGUMENT;
+    size_t free_value = 0;
+    size_t total_value = 0;
+    cudaError_t error = cudaMemGetInfo(&free_value, &total_value);
+    if (error != cudaSuccess) return cuda_result(error);
+    *free_bytes = static_cast<uint64_t>(free_value);
+    *total_bytes = static_cast<uint64_t>(total_value);
+    return VF_CUDA_OK;
+}
+
 VF_CUDA_API int vf_context_create(void** context) {
     if (context == nullptr) return VF_CUDA_INVALID_ARGUMENT;
     *context = nullptr;
@@ -1031,6 +1079,121 @@ VF_CUDA_API int vf_context_upload_u8(
     ++persistent->resident_generation;
     if (persistent->resident_generation == 0) ++persistent->resident_generation;
     *generation = persistent->resident_generation;
+    return VF_CUDA_OK;
+}
+
+VF_CUDA_API int vf_roi_batch_create(
+    void* context,
+    uint64_t generation,
+    const VfRoiV1* rois,
+    int roi_count,
+    void** batch) {
+    PersistentContext* persistent = static_cast<PersistentContext*>(context);
+    if (persistent == nullptr || batch == nullptr || rois == nullptr || roi_count <= 0 ||
+        roi_count > 65535 || generation == 0 || generation != persistent->resident_generation ||
+        persistent->resident_u8 == nullptr) {
+        return VF_CUDA_INVALID_ARGUMENT;
+    }
+    *batch = nullptr;
+    const int width = rois[0].width;
+    const int height = rois[0].height;
+    if (width <= 0 || height <= 0 || width > persistent->resident_width ||
+        height > persistent->resident_height) {
+        return VF_CUDA_INVALID_ARGUMENT;
+    }
+    for (int index = 0; index < roi_count; ++index) {
+        const VfRoiV1& roi = rois[index];
+        if (roi.struct_size != sizeof(VfRoiV1) || roi.width != width || roi.height != height ||
+            roi.x < 0 || roi.y < 0 || roi.x > persistent->resident_width - width ||
+            roi.y > persistent->resident_height - height) {
+            return VF_CUDA_INVALID_ARGUMENT;
+        }
+    }
+    size_t roi_bytes = static_cast<size_t>(width) * height * persistent->resident_channels;
+    if (roi_bytes == 0 || static_cast<size_t>(roi_count) > SIZE_MAX / roi_bytes ||
+        static_cast<size_t>(roi_count) > SIZE_MAX / sizeof(VfRoiV1)) {
+        return VF_CUDA_INVALID_ARGUMENT;
+    }
+    NativeRoiBatch* created = new (std::nothrow) NativeRoiBatch();
+    if (created == nullptr) return VF_CUDA_ALLOCATION_FAILED;
+    created->context = persistent;
+    created->count = roi_count;
+    created->width = width;
+    created->height = height;
+    created->channels = persistent->resident_channels;
+    cudaError_t error = cudaMalloc(&created->data, roi_bytes * roi_count);
+    if (error == cudaSuccess) {
+        error = cudaMalloc(&created->device_rois, sizeof(VfRoiV1) * roi_count);
+    }
+    if (error == cudaSuccess) {
+        error = cudaMemcpyAsync(
+            created->device_rois, rois, sizeof(VfRoiV1) * roi_count,
+            cudaMemcpyHostToDevice, persistent->stream);
+    }
+    if (error != cudaSuccess) {
+        delete created;
+        return cuda_result(error);
+    }
+    dim3 grid(
+        (width + BLOCK_X - 1) / BLOCK_X,
+        (height + BLOCK_Y - 1) / BLOCK_Y,
+        roi_count);
+    gather_roi_batch_kernel<<<grid, dim3(BLOCK_X, BLOCK_Y), 0, persistent->stream>>>(
+        persistent->resident_u8, persistent->resident_width, persistent->resident_channels,
+        created->device_rois, created->data, width, height);
+    int result = visionflow_cuda::kernel_launch_result();
+    if (result == VF_CUDA_OK) result = visionflow_cuda::stream_result(persistent->stream);
+    if (result != VF_CUDA_OK) {
+        delete created;
+        return result;
+    }
+    *batch = created;
+    return VF_CUDA_OK;
+}
+
+VF_CUDA_API int vf_roi_batch_info(
+    void* batch,
+    int* roi_count,
+    int* width,
+    int* height,
+    int* channels) {
+    NativeRoiBatch* native = static_cast<NativeRoiBatch*>(batch);
+    if (native == nullptr || roi_count == nullptr || width == nullptr || height == nullptr ||
+        channels == nullptr) {
+        return VF_CUDA_INVALID_ARGUMENT;
+    }
+    *roi_count = native->count;
+    *width = native->width;
+    *height = native->height;
+    *channels = native->channels;
+    return VF_CUDA_OK;
+}
+
+VF_CUDA_API int vf_roi_batch_download_u8(
+    void* batch,
+    int roi_index,
+    uint8_t* dst,
+    int dst_stride,
+    int dst_channels) {
+    NativeRoiBatch* native = static_cast<NativeRoiBatch*>(batch);
+    if (native == nullptr || native->context == nullptr || roi_index < 0 ||
+        roi_index >= native->count || dst_channels != native->channels ||
+        !visionflow_cuda::valid_image(
+            dst, native->width, native->height, dst_stride, dst_channels)) {
+        return VF_CUDA_INVALID_ARGUMENT;
+    }
+    size_t row_bytes = static_cast<size_t>(native->width) * native->channels;
+    size_t roi_bytes = row_bytes * native->height;
+    cudaError_t error = cudaMemcpy2DAsync(
+        dst, dst_stride, native->data + static_cast<size_t>(roi_index) * roi_bytes,
+        row_bytes, row_bytes, native->height, cudaMemcpyDeviceToHost,
+        native->context->stream);
+    if (error != cudaSuccess) return cuda_result(error);
+    return visionflow_cuda::stream_result(native->context->stream);
+}
+
+VF_CUDA_API int vf_roi_batch_destroy(void* batch) {
+    delete static_cast<NativeRoiBatch*>(batch);
     return VF_CUDA_OK;
 }
 

@@ -120,6 +120,10 @@ class _NativeDagPlanDll(_NativePlanDll):
         self.plan_roi_execute_calls = 0
         self.dag_roi_execute_calls = 0
         self.generation = 0
+        self.batch_destroy_calls = 0
+        self.resident = None
+        self.batch_rois = []
+        self.batch_fail_above = 0
         self.vf_dag_plan_query = _Function(self._dag_query)
         self.vf_dag_plan_create = _Function(self._dag_create)
         self.vf_dag_plan_execute = _Function(self._dag_execute)
@@ -127,6 +131,11 @@ class _NativeDagPlanDll(_NativePlanDll):
         self.vf_context_upload_u8 = _Function(self._upload)
         self.vf_plan_execute_roi = _Function(self._plan_execute_roi)
         self.vf_dag_plan_execute_roi = _Function(self._dag_execute_roi)
+        self.vf_gpu_memory_info = _Function(self._memory_info)
+        self.vf_roi_batch_create = _Function(self._batch_create)
+        self.vf_roi_batch_info = _Function(self._batch_info)
+        self.vf_roi_batch_download_u8 = _Function(self._batch_download)
+        self.vf_roi_batch_destroy = _Function(self._batch_destroy)
 
     @staticmethod
     def _dag_query(_descriptor, _width, _height, reason, _capacity):
@@ -151,9 +160,14 @@ class _NativeDagPlanDll(_NativePlanDll):
         self.events.append(("dag_plan", plan.value if hasattr(plan, "value") else int(plan)))
         return 0
 
-    def _upload(self, _context, _src, _width, _height, _stride, _channels, generation):
+    def _upload(self, _context, src, width, height, stride, channels, generation):
         self.upload_calls += 1
         self.generation += 1
+        rows = [ctypes.string_at(ctypes.addressof(src.contents) + row * int(stride), int(width) * int(channels))
+                for row in range(int(height))]
+        self.resident = np.frombuffer(b"".join(rows), dtype=np.uint8).reshape(
+            int(height), int(width), int(channels)
+        ).copy()
         generation._obj.value = self.generation
         return 0
 
@@ -172,6 +186,46 @@ class _NativeDagPlanDll(_NativePlanDll):
         self.dag_roi_execute_calls += 1
         for index in range(int(output_count)):
             ctypes.memset(outputs[index].data, index, 4 * int(outputs[index].stride))
+        return 0
+
+    @staticmethod
+    def _memory_info(free_bytes, total_bytes):
+        free_bytes._obj.value = 2 * 1024**3
+        total_bytes._obj.value = 24 * 1024**3
+        return 0
+
+    def _batch_create(self, _context, generation, rois, roi_count, output):
+        if int(generation) != self.generation:
+            return 1
+        if self.batch_fail_above and int(roi_count) > self.batch_fail_above:
+            return 2
+        self.batch_rois = [
+            (int(rois[index].x), int(rois[index].y), int(rois[index].width), int(rois[index].height))
+            for index in range(int(roi_count))
+        ]
+        output._obj.value = 7890
+        return 0
+
+    def _batch_info(self, _batch, count, width, height, channels):
+        count._obj.value = len(self.batch_rois)
+        width._obj.value = self.batch_rois[0][2]
+        height._obj.value = self.batch_rois[0][3]
+        channels._obj.value = self.resident.shape[2]
+        return 0
+
+    def _batch_download(self, _batch, index, dst, dst_stride, _channels):
+        x, y, width, height = self.batch_rois[int(index)]
+        crop = np.ascontiguousarray(self.resident[y:y + height, x:x + width])
+        for row in range(height):
+            ctypes.memmove(
+                ctypes.addressof(dst.contents) + row * int(dst_stride),
+                crop[row].ctypes.data,
+                crop.shape[1] * crop.shape[2],
+            )
+        return 0
+
+    def _batch_destroy(self, _batch):
+        self.batch_destroy_calls += 1
         return 0
 
 
@@ -433,6 +487,52 @@ class GpuRuntimeMetricsTests(unittest.TestCase):
             resident.roi(19, 0, 2, 1)
         with self.assertRaises(GpuRuntimeError):
             resident.roi(3, 2, 12, 7).roi(11, 0, 2, 1)
+
+    def test_roi_coordinate_batch_downloads_contiguous_crops_and_destroys_first(self):
+        runtime = GpuRuntime(enabled=False)
+        dll = _NativeDagPlanDll()
+        runtime._dll = dll
+        runtime.device_count = 1
+        runtime._load_optional_context()
+        image = np.arange(10 * 12 * 3, dtype=np.uint8).reshape(10, 12, 3)
+        resident = runtime.upload_image(image)
+
+        with runtime.create_roi_batch(resident, [(1, 2, 4, 3), (6, 5, 4, 3)]) as batch:
+            self.assertTrue(runtime.supports_roi_batch)
+            self.assertEqual((batch.count, batch.width, batch.height, batch.channels), (2, 4, 3, 3))
+            np.testing.assert_array_equal(batch.download(0), image[2:5, 1:5])
+            np.testing.assert_array_equal(batch.download(1), image[5:8, 6:10])
+
+        self.assertEqual(dll.batch_destroy_calls, 1)
+        self.assertEqual(runtime.performance_stats()["host_to_device_bytes"], image.nbytes)
+
+    def test_vram_batch_policy_selects_largest_fitting_candidate(self):
+        runtime = GpuRuntime(enabled=False)
+        dll = _NativeDagPlanDll()
+        runtime._dll = dll
+        runtime.device_count = 1
+        runtime._load_optional_context()
+
+        self.assertEqual(runtime.memory_info()["free_bytes"], 2 * 1024**3)
+        self.assertEqual(runtime.recommended_roi_batch_size(512, 512, 3), 64)
+        self.assertEqual(runtime.recommended_roi_batch_size(4096, 4096, 3), 8)
+
+    def test_roi_batch_allocation_failure_downshifts_without_stale_handles(self):
+        runtime = GpuRuntime(enabled=False)
+        dll = _NativeDagPlanDll()
+        dll.batch_fail_above = 16
+        runtime._dll = dll
+        runtime.device_count = 1
+        runtime._load_optional_context()
+        image = np.zeros((64, 64, 3), dtype=np.uint8)
+        resident = runtime.upload_image(image)
+        rois = [(index % 8 * 4, index // 8 * 4, 4, 4) for index in range(40)]
+
+        batches = [(batch.offset, batch.count) for batch in runtime.iter_roi_batches(resident, rois)]
+
+        self.assertEqual(batches, [(0, 16), (16, 16), (32, 8)])
+        self.assertEqual(dll.batch_destroy_calls, 3)
+        self.assertEqual(runtime._roi_batches, {})
 
     def test_native_dag_descriptor_preserves_branch_inputs_and_outputs(self):
         image = np.zeros((8, 9, 3), dtype=np.uint8)

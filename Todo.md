@@ -125,9 +125,10 @@
 - [x] production/benchmark 在 device tiling 改善前預設關閉 GPU crop。
 - [x] 原圖一次 upload，以 device offset/view 表示 grid ROI，不再每 tile 上傳完整原圖。
 - [x] detector 可直接消費 device ROI；只有 CPU contour、GUI、debug 或存檔時才下載。
-- [ ] 新增 batch ROI API，以座標陣列產生連續 device buffers。
+- [x] 新增 batch ROI API，以座標陣列產生連續 device buffers。
 - [x] 新增 `run_batch(images/rois)` 或等價 detector batch 介面；CPU 預設實作可逐張執行。
-- [ ] 依影像尺寸與可用 VRAM 自動選 batch size；RTX 3090 測試 8、16、32、64 ROI。
+- [x] 依影像尺寸與可用 VRAM 自動選 batch size，配置失敗時自動縮小批次且不留下 stale handle。
+- [ ] RTX 3090 實機測試 8、16、32、64 ROI batch 的正確性、效能與 VRAM 平台。
 - [x] 單張 GUI 採低延遲策略；資料夾、monitor、batch 採高吞吐策略。
 - [x] 使用 bounded 單一 GPU queue，避免多個 CPU workers 同時搶 GPU 或無限制累積 VRAM。
 - [ ] 評估 pinned host memory 與 CUDA streams，量測 upload/kernel/download 重疊收益。
@@ -250,4 +251,5 @@
 - [x] 2026-07-17：新增 detector `run_batch(images/rois)` CPU 預設契約與 manager 介面；GpuRuntime 採 bounded queue 加單一序列化 execution，單張 pipeline 使用 latency depth=1，batch/monitor 使用可設定 throughput depth，production recipes 持續預設關閉負優化 GPU crop。
 - [x] 2026-07-17：新增 Windows CPU/static CI 與受信任 RTX 3090 self-hosted manual/nightly workflow；PR 執行 tests、compileall、recipe/CLI/GUI smoke、CUDA contract，GPU job 使用專屬 labels 並上傳 DLL/LIB/EXE/build log、環境及含 commit 的 benchmark JSON；Nsight capture 保留實機待辦。
 - [x] 2026-07-17：新增 context-owned resident image 與 linear/DAG device ROI ABI；grid pipeline 每張原圖只 upload 一次，以可組合子 ROI 對應 tile 與 detector inset，ROI plan 僅 D2D staging 並下載必要輸出；已覆蓋 generation/bounds、零額外 H2D、pipeline 單次 upload、C++ smoke、validator 與 source contract，RTX 3090 編譯/實測仍保留待辦。
+- [x] 2026-07-17：新增 native ROI coordinate batch opaque API，以單一 3D gather kernel 產生連續 device buffers；Python OOP handle 支援 download/context cleanup，依 `cudaMemGetInfo`、ROI 工作集與 8/16/32/64 candidates 自動選批次，配置失敗逐級降批且無 stale handle；validator 已準備四種批次實測，RTX 3090 數據仍保留待辦。
 - [x] 2026-07-17：統一 GPU `auto/cpu/cuda` policy：auto 可安全 fallback、cpu 完全不要求/載入 CUDA、cuda 強制成功且禁止 fallback；recipe 驗證、pipeline、長生命週期 session、GUI preview/tiling worker 與設計器均共用同一語意，GUI/history 顯示實際 backend。

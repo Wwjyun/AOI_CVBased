@@ -165,11 +165,34 @@ int main() {
         result = vf_dag_plan_execute_roi(
             dag_plan, resident_generation, 0, 0, dag_outputs, 2);
     }
+    uint64_t free_bytes = 0;
+    uint64_t total_bytes = 0;
+    if (result == VF_CUDA_OK) result = vf_gpu_memory_info(&free_bytes, &total_bytes);
+    VfRoiV1 batch_rois[2] = {
+        {sizeof(VfRoiV1), 0, 0, 4, 4},
+        {sizeof(VfRoiV1), 4, 4, 4, 4},
+    };
+    void* roi_batch = nullptr;
+    if (result == VF_CUDA_OK) {
+        result = vf_roi_batch_create(context, resident_generation, batch_rois, 2, &roi_batch);
+    }
+    int batch_count = 0, batch_width = 0, batch_height = 0, batch_channels = 0;
+    if (result == VF_CUDA_OK) {
+        result = vf_roi_batch_info(
+            roi_batch, &batch_count, &batch_width, &batch_height, &batch_channels);
+    }
+    std::vector<uint8_t> downloaded_roi(4 * 4 * 3, 0);
+    if (result == VF_CUDA_OK) {
+        result = vf_roi_batch_download_u8(roi_batch, 1, downloaded_roi.data(), 4 * 3, 3);
+    }
+    int batch_destroy_result = vf_roi_batch_destroy(roi_batch);
     int dag_destroy_result = vf_dag_plan_destroy(dag_plan);
     int plan_destroy_result = vf_plan_destroy(plan);
     int destroy_result = vf_context_destroy(context);
     if (result != VF_CUDA_OK || plan_destroy_result != VF_CUDA_OK ||
-        dag_destroy_result != VF_CUDA_OK || destroy_result != VF_CUDA_OK ||
+        dag_destroy_result != VF_CUDA_OK || batch_destroy_result != VF_CUDA_OK ||
+        destroy_result != VF_CUDA_OK || free_bytes == 0 || total_bytes < free_bytes ||
+        batch_count != 2 || batch_width != 4 || batch_height != 4 || batch_channels != 3 ||
         plan_allocation_count != repeated_allocation_count) {
         char message[256]{};
         int failed = result != VF_CUDA_OK ? result :
@@ -180,6 +203,6 @@ int main() {
         return 8;
     }
 
-    std::cout << "C ABI, grayscale, fused 401-2, generic plan/DAG and resident ROI smoke passed\n";
+    std::cout << "C ABI, plans, resident ROI and coordinate batch smoke passed\n";
     return 0;
 }

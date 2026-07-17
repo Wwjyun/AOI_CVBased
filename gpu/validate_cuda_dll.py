@@ -320,6 +320,32 @@ def validate_primitives(runtime: GpuRuntime) -> list[dict]:
         if after["host_to_device_bytes"] != before["host_to_device_bytes"]:
             raise AssertionError("resident DAG ROI unexpectedly uploaded detector input")
         print(f"PASS resident image/ROI routing: generation={resident.generation}")
+        if runtime.supports_roi_batch:
+            coordinates = [
+                (x, y, 16, 16)
+                for y in range(0, 128, 16)
+                for x in range(0, 128, 16)
+            ]
+            recommended = runtime.recommended_roi_batch_size(16, 16, 3)
+            for batch_size in (8, 16, 32, 64):
+                with runtime.create_roi_batch(resident, coordinates[:batch_size]) as batch:
+                    metrics.append(compare(
+                        f"roi_batch_{batch_size}_first",
+                        batch.download(0),
+                        bgr[0:16, 0:16],
+                    ))
+                    last_x, last_y, last_width, last_height = coordinates[batch_size - 1]
+                    metrics.append(compare(
+                        f"roi_batch_{batch_size}_last",
+                        batch.download(batch_size - 1),
+                        bgr[last_y:last_y + last_height, last_x:last_x + last_width],
+                    ))
+            print(
+                f"PASS ROI coordinate batches 8/16/32/64; "
+                f"recommended={recommended} memory={runtime.memory_info()}"
+            )
+        else:
+            print("SKIP ROI coordinate batch: optional exports unavailable")
     else:
         print("SKIP resident image/ROI routing: optional exports unavailable")
     return metrics

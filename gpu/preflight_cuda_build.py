@@ -54,6 +54,13 @@ OPTIONAL_RESIDENT_ROI_EXPORTS = {
     "vf_plan_execute_roi",
     "vf_dag_plan_execute_roi",
 }
+OPTIONAL_ROI_BATCH_EXPORTS = {
+    "vf_gpu_memory_info",
+    "vf_roi_batch_create",
+    "vf_roi_batch_info",
+    "vf_roi_batch_download_u8",
+    "vf_roi_batch_destroy",
+}
 CONTRACT_FILES = {
     "header": Path("gpu/include/visionflow_cuda.h"),
     "source": Path("gpu/visionflow_cuda.cu"),
@@ -124,6 +131,16 @@ def inspect_contract(root: Path = ROOT) -> dict:
             errors.append(f"native smoke does not call resident ROI exports: {sorted(missing_resident_smoke)}")
         if missing_resident_runtime:
             errors.append(f"Python runtime does not reference resident ROI exports: {sorted(missing_resident_runtime)}")
+    declared_batch_exports = OPTIONAL_ROI_BATCH_EXPORTS & header_exports
+    if declared_batch_exports and declared_batch_exports != OPTIONAL_ROI_BATCH_EXPORTS:
+        errors.append("ROI batch exports must be declared as one complete optional set")
+    if declared_batch_exports:
+        missing_batch_smoke = {name for name in OPTIONAL_ROI_BATCH_EXPORTS if name not in texts["smoke"]}
+        missing_batch_runtime = {name for name in OPTIONAL_ROI_BATCH_EXPORTS if name not in texts["runtime"]}
+        if missing_batch_smoke:
+            errors.append(f"native smoke does not call ROI batch exports: {sorted(missing_batch_smoke)}")
+        if missing_batch_runtime:
+            errors.append(f"Python runtime does not reference ROI batch exports: {sorted(missing_batch_runtime)}")
     if "visionflow_cuda.cu" not in texts["build"] or "test_cuda_api.cu" not in texts["build"]:
         errors.append("build script is missing an explicit DLL or smoke source manifest")
     if re.search(r"(?:\*\.cu|Get-ChildItem[^\n]*\.cu)", texts["build"], re.IGNORECASE):
@@ -137,6 +154,7 @@ def inspect_contract(root: Path = ROOT) -> dict:
         "exports": sorted(header_exports),
         "optional_generic_plan_exports": sorted(declared_plan_exports),
         "optional_resident_roi_exports": sorted(declared_resident_exports),
+        "optional_roi_batch_exports": sorted(declared_batch_exports),
         "dll_sources": ["gpu/visionflow_cuda.cu"],
         "smoke_sources": ["gpu/test_cuda_api.cu"],
         "sha256": {

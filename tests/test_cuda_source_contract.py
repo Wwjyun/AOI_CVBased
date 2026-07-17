@@ -6,6 +6,7 @@ from pathlib import Path
 from gpu.preflight_cuda_build import (
     OPTIONAL_GENERIC_PLAN_EXPORTS,
     OPTIONAL_RESIDENT_ROI_EXPORTS,
+    OPTIONAL_ROI_BATCH_EXPORTS,
     REQUIRED_ABI_V1_EXPORTS,
     inspect_contract,
 )
@@ -20,6 +21,7 @@ class CudaSourceContractTests(unittest.TestCase):
         self.assertTrue(REQUIRED_ABI_V1_EXPORTS.issubset(result["exports"]))
         self.assertEqual(set(result["optional_generic_plan_exports"]), OPTIONAL_GENERIC_PLAN_EXPORTS)
         self.assertEqual(set(result["optional_resident_roi_exports"]), OPTIONAL_RESIDENT_ROI_EXPORTS)
+        self.assertEqual(set(result["optional_roi_batch_exports"]), OPTIONAL_ROI_BATCH_EXPORTS)
         self.assertEqual(result["dll_sources"], ["gpu/visionflow_cuda.cu"])
         self.assertEqual(result["smoke_sources"], ["gpu/test_cuda_api.cu"])
 
@@ -91,6 +93,19 @@ class CudaSourceContractTests(unittest.TestCase):
             self.assertIn("cudaMemcpyDeviceToDevice", execute)
             self.assertNotIn("cudaMemcpyHostToDevice", execute)
             self.assertNotIn("cudaMalloc", execute)
+
+    def test_roi_batch_uses_one_coordinate_array_and_contiguous_device_buffer(self):
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "gpu" / "visionflow_cuda.cu").read_text(encoding="utf-8")
+        create = source.split("VF_CUDA_API int vf_roi_batch_create(", 1)[1].split(
+            "VF_CUDA_API int vf_roi_batch_info(", 1
+        )[0]
+
+        self.assertIn("gather_roi_batch_kernel<<<", create)
+        self.assertIn("created->device_rois", create)
+        self.assertIn("created->data", create)
+        self.assertEqual(create.count("cudaMemcpyAsync("), 1)
+        self.assertNotIn("cudaMemcpyDeviceToHost", create)
 
 
 if __name__ == "__main__":

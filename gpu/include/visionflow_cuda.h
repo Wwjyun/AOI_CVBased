@@ -90,11 +90,20 @@ typedef struct VfDagOutputV1 {
     int32_t channels;
 } VfDagOutputV1;
 
+typedef struct VfRoiV1 {
+    uint32_t struct_size;
+    int32_t x;
+    int32_t y;
+    int32_t width;
+    int32_t height;
+} VfRoiV1;
+
 VF_CUDA_API int vf_gpu_abi_version(void);
 VF_CUDA_API int vf_gpu_device_count(void);
 VF_CUDA_API int vf_gpu_compute_capability(void);
 VF_CUDA_API int vf_gpu_device_name(char* output, int capacity);
 VF_CUDA_API int vf_gpu_error_message(int error_code, char* output, int capacity);
+VF_CUDA_API int vf_gpu_memory_info(uint64_t* free_bytes, uint64_t* total_bytes);
 
 VF_CUDA_API int vf_context_create(void** context);
 VF_CUDA_API int vf_context_destroy(void* context);
@@ -104,6 +113,15 @@ VF_CUDA_API int vf_context_upload_u8(
     void* context,
     const uint8_t* src, int width, int height, int src_stride, int src_channels,
     uint64_t* generation);
+VF_CUDA_API int vf_roi_batch_create(
+    void* context, uint64_t generation,
+    const VfRoiV1* rois, int roi_count, void** batch);
+VF_CUDA_API int vf_roi_batch_info(
+    void* batch, int* roi_count, int* width, int* height, int* channels);
+VF_CUDA_API int vf_roi_batch_download_u8(
+    void* batch, int roi_index,
+    uint8_t* dst, int dst_stride, int dst_channels);
+VF_CUDA_API int vf_roi_batch_destroy(void* batch);
 
 /*
  * Optional generic plan ABI. The descriptor is backend-neutral and contains
