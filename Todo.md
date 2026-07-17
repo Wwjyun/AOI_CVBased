@@ -112,10 +112,10 @@
 - [x] 401-2 preprocessing 已遷移到共用 plan，並保留 fused/legacy/CPU 路徑。
 - [x] 900 遷移成 cached CPU DAG plan，共用一次 gray 產生 outer global 與 inner adaptive masks。
 - [ ] 900 DAG 接上 CUDA/native executor，共用 device gray 並只下載必要 masks。
-- [ ] 401/401-1/401-2 的 `findContours` 與少量幾何分析暫留 CPU，只下載 binary mask。
+- [x] 401/401-1/401-2 的 `findContours` 與少量幾何分析暫留 CPU，只下載 binary mask。
 - [x] 401-2 contour mask 改為局部 bbox mask，避免每個 contour 配置整張 ROI mask。
 - [ ] 評估 401-2 white-pixel reduction 移至 GPU，只下載統計值與必要 mask。
-- [ ] 評估 connected components；只有 bbox/area/排序語意等價且 profiler 證明有收益時取代部分 contours。
+- [x] 評估 connected components；bbox 雖可一致，但 pixel area、孔洞 contour 數與既有排序語意不等價，且固定 seed 4K CPU benchmark 無收益，因此不取代 contours。
 - [ ] 全部 detector 遷移並通過 RTX 3090 驗收後，才評估移除 detector-specific compatibility adapter。
 
 ## P4：Tiling、ROI、Batch 與跨圖片重用
@@ -239,3 +239,4 @@
 - [x] 2026-07-17：將 401 遷移到 cached shared plan，保留 BGR Gaussian/Morphology 後轉 Gray/AdaptiveMean 的既有逐像素順序，以及 ROI、contour、座標、排序與 metadata 語意。
 - [x] 2026-07-17：新增 CPU DAG/multi-output plan/executor，900 改以 cached DAG 共用一次 Gray 產生 outer Threshold 與 inner AdaptiveMean masks；CUDA DAG/device gray 另列待辦。
 - [x] 2026-07-17：401-2 contour white-ratio 改用局部 bbox mask，避免逐 contour 配置整張 ROI；CPU 測試確認逐像素統計、排序、ROI offset 與 metadata 均與舊 full-ROI 演算法一致。
+- [x] 2026-07-17：完成 connected components CPU 評估；合成測試證明 pixel area 與孔洞/list contour 語意不等價，固定 seed 4K/350 blobs benchmark 的 findContours LIST median 3.562 ms、connectedComponentsWithStats 8.063 ms，因此 401/401-1/401-2 維持 CPU contours。
