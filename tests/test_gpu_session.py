@@ -6,6 +6,9 @@ from copy import deepcopy
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+import cv2
+import numpy as np
+
 from core.batch_processor import BatchImageResult, BatchInspectionProcessor
 from core.gpu_runtime import GpuResidentImage, GpuRuntimeError
 from core.gpu_session import GpuExecutionSession
@@ -104,6 +107,10 @@ class GpuExecutionSessionTests(unittest.TestCase):
         }
 
         with tempfile.TemporaryDirectory(prefix="visionflow_resident_pipeline_") as temporary:
+            image_path = Path(temporary) / "input.png"
+            encoded, buffer = cv2.imencode(".png", np.zeros((1300, 1200, 3), dtype=np.uint8))
+            self.assertTrue(encoded)
+            image_path.write_bytes(buffer.tobytes())
             pipeline = AOIPipeline(
                 recipe_path,
                 Path(temporary),
@@ -112,7 +119,7 @@ class GpuExecutionSessionTests(unittest.TestCase):
             )
             pipeline.recipe_manager.load = Mock(return_value=recipe)
             pipeline.detector_manager.create_enabled = Mock(return_value=[detector])
-            result = pipeline.run(ROOT / "tmp_validation_input.png")
+            result = pipeline.run(image_path)
 
         self.assertEqual(runtime.upload_calls, 1)
         self.assertEqual(len(detector.device_rois), result["summary"]["tile_count"])
@@ -154,7 +161,6 @@ class GpuExecutionSessionTests(unittest.TestCase):
 
     def test_two_pipeline_runs_share_one_injected_runtime_until_session_close(self):
         recipe_path = ROOT / "recipes" / "PRODUCT_A_NEGATIVE_401_AOI_01.yaml"
-        image_path = ROOT / "tmp_validation_input.png"
         output_overrides = {
             "save_overlay": False,
             "save_ng_tiles": False,
@@ -163,6 +169,10 @@ class GpuExecutionSessionTests(unittest.TestCase):
             "save_json": False,
         }
         with tempfile.TemporaryDirectory(prefix="visionflow_gpu_session_") as temporary:
+            image_path = Path(temporary) / "input.png"
+            encoded, buffer = cv2.imencode(".png", np.zeros((1300, 1200, 3), dtype=np.uint8))
+            self.assertTrue(encoded)
+            image_path.write_bytes(buffer.tobytes())
             session = GpuExecutionSession.from_recipe_path(recipe_path)
             runtime = session.runtime
             try:
