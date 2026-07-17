@@ -32,9 +32,10 @@
 - [x] 記錄 DLL load、同步呼叫、lock wait、估算 H2D/D2H bytes、round trips 與各 primitive 呼叫統計。
 - [x] 加入 GUI 顯示、QImage/QPixmap 轉換與使用者實際等待時間計時。
 - [ ] DLL 加入 CUDA event，拆分 context、allocation、H2D、kernel、synchronize、D2H 與 free。
-- [ ] 保存測試機 CPU、GPU、RAM、Driver、Toolkit、recipe、影像資訊與 commit hash，建立可重現 baseline。
-- [ ] 分開公布冷啟動、warm-up、純檢測與包含輸出的端到端數據。
-- [ ] benchmark 記錄平均、P50、P95、CPU/GPU utilization、VRAM、溫度與功耗。
+- [x] benchmark JSON 保存 CPU、GPU、RAM、Driver、recipe、影像資訊與 commit hash；Toolkit 另由 runner environment artifact 保存。
+- [ ] 在 RTX 3090 固定 production 測試集執行並建立可重現 baseline。
+- [x] benchmark 分開記錄 cold、warm-up 次數、純檢測與既有 pipeline/report 端到端數據。
+- [x] benchmark 記錄平均、median、P95、process CPU%、GPU utilization、VRAM、溫度與功耗快照。
 
 ### CPU 與 fallback 正確性
 
@@ -255,4 +256,5 @@
 - [x] 2026-07-17：新增 native ROI coordinate batch opaque API，以單一 3D gather kernel 產生連續 device buffers；Python OOP handle 支援 download/context cleanup，依 `cudaMemGetInfo`、ROI 工作集與 8/16/32/64 candidates 自動選批次，配置失敗逐級降批且無 stale handle；validator 已準備四種批次實測，RTX 3090 數據仍保留待辦。
 - [x] 2026-07-17：細分 detector preprocess/findContours/geometry、Python tile loop overhead、progress callback、aggregation、純檢測與各 reporter 計時；相同 percent 的 progress callback 去重，移除四個 detector 無必要 input copy，並以測試固定 profiler schema 與 callback 行為。
 - [x] 2026-07-17：新增 tile-scope CPU preprocess cache，401-1/401-2/900 共用一次 Gray；稽核並測試五種 GUI worker 均先 moveToThread 再執行、無 UI wait、monitor stop/error/progress 使用 callback/signals，以及 PyInstaller CUDA DLL 條件式收錄與 CPU-only build path。
+- [x] 2026-07-17：擴充 RTX validator benchmark schema，分離 cold 與 warm-up、average/median/P95/process CPU%，並記錄 nvidia-smi utilization/VRAM/溫度/功耗/Driver、CPU/RAM/Python、recipe/影像與 commit；workflow 明確 warm-up 5 次，實際 baseline 數據待 RTX runner。
 - [x] 2026-07-17：統一 GPU `auto/cpu/cuda` policy：auto 可安全 fallback、cpu 完全不要求/載入 CUDA、cuda 強制成功且禁止 fallback；recipe 驗證、pipeline、長生命週期 session、GUI preview/tiling worker 與設計器均共用同一語意，GUI/history 顯示實際 backend。

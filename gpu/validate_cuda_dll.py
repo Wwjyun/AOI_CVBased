@@ -4,6 +4,9 @@ import argparse
 import json
 import os
 import platform
+import shutil
+import statistics
+import subprocess
 import sys
 import tempfile
 import time
@@ -41,6 +44,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--image", help="Optional real image for full CPU/GPU pipeline comparison.")
     parser.add_argument("--recipe", help="Recipe used with --image.")
     parser.add_argument("--benchmark", type=int, default=20, help="Primitive benchmark repetitions.")
+    parser.add_argument("--warmup", type=int, default=5, help="Warm-up calls excluded from benchmark statistics.")
     parser.add_argument("--json-output", help="Write validation, benchmark, device and commit metadata as JSON.")
     args = parser.parse_args()
     if bool(args.image) != bool(args.recipe):
@@ -351,14 +355,103 @@ def validate_primitives(runtime: GpuRuntime) -> list[dict]:
     return metrics
 
 
-def _average_ms(operation, repetitions: int) -> float:
-    started = time.perf_counter()
-    for _ in range(repetitions):
+def _timing_summary(operation, repetitions: int, warmup: int) -> dict:
+    cold_started = time.perf_counter()
+    operation()
+    cold_ms = (time.perf_counter() - cold_started) * 1000.0
+    for _ in range(max(0, int(warmup))):
         operation()
-    return (time.perf_counter() - started) * 1000.0 / repetitions
+    wall_started = time.perf_counter()
+    cpu_started = time.process_time()
+    samples = []
+    for _ in range(max(1, int(repetitions))):
+        started = time.perf_counter()
+        operation()
+        samples.append((time.perf_counter() - started) * 1000.0)
+    wall_sec = max(time.perf_counter() - wall_started, 1e-12)
+    process_cpu_sec = max(time.process_time() - cpu_started, 0.0)
+    ordered = sorted(samples)
+    p95_index = min(len(ordered) - 1, max(0, int(np.ceil(len(ordered) * 0.95)) - 1))
+    return {
+        "cold_ms": round(cold_ms, 3),
+        "average_ms": round(statistics.fmean(samples), 3),
+        "median_ms": round(statistics.median(samples), 3),
+        "p95_ms": round(ordered[p95_index], 3),
+        "process_cpu_percent": round(process_cpu_sec / wall_sec * 100.0, 1),
+    }
 
 
-def benchmark(runtime: GpuRuntime, repetitions: int) -> dict:
+def gpu_telemetry_snapshot() -> dict:
+    executable = shutil.which("nvidia-smi")
+    if executable is None:
+        return {}
+    query = (
+        "utilization.gpu,memory.used,memory.total,temperature.gpu,power.draw,"
+        "driver_version,name"
+    )
+    completed = subprocess.run(
+        [executable, f"--query-gpu={query}", "--format=csv,noheader,nounits"],
+        capture_output=True,
+        text=True,
+        timeout=10,
+        check=False,
+    )
+    if completed.returncode != 0 or not completed.stdout.strip():
+        return {"error": completed.stderr.strip()}
+    values = [value.strip() for value in completed.stdout.splitlines()[0].split(",")]
+    keys = (
+        "utilization_percent", "memory_used_mib", "memory_total_mib",
+        "temperature_c", "power_w", "driver_version", "name",
+    )
+    numeric = set(keys[:5])
+    return {
+        key: (float(value) if key in numeric and value not in {"N/A", "[N/A]"} else value)
+        for key, value in zip(keys, values)
+    }
+
+
+def environment_snapshot(image_path: str | None = None, recipe_path: str | None = None) -> dict:
+    return {
+        "platform": platform.platform(),
+        "cpu": platform.processor(),
+        "logical_cpu_count": os.cpu_count(),
+        "python": platform.python_version(),
+        "ram_total_bytes": _total_ram_bytes(),
+        "gpu": gpu_telemetry_snapshot(),
+        "image": str(Path(image_path).resolve()) if image_path else "",
+        "recipe": str(Path(recipe_path).resolve()) if recipe_path else "",
+    }
+
+
+def _total_ram_bytes() -> int:
+    if sys.platform == "win32":
+        import ctypes
+
+        class MemoryStatus(ctypes.Structure):
+            _fields_ = [
+                ("length", ctypes.c_ulong),
+                ("memory_load", ctypes.c_ulong),
+                ("total_physical", ctypes.c_ulonglong),
+                ("available_physical", ctypes.c_ulonglong),
+                ("total_page_file", ctypes.c_ulonglong),
+                ("available_page_file", ctypes.c_ulonglong),
+                ("total_virtual", ctypes.c_ulonglong),
+                ("available_virtual", ctypes.c_ulonglong),
+                ("available_extended_virtual", ctypes.c_ulonglong),
+            ]
+
+        status = MemoryStatus()
+        status.length = ctypes.sizeof(MemoryStatus)
+        return int(status.total_physical) if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)) else 0
+    if hasattr(os, "sysconf"):
+        try:
+            return int(os.sysconf("SC_PAGE_SIZE") * os.sysconf("SC_PHYS_PAGES"))
+        except (ValueError, OSError):
+            pass
+    return 0
+
+
+def benchmark(runtime: GpuRuntime, repetitions: int, warmup: int = 5) -> dict:
     if repetitions <= 0:
         return {}
     image = np.random.default_rng(7).integers(0, 256, size=(2160, 3840, 3), dtype=np.uint8)
@@ -392,18 +485,27 @@ def benchmark(runtime: GpuRuntime, repetitions: int) -> dict:
         )
     measurements = []
     for name, cpu_operation, gpu_operation in operations:
-        cpu_ms = _average_ms(cpu_operation, repetitions)
-        gpu_ms = _average_ms(gpu_operation, repetitions)
+        telemetry_before = gpu_telemetry_snapshot()
+        cpu = _timing_summary(cpu_operation, repetitions, warmup)
+        gpu = _timing_summary(gpu_operation, repetitions, warmup)
+        telemetry_after = gpu_telemetry_snapshot()
+        cpu_ms = cpu["median_ms"]
+        gpu_ms = gpu["median_ms"]
         measurements.append(
             {
                 "operation": name,
-                "cpu_average_ms": round(cpu_ms, 3),
-                "gpu_average_ms_including_transfer": round(gpu_ms, 3),
+                "cpu": cpu,
+                "gpu_including_transfer": gpu,
+                "cpu_average_ms": cpu["average_ms"],
+                "gpu_average_ms_including_transfer": gpu["average_ms"],
                 "speedup": round(cpu_ms / gpu_ms, 3) if gpu_ms > 0 else None,
+                "gpu_telemetry_before": telemetry_before,
+                "gpu_telemetry_after": telemetry_after,
             }
         )
     result = {
         "repetitions": repetitions,
+        "warmup": warmup,
         "image_shape": list(image.shape),
         "measurements": measurements,
         "gpu_host_metrics": runtime.performance_stats(),
@@ -490,7 +592,7 @@ def main() -> int:
         f"path={runtime.dll_path}"
     )
     validation = validate_primitives(runtime)
-    benchmark_result = benchmark(runtime, args.benchmark)
+    benchmark_result = benchmark(runtime, args.benchmark, args.warmup)
     if args.image and args.recipe:
         validate_pipeline(Path(args.image), Path(args.recipe), str(runtime.dll_path))
     if args.json_output:
@@ -501,7 +603,7 @@ def main() -> int:
                 {
                     "schema_version": 1,
                     "commit": os.environ.get("GITHUB_SHA", ""),
-                    "platform": platform.platform(),
+                    "environment": environment_snapshot(args.image, args.recipe),
                     "device": runtime.device_name,
                     "compute_capability": runtime.compute_capability,
                     "validation": validation,

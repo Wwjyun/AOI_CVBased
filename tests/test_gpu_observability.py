@@ -32,7 +32,7 @@ from core.preprocess_plan import (
 )
 from detectors.detector_401_2 import Detector401_2
 from detectors.detector_401 import Detector401
-from gpu.validate_cuda_dll import compare
+from gpu.validate_cuda_dll import compare, environment_snapshot, _timing_summary
 
 
 class _SuccessfulDll:
@@ -942,6 +942,25 @@ class ComparisonToleranceTests(unittest.TestCase):
         result = compare("one_allowed_pixel", actual, expected, max_diff=1, mismatch_ratio=0.25)
 
         self.assertEqual(result["out_of_tolerance_ratio"], 0.25)
+
+
+class BenchmarkMetadataTests(unittest.TestCase):
+    def test_timing_summary_separates_cold_warm_average_median_and_p95(self):
+        calls = []
+
+        summary = _timing_summary(lambda: calls.append(1), repetitions=5, warmup=3)
+
+        self.assertEqual(len(calls), 9)
+        self.assertEqual(
+            set(summary),
+            {"cold_ms", "average_ms", "median_ms", "p95_ms", "process_cpu_percent"},
+        )
+        self.assertGreaterEqual(summary["p95_ms"], summary["median_ms"])
+
+    def test_environment_snapshot_records_reproducibility_fields(self):
+        snapshot = environment_snapshot("image.png", "recipe.yaml")
+
+        self.assertTrue({"platform", "cpu", "logical_cpu_count", "python", "ram_total_bytes", "gpu", "image", "recipe"}.issubset(snapshot))
 
 
 class CpuFallbackRegressionTests(unittest.TestCase):
