@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
+import time
 
 from core.preprocess_plan import AdaptiveMean, Gaussian, Gray, Morphology, PreprocessPlan, Resize
 from detectors.base_detector import BaseDetector
@@ -32,12 +33,15 @@ class Detector401_1(BaseDetector):
     }
 
     def preprocess(self, image):
-        return image.copy()
+        return image
 
     def detect(self, image) -> list[dict]:
         roi, offset_x, offset_y = self._roi_image(image)
-        binary, process_scale = self._make_binary(roi, offset_x, offset_y)
-        contours, _ = cv2.findContours(binary, self._contour_mode(), cv2.CHAIN_APPROX_SIMPLE)
+        with self.measure_detection_stage("preprocess"):
+            binary, process_scale = self._make_binary(roi, offset_x, offset_y)
+        with self.measure_detection_stage("find_contours"):
+            contours, _ = cv2.findContours(binary, self._contour_mode(), cv2.CHAIN_APPROX_SIMPLE)
+        geometry_started = time.perf_counter()
         image_area = max(float(image.shape[0] * image.shape[1]), 1.0)
         defects = []
 
@@ -92,6 +96,7 @@ class Detector401_1(BaseDetector):
                 }
             )
 
+        self._detection_stage_durations["geometry_analysis"] = time.perf_counter() - geometry_started
         defects.sort(key=lambda item: item["area"], reverse=True)
         return defects
 

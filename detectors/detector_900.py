@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
+import time
 
 from core.preprocess_plan import (
     AdaptiveMean,
@@ -39,28 +40,31 @@ class Detector900(BaseDetector):
     }
 
     def preprocess(self, image):
-        return image.copy()
+        return image
 
     def detect(self, image) -> list[dict]:
         roi, offset_x, offset_y = self._roi_image(image)
-        masks = self._make_masks(roi, offset_x, offset_y)
+        with self.measure_detection_stage("preprocess"):
+            masks = self._make_masks(roi, offset_x, offset_y)
         outer_mask = masks["outer_mask"]
         inner_mask = masks["inner_mask"]
 
-        outer_all_candidates = self._collect_candidates(
-            outer_mask,
-            mode_param="outer_contour_mode",
-        )
+        with self.measure_detection_stage("find_contours"):
+            outer_all_candidates = self._collect_candidates(
+                outer_mask,
+                mode_param="outer_contour_mode",
+            )
+            inner_all_candidates = self._collect_candidates(
+                inner_mask,
+                mode_param="inner_contour_mode",
+            )
+        geometry_started = time.perf_counter()
         outer_candidates = self._filter_candidates(
             outer_all_candidates,
             target_width_param="outer_target_width",
             width_tolerance_param="outer_width_tolerance",
             target_height_param="outer_target_height",
             height_tolerance_param="outer_height_tolerance",
-        )
-        inner_all_candidates = self._collect_candidates(
-            inner_mask,
-            mode_param="inner_contour_mode",
         )
         inner_candidates = self._filter_candidates(
             inner_all_candidates,
@@ -71,6 +75,7 @@ class Detector900(BaseDetector):
         )
 
         match = self._find_valid_pair(outer_candidates, inner_candidates)
+        self._detection_stage_durations["geometry_analysis"] = time.perf_counter() - geometry_started
         if match is not None:
             return []
 

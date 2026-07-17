@@ -36,6 +36,8 @@ class AOIPipeline(LogMixin):
         self.gpu_session = gpu_session
         self.recipe_manager = RecipeManager()
         self.detector_manager = DetectorManager()
+        self._active_profiler = None
+        self._last_progress_percent = None
 
     def run(self, image_path: Path) -> dict:
         if self.gpu_session is not None:
@@ -46,6 +48,8 @@ class AOIPipeline(LogMixin):
     def _run(self, image_path: Path) -> dict:
         started = time.perf_counter()
         profiler = PipelineProfiler()
+        self._active_profiler = profiler
+        self._last_progress_percent = None
         self.logger.info(
             "Inspection started: image=%s recipe=%s output=%s debug=%s",
             image_path,
@@ -146,6 +150,15 @@ class AOIPipeline(LogMixin):
                 for detector in detectors:
                     with profiler.measure(f"detector:{detector.detector_id}"):
                         detector_result = detector.run(tile.image, device_roi=tile.device_roi)
+                        for stage, duration in (
+                            detector_result.get("execution", {})
+                            .get("performance", {})
+                            .get("stages_sec", {})
+                            .items()
+                        ):
+                            profiler.add_duration(
+                                f"detector_stage:{detector.detector_id}:{stage}", duration
+                            )
                         detector_results.append(map_tile_result_to_global(tile, detector_result))
                     completed_work += 1
                     percent = 20 + int(completed_work / total_work * 60)
@@ -252,7 +265,16 @@ class AOIPipeline(LogMixin):
     def _progress(self, percent: int, message: str) -> None:
         if self.progress_callback is None:
             return
-        self.progress_callback(max(0, min(100, int(percent))), message)
+        bounded = max(0, min(100, int(percent)))
+        if bounded == self._last_progress_percent:
+            return
+        self._last_progress_percent = bounded
+        started = time.perf_counter()
+        self.progress_callback(bounded, message)
+        if self._active_profiler is not None:
+            self._active_profiler.add_duration(
+                "progress_callback", time.perf_counter() - started
+            )
 
     @staticmethod
     def _without_runtime_images(result: dict) -> dict:

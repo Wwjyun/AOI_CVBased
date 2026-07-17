@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from contextlib import contextmanager
+import time
 
 from core.preprocess_plan import (
     CpuPreprocessExecutor,
@@ -36,6 +38,7 @@ class BaseDetector:
         self._preprocess_plan_cache = PreprocessPlanCache()
         self.last_preprocess_capability: dict = {}
         self._active_device_roi = None
+        self._detection_stage_durations: dict[str, float] = {}
 
     @property
     def gpu_active(self) -> bool:
@@ -142,6 +145,17 @@ class BaseDetector:
         height, width = image.shape[:2]
         return self._active_device_roi.roi(offset_x, offset_y, width, height)
 
+    @contextmanager
+    def measure_detection_stage(self, name: str):
+        started = time.perf_counter()
+        try:
+            yield
+        finally:
+            key = str(name)
+            self._detection_stage_durations[key] = (
+                self._detection_stage_durations.get(key, 0.0) + time.perf_counter() - started
+            )
+
     @property
     def _gpu_fallback_enabled(self) -> bool:
         return bool(getattr(self.gpu_runtime, "fallback_to_cpu", True))
@@ -151,6 +165,7 @@ class BaseDetector:
         return self._preprocess_plan_cache.size
 
     def run(self, image, device_roi=None) -> dict:
+        self._detection_stage_durations = {}
         previous_device_roi = self._active_device_roi
         self._active_device_roi = device_roi
         try:
@@ -180,5 +195,12 @@ class BaseDetector:
                 "backend": "cuda_dll" if self.gpu_active else "cpu",
                 "fallback_reason": self.gpu_fallback_reason,
                 "preprocess_capability": self.last_preprocess_capability,
+                "performance": {
+                    "measurement_scope": "host_wall_clock",
+                    "stages_sec": {
+                        name: round(duration, 6)
+                        for name, duration in sorted(self._detection_stage_durations.items())
+                    },
+                },
             },
         }

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import cv2
 import numpy as np
+import time
 
 from core.preprocess_plan import AdaptiveMean, Gaussian, Gray, PreprocessPlan
 from detectors.base_detector import BaseDetector
@@ -25,13 +26,16 @@ class Detector401_2(BaseDetector):
 
     def preprocess(self, image):
         if self.gpu_active:
-            return image.copy()
-        return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image.copy()
+            return image
+        return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
 
     def detect(self, image) -> list[dict]:
         roi, offset_x, offset_y = self._roi_image(image)
-        binary = self._make_binary(roi, offset_x, offset_y)
-        contours, _ = cv2.findContours(binary, self._contour_mode(), cv2.CHAIN_APPROX_SIMPLE)
+        with self.measure_detection_stage("preprocess"):
+            binary = self._make_binary(roi, offset_x, offset_y)
+        with self.measure_detection_stage("find_contours"):
+            contours, _ = cv2.findContours(binary, self._contour_mode(), cv2.CHAIN_APPROX_SIMPLE)
+        geometry_started = time.perf_counter()
         defects = []
         ratio_threshold = float(self.params.get("white_pixel_ratio_threshold", 0.625))
 
@@ -84,6 +88,7 @@ class Detector401_2(BaseDetector):
                 }
             )
 
+        self._detection_stage_durations["geometry_analysis"] = time.perf_counter() - geometry_started
         defects.sort(key=lambda item: item["metadata"]["white_pixel_ratio"], reverse=True)
         return defects
 

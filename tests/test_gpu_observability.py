@@ -317,6 +317,43 @@ class PipelineProfilerTests(unittest.TestCase):
         self.assertIn("json", snapshot["reporting_sec"])
         self.assertGreaterEqual(snapshot["end_to_end_sec"], 0.0)
 
+    def test_detector_stage_and_python_loop_overhead_are_reported(self):
+        profiler = PipelineProfiler()
+        profiler.add_duration("detectors_total", 0.030)
+        profiler.add_duration("detector:401", 0.020)
+        profiler.add_duration("detector_stage:401:find_contours", 0.004)
+
+        snapshot = profiler.snapshot()
+
+        self.assertEqual(snapshot["detector_stages_sec"]["401"]["find_contours"], 0.004)
+        self.assertEqual(snapshot["stages_sec"]["python_tile_detector_loop"], 0.01)
+
+    def test_pipeline_progress_deduplicates_equal_percent_and_profiles_callback(self):
+        calls = []
+        pipeline = AOIPipeline(Path("recipe.yaml"), Path("output"), progress_callback=lambda pct, msg: calls.append((pct, msg)))
+        pipeline._active_profiler = PipelineProfiler()
+
+        pipeline._progress(20, "first")
+        pipeline._progress(20, "duplicate")
+        pipeline._progress(21, "next")
+
+        self.assertEqual(calls, [(20, "first"), (21, "next")])
+        self.assertIn("progress_callback", pipeline._active_profiler.snapshot()["stages_sec"])
+
+    def test_detector_reports_preprocess_contour_and_geometry_timings(self):
+        detector = Detector401(params={
+            "roi_inset_px": 0,
+            "blur_size": 3,
+            "morph_iterations": 0,
+            "adaptive_block_size": 3,
+        })
+
+        result = detector.run(np.zeros((32, 32, 3), dtype=np.uint8))
+
+        stages = result["execution"]["performance"]["stages_sec"]
+        self.assertEqual(set(stages), {"preprocess", "find_contours", "geometry_analysis"})
+        self.assertTrue(all(duration >= 0.0 for duration in stages.values()))
+
 
 class GpuRuntimeMetricsTests(unittest.TestCase):
     def test_disabled_runtime_has_zero_cuda_calls(self):

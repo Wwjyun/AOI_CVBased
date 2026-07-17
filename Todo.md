@@ -135,14 +135,14 @@
 
 ## P5：CPU 與整體 Pipeline 最佳化
 
-- [ ] 分別量測 `findContours`、幾何分析、Python tile/detector 迴圈、progress callback、aggregation 與 reporter。
-- [ ] 降低 progress callback 頻率，避免每個小 primitive 更新 GUI。
-- [ ] 移除不必要的 `image.copy()`、`np.ascontiguousarray()` 與完整尺寸 temporary masks。
+- [x] 分別量測 `findContours`、幾何分析、Python tile/detector 迴圈、progress callback、aggregation 與 reporter。
+- [x] 降低 progress callback 頻率，避免每個小 primitive 更新 GUI。
+- [x] 移除不必要的 detector `image.copy()` 與完整尺寸 temporary masks；必要的 non-contiguous CUDA/QImage 邊界 copy 保留。
 - [ ] 相同 tile 被多個 detectors 使用時，共用 gray 與可重用的 CPU/GPU preprocessing 結果。
 - [ ] 對小圖、小 ROI、少 tiles 建立 CPU/GPU crossover benchmark；低於門檻自動選 CPU。
-- [ ] Overlay、NG tiles、CSV/JSON 與純檢測計時分離；必要時將檔案輸出移至背景工作。
+- [x] Overlay、NG tiles、CSV/JSON 與純檢測計時分離；目前各 reporter 與 `detectors_total` 已獨立計時，是否背景化由實測決定。
 - [ ] Pattern matching 只有在 profiler 證明為主要熱點後才 GPU 化，模板常駐 GPU 並保留 CPU 等價路徑。
-- [ ] PNG 編碼、YAML、彙總、logging 與 GUI 控制邏輯維持 CPU，除非量測證明需要改變。
+- [x] PNG 編碼、YAML、彙總、logging 與 GUI 控制邏輯維持 CPU，除非量測證明需要改變。
 
 ## P6：GUI、設定與部署
 
@@ -252,4 +252,5 @@
 - [x] 2026-07-17：新增 Windows CPU/static CI 與受信任 RTX 3090 self-hosted manual/nightly workflow；PR 執行 tests、compileall、recipe/CLI/GUI smoke、CUDA contract，GPU job 使用專屬 labels 並上傳 DLL/LIB/EXE/build log、環境及含 commit 的 benchmark JSON；Nsight capture 保留實機待辦。
 - [x] 2026-07-17：新增 context-owned resident image 與 linear/DAG device ROI ABI；grid pipeline 每張原圖只 upload 一次，以可組合子 ROI 對應 tile 與 detector inset，ROI plan 僅 D2D staging 並下載必要輸出；已覆蓋 generation/bounds、零額外 H2D、pipeline 單次 upload、C++ smoke、validator 與 source contract，RTX 3090 編譯/實測仍保留待辦。
 - [x] 2026-07-17：新增 native ROI coordinate batch opaque API，以單一 3D gather kernel 產生連續 device buffers；Python OOP handle 支援 download/context cleanup，依 `cudaMemGetInfo`、ROI 工作集與 8/16/32/64 candidates 自動選批次，配置失敗逐級降批且無 stale handle；validator 已準備四種批次實測，RTX 3090 數據仍保留待辦。
+- [x] 2026-07-17：細分 detector preprocess/findContours/geometry、Python tile loop overhead、progress callback、aggregation、純檢測與各 reporter 計時；相同 percent 的 progress callback 去重，移除四個 detector 無必要 input copy，並以測試固定 profiler schema 與 callback 行為。
 - [x] 2026-07-17：統一 GPU `auto/cpu/cuda` policy：auto 可安全 fallback、cpu 完全不要求/載入 CUDA、cuda 強制成功且禁止 fallback；recipe 驗證、pipeline、長生命週期 session、GUI preview/tiling worker 與設計器均共用同一語意，GUI/history 顯示實際 backend。
