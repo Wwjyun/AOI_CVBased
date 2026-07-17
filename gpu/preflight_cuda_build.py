@@ -49,6 +49,11 @@ OPTIONAL_GENERIC_PLAN_EXPORTS = {
     "vf_dag_plan_execute",
     "vf_dag_plan_destroy",
 }
+OPTIONAL_RESIDENT_ROI_EXPORTS = {
+    "vf_context_upload_u8",
+    "vf_plan_execute_roi",
+    "vf_dag_plan_execute_roi",
+}
 CONTRACT_FILES = {
     "header": Path("gpu/include/visionflow_cuda.h"),
     "source": Path("gpu/visionflow_cuda.cu"),
@@ -109,6 +114,16 @@ def inspect_contract(root: Path = ROOT) -> dict:
             errors.append(f"native smoke does not call generic plan exports: {sorted(missing_plan_smoke)}")
         if missing_plan_runtime:
             errors.append(f"Python runtime does not reference generic plan exports: {sorted(missing_plan_runtime)}")
+    declared_resident_exports = OPTIONAL_RESIDENT_ROI_EXPORTS & header_exports
+    if declared_resident_exports and declared_resident_exports != OPTIONAL_RESIDENT_ROI_EXPORTS:
+        errors.append("resident image/ROI exports must be declared as one complete optional set")
+    if declared_resident_exports:
+        missing_resident_smoke = {name for name in OPTIONAL_RESIDENT_ROI_EXPORTS if name not in texts["smoke"]}
+        missing_resident_runtime = {name for name in OPTIONAL_RESIDENT_ROI_EXPORTS if name not in texts["runtime"]}
+        if missing_resident_smoke:
+            errors.append(f"native smoke does not call resident ROI exports: {sorted(missing_resident_smoke)}")
+        if missing_resident_runtime:
+            errors.append(f"Python runtime does not reference resident ROI exports: {sorted(missing_resident_runtime)}")
     if "visionflow_cuda.cu" not in texts["build"] or "test_cuda_api.cu" not in texts["build"]:
         errors.append("build script is missing an explicit DLL or smoke source manifest")
     if re.search(r"(?:\*\.cu|Get-ChildItem[^\n]*\.cu)", texts["build"], re.IGNORECASE):
@@ -121,6 +136,7 @@ def inspect_contract(root: Path = ROOT) -> dict:
         "abi_version": int(abi_match.group(1)),
         "exports": sorted(header_exports),
         "optional_generic_plan_exports": sorted(declared_plan_exports),
+        "optional_resident_roi_exports": sorted(declared_resident_exports),
         "dll_sources": ["gpu/visionflow_cuda.cu"],
         "smoke_sources": ["gpu/test_cuda_api.cu"],
         "sha256": {

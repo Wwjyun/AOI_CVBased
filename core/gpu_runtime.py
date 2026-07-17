@@ -4,6 +4,7 @@ import ctypes
 import sys
 import threading
 import time
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -55,6 +56,40 @@ class _VfDagOutputV1(ctypes.Structure):
 
 class GpuRuntimeError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True, slots=True)
+class GpuResidentImage:
+    runtime: object
+    generation: int
+    width: int
+    height: int
+    channels: int
+
+    def roi(self, x: int, y: int, width: int, height: int) -> "GpuDeviceRoi":
+        if x < 0 or y < 0 or width <= 0 or height <= 0 or x + width > self.width or y + height > self.height:
+            raise GpuRuntimeError(
+                f"Resident ROI is out of bounds: x={x}, y={y}, width={width}, height={height}, "
+                f"image={self.width}x{self.height}"
+            )
+        return GpuDeviceRoi(self, int(x), int(y), int(width), int(height))
+
+
+@dataclass(frozen=True, slots=True)
+class GpuDeviceRoi:
+    image: GpuResidentImage
+    x: int
+    y: int
+    width: int
+    height: int
+
+    def roi(self, x: int, y: int, width: int, height: int) -> "GpuDeviceRoi":
+        if x < 0 or y < 0 or width <= 0 or height <= 0 or x + width > self.width or y + height > self.height:
+            raise GpuRuntimeError(
+                f"Device ROI is out of bounds: x={x}, y={y}, width={width}, height={height}, "
+                f"parent={self.width}x{self.height}"
+            )
+        return self.image.roi(self.x + int(x), self.y + int(y), int(width), int(height))
 
 
 class GpuRuntime:
@@ -143,6 +178,15 @@ class GpuRuntime:
             and all(getattr(self._dll, name, None) is not None for name in required)
         )
 
+    @property
+    def supports_resident_roi(self) -> bool:
+        required = ("vf_context_upload_u8", "vf_plan_execute_roi", "vf_dag_plan_execute_roi")
+        return bool(
+            self.supports_native_plan
+            and self.supports_native_dag_plan
+            and all(getattr(self._dll, name, None) is not None for name in required)
+        )
+
     def status(self, requested: bool = False) -> dict:
         active = bool(requested and self.available and not self.last_error)
         return {
@@ -157,6 +201,7 @@ class GpuRuntime:
                 "persistent_context": self._context is not None,
                 "native_plan": self.supports_native_plan,
                 "native_dag_plan": self.supports_native_dag_plan,
+                "resident_roi": self.supports_resident_roi,
                 "fused_401_2": self.supports_fused_401_2,
             },
             "queue": {
@@ -322,6 +367,34 @@ class GpuRuntime:
             )
         return output
 
+    def upload_image(self, image: np.ndarray) -> GpuResidentImage:
+        if not self.supports_resident_roi:
+            raise GpuRuntimeError("CUDA DLL has no resident image/ROI exports")
+        source = self._u8_image(image, channels=(1, 3))
+        channels = 1 if source.ndim == 2 else int(source.shape[2])
+        generation = ctypes.c_uint64()
+        queued = time.perf_counter()
+        with self._queue_slots, self._lock:
+            lock_acquired = time.perf_counter()
+            result = int(self._dll.vf_context_upload_u8(
+                self._context,
+                source.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
+                int(source.shape[1]), int(source.shape[0]), int(source.strides[0]), channels,
+                ctypes.byref(generation),
+            ))
+            completed = time.perf_counter()
+            self._record_performance(
+                "vf_context_upload_u8", int(source.nbytes), 0,
+                completed - lock_acquired, lock_acquired - queued,
+            )
+        if result != 0 or generation.value == 0:
+            raise GpuRuntimeError(
+                f"vf_context_upload_u8 failed with CUDA DLL error {result}: {self._error_message(result)}"
+            )
+        return GpuResidentImage(
+            self, int(generation.value), int(source.shape[1]), int(source.shape[0]), channels
+        )
+
     def native_plan_capability(self, plan, image: np.ndarray) -> tuple[bool, str]:
         if not self.supports_native_plan:
             return False, self.native_plan_unavailable_reason or "CUDA DLL has no generic native plan ABI"
@@ -342,7 +415,7 @@ class GpuRuntime:
         message = reason.value.decode("utf-8", errors="replace")
         return result == 0, message or self._error_message(result)
 
-    def execute_plan(self, image: np.ndarray, plan) -> np.ndarray:
+    def execute_plan(self, image: np.ndarray, plan, device_roi: GpuDeviceRoi | None = None) -> np.ndarray:
         source = self._u8_image(image, channels=(1, 3))
         expected = plan.validate_input(source)
         supported, reason = self.native_plan_capability(plan, source)
@@ -381,28 +454,36 @@ class GpuRuntime:
                 handle = created
                 self._native_plans[key] = handle
             src_channels = 1 if source.ndim == 2 else source.shape[2]
-            result = int(self._dll.vf_plan_execute(
-                handle,
-                source.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
-                int(source.shape[1]),
-                int(source.shape[0]),
-                int(source.strides[0]),
-                int(src_channels),
-                output.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
-                int(output.strides[0]),
-                int(expected.channels),
-            ))
+            if device_roi is not None:
+                self._validate_device_roi(device_roi, source)
+                result = int(self._dll.vf_plan_execute_roi(
+                    handle, device_roi.image.generation, device_roi.x, device_roi.y,
+                    output.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
+                    int(output.strides[0]), int(expected.channels),
+                ))
+                function_name = "vf_plan_execute_roi"
+                upload_bytes = 0
+            else:
+                result = int(self._dll.vf_plan_execute(
+                    handle,
+                    source.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
+                    int(source.shape[1]), int(source.shape[0]), int(source.strides[0]),
+                    int(src_channels), output.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
+                    int(output.strides[0]), int(expected.channels),
+                ))
+                function_name = "vf_plan_execute"
+                upload_bytes = int(source.nbytes)
             completed = time.perf_counter()
             self._record_performance(
-                "vf_plan_execute",
-                int(source.nbytes),
+                function_name,
+                upload_bytes,
                 int(output.nbytes),
                 completed - lock_acquired,
                 lock_acquired - queued,
             )
         if result != 0:
             raise GpuRuntimeError(
-                f"vf_plan_execute failed with CUDA DLL error {result}: {self._error_message(result)}"
+                f"{function_name} failed with CUDA DLL error {result}: {self._error_message(result)}"
             )
         return plan.validate_output(output, expected)
 
@@ -421,7 +502,7 @@ class GpuRuntime:
         message = reason.value.decode("utf-8", errors="replace")
         return result == 0, message or self._error_message(result)
 
-    def execute_dag_plan(self, image: np.ndarray, plan) -> dict[str, np.ndarray]:
+    def execute_dag_plan(self, image: np.ndarray, plan, device_roi: GpuDeviceRoi | None = None) -> dict[str, np.ndarray]:
         source = self._u8_image(image, channels=(1, 3))
         supported, reason = self.native_dag_plan_capability(plan, source)
         if not supported:
@@ -470,22 +551,42 @@ class GpuRuntime:
                 for name in plan.outputs
             ))
             src_channels = 1 if source.ndim == 2 else int(source.shape[2])
-            result = int(self._dll.vf_dag_plan_execute(
-                handle, source.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
-                int(source.shape[1]), int(source.shape[0]), int(source.strides[0]),
-                src_channels, encoded_outputs, len(plan.outputs)
-            ))
+            if device_roi is not None:
+                self._validate_device_roi(device_roi, source)
+                result = int(self._dll.vf_dag_plan_execute_roi(
+                    handle, device_roi.image.generation, device_roi.x, device_roi.y,
+                    encoded_outputs, len(plan.outputs),
+                ))
+                function_name = "vf_dag_plan_execute_roi"
+                upload_bytes = 0
+            else:
+                result = int(self._dll.vf_dag_plan_execute(
+                    handle, source.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
+                    int(source.shape[1]), int(source.shape[0]), int(source.strides[0]),
+                    src_channels, encoded_outputs, len(plan.outputs)
+                ))
+                function_name = "vf_dag_plan_execute"
+                upload_bytes = int(source.nbytes)
             completed = time.perf_counter()
             self._record_performance(
-                "vf_dag_plan_execute", int(source.nbytes),
+                function_name, upload_bytes,
                 sum(int(output.nbytes) for output in outputs.values()),
                 completed - lock_acquired, lock_acquired - queued,
             )
         if result != 0:
             raise GpuRuntimeError(
-                f"vf_dag_plan_execute failed with CUDA DLL error {result}: {self._error_message(result)}"
+                f"{function_name} failed with CUDA DLL error {result}: {self._error_message(result)}"
             )
         return outputs
+
+    def _validate_device_roi(self, device_roi: GpuDeviceRoi, source: np.ndarray) -> None:
+        if not self.supports_resident_roi or device_roi.image.runtime is not self:
+            raise GpuRuntimeError("Device ROI belongs to an incompatible CUDA runtime")
+        channels = 1 if source.ndim == 2 else int(source.shape[2])
+        if (device_roi.width, device_roi.height, device_roi.image.channels) != (
+            int(source.shape[1]), int(source.shape[0]), channels
+        ):
+            raise GpuRuntimeError("Device ROI shape/channels do not match the detector input")
 
     def close(self) -> None:
         with self._lock:
@@ -600,6 +701,7 @@ class GpuRuntime:
             self.fused_unavailable_reason = "CUDA DLL has no fused 401-2 export"
         self._load_optional_native_plan()
         self._load_optional_native_dag_plan()
+        self._load_optional_resident_roi()
 
     def _load_optional_native_plan(self) -> None:
         query = getattr(self._dll, "vf_plan_query", None)
@@ -653,6 +755,30 @@ class GpuRuntime:
         execute.restype = ctypes.c_int
         destroy.argtypes = [ctypes.c_void_p]
         destroy.restype = ctypes.c_int
+
+    def _load_optional_resident_roi(self) -> None:
+        upload = getattr(self._dll, "vf_context_upload_u8", None)
+        linear = getattr(self._dll, "vf_plan_execute_roi", None)
+        dag = getattr(self._dll, "vf_dag_plan_execute_roi", None)
+        if upload is not None:
+            upload.argtypes = [
+                ctypes.c_void_p, ctypes.POINTER(ctypes.c_uint8),
+                ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+                ctypes.POINTER(ctypes.c_uint64),
+            ]
+            upload.restype = ctypes.c_int
+        if linear is not None:
+            linear.argtypes = [
+                ctypes.c_void_p, ctypes.c_uint64, ctypes.c_int, ctypes.c_int,
+                ctypes.POINTER(ctypes.c_uint8), ctypes.c_int, ctypes.c_int,
+            ]
+            linear.restype = ctypes.c_int
+        if dag is not None:
+            dag.argtypes = [
+                ctypes.c_void_p, ctypes.c_uint64, ctypes.c_int, ctypes.c_int,
+                ctypes.POINTER(_VfDagOutputV1), ctypes.c_int,
+            ]
+            dag.restype = ctypes.c_int
 
     @staticmethod
     def _native_plan_descriptor(plan, image: np.ndarray) -> tuple[_VfPlanDescV1, object]:

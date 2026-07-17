@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 import yaml
 
-from core.gpu_runtime import GpuRuntime, GpuRuntimeError
+from core.gpu_runtime import GpuResidentImage, GpuRuntime, GpuRuntimeError
 from core.performance import PipelineProfiler
 from core.pipeline import AOIPipeline
 from core.preprocess_plan import (
@@ -116,10 +116,17 @@ class _NativeDagPlanDll(_NativePlanDll):
         super().__init__()
         self.dag_create_calls = 0
         self.dag_execute_calls = 0
+        self.upload_calls = 0
+        self.plan_roi_execute_calls = 0
+        self.dag_roi_execute_calls = 0
+        self.generation = 0
         self.vf_dag_plan_query = _Function(self._dag_query)
         self.vf_dag_plan_create = _Function(self._dag_create)
         self.vf_dag_plan_execute = _Function(self._dag_execute)
         self.vf_dag_plan_destroy = _Function(self._dag_destroy)
+        self.vf_context_upload_u8 = _Function(self._upload)
+        self.vf_plan_execute_roi = _Function(self._plan_execute_roi)
+        self.vf_dag_plan_execute_roi = _Function(self._dag_execute_roi)
 
     @staticmethod
     def _dag_query(_descriptor, _width, _height, reason, _capacity):
@@ -142,6 +149,29 @@ class _NativeDagPlanDll(_NativePlanDll):
 
     def _dag_destroy(self, plan):
         self.events.append(("dag_plan", plan.value if hasattr(plan, "value") else int(plan)))
+        return 0
+
+    def _upload(self, _context, _src, _width, _height, _stride, _channels, generation):
+        self.upload_calls += 1
+        self.generation += 1
+        generation._obj.value = self.generation
+        return 0
+
+    def _plan_execute_roi(
+        self, _plan, generation, _x, _y, dst, dst_stride, _dst_channels,
+    ):
+        if int(generation) != self.generation:
+            return 1
+        self.plan_roi_execute_calls += 1
+        ctypes.memset(dst, 0, 4 * int(dst_stride))
+        return 0
+
+    def _dag_execute_roi(self, _plan, generation, _x, _y, outputs, output_count):
+        if int(generation) != self.generation:
+            return 1
+        self.dag_roi_execute_calls += 1
+        for index in range(int(output_count)):
+            ctypes.memset(outputs[index].data, index, 4 * int(outputs[index].stride))
         return 0
 
 
@@ -357,6 +387,52 @@ class GpuRuntimeMetricsTests(unittest.TestCase):
         np.testing.assert_array_equal(first["light"], second["light"])
         runtime.close()
         self.assertEqual(dll.events, [("dag_plan", 6789), ("context", 1234)])
+
+    def test_resident_image_routes_linear_and_dag_rois_without_reupload(self):
+        runtime = GpuRuntime(enabled=False)
+        dll = _NativeDagPlanDll()
+        runtime._dll = dll
+        runtime.device_count = 1
+        runtime._load_optional_context()
+        image = np.zeros((8, 9, 3), dtype=np.uint8)
+        resident = runtime.upload_image(image)
+        roi = resident.roi(2, 1, 5, 4)
+        linear = PreprocessPlan((Gray(),), name="resident_gray")
+        dag = PreprocessDagPlan(
+            nodes=(
+                PreprocessDagNode("gray", "root", Gray()),
+                PreprocessDagNode("dark", "gray", Threshold(127, invert=True)),
+                PreprocessDagNode("light", "gray", Threshold(127, invert=False)),
+            ),
+            outputs=("dark", "light"),
+        )
+        host_roi = image[1:5, 2:7]
+
+        output = runtime.execute_plan(host_roi, linear, device_roi=roi)
+        outputs = runtime.execute_dag_plan(host_roi, dag, device_roi=roi)
+
+        self.assertTrue(runtime.supports_resident_roi)
+        self.assertEqual(output.shape, (4, 5))
+        self.assertEqual(tuple(outputs), ("dark", "light"))
+        self.assertEqual(dll.upload_calls, 1)
+        self.assertEqual(dll.plan_roi_execute_calls, 1)
+        self.assertEqual(dll.dag_roi_execute_calls, 1)
+        metrics = runtime.performance_stats()
+        self.assertEqual(metrics["host_to_device_bytes"], image.nbytes)
+        self.assertEqual(metrics["functions"]["vf_plan_execute_roi"]["host_to_device_bytes"], 0)
+        self.assertEqual(metrics["functions"]["vf_dag_plan_execute_roi"]["host_to_device_bytes"], 0)
+
+    def test_resident_sub_roi_validates_parent_bounds_and_runtime(self):
+        runtime = GpuRuntime(enabled=False)
+        resident = GpuResidentImage(runtime, 1, 20, 10, 3)
+
+        child = resident.roi(3, 2, 12, 7).roi(4, 1, 5, 3)
+
+        self.assertEqual((child.x, child.y, child.width, child.height), (7, 3, 5, 3))
+        with self.assertRaises(GpuRuntimeError):
+            resident.roi(19, 0, 2, 1)
+        with self.assertRaises(GpuRuntimeError):
+            resident.roi(3, 2, 12, 7).roi(11, 0, 2, 1)
 
     def test_native_dag_descriptor_preserves_branch_inputs_and_outputs(self):
         image = np.zeros((8, 9, 3), dtype=np.uint8)

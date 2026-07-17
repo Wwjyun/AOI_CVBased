@@ -43,7 +43,7 @@ class Detector900(BaseDetector):
 
     def detect(self, image) -> list[dict]:
         roi, offset_x, offset_y = self._roi_image(image)
-        masks = self._make_masks(roi)
+        masks = self._make_masks(roi, offset_x, offset_y)
         outer_mask = masks["outer_mask"]
         inner_mask = masks["inner_mask"]
 
@@ -154,7 +154,7 @@ class Detector900(BaseDetector):
 
         return image[inset : height - inset, inset : width - inset], inset, inset
 
-    def _make_masks(self, image) -> dict[str, np.ndarray]:
+    def _make_masks(self, image, offset_x: int = 0, offset_y: int = 0) -> dict[str, np.ndarray]:
         block_size = self._odd_at_least(int(self.params.get("inner_adaptive_block_size", 11)), 3)
         max_value = int(self.params.get("max_value", 255))
         signature = (
@@ -196,7 +196,7 @@ class Detector900(BaseDetector):
                 outputs=("outer_mask", "inner_mask"),
             ),
         )
-        return self.execute_preprocess_dag(image, plan)
+        return self.execute_preprocess_dag(image, plan, (offset_x, offset_y))
 
     def _collect_candidates(
         self,

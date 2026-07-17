@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import contextmanager
+import threading
 from pathlib import Path
 
 from core.gpu_runtime import GpuRuntime, GpuRuntimeError
@@ -18,6 +20,7 @@ class GpuExecutionSession:
         self._fallback_to_cpu = RecipeManager().gpu_fallback_enabled(config)
         self.workload = workload
         self._closed = False
+        self._pipeline_lock = threading.RLock()
 
     @classmethod
     def from_recipe(cls, recipe: dict, workload: str = "latency") -> "GpuExecutionSession":
@@ -58,6 +61,13 @@ class GpuExecutionSession:
             return
         self._closed = True
         self.runtime.close()
+
+    @contextmanager
+    def execution_scope(self):
+        if self._closed:
+            raise GpuRuntimeError("GPU execution session is already closed")
+        with self._pipeline_lock:
+            yield
 
     def __enter__(self) -> "GpuExecutionSession":
         return self

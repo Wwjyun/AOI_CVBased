@@ -35,6 +35,7 @@ class BaseDetector:
         self._cuda_preprocess_dag_executor = CudaPreprocessDagExecutor(gpu_runtime) if gpu_runtime is not None else None
         self._preprocess_plan_cache = PreprocessPlanCache()
         self.last_preprocess_capability: dict = {}
+        self._active_device_roi = None
 
     @property
     def gpu_active(self) -> bool:
@@ -64,7 +65,12 @@ class BaseDetector:
             results.append(self.run(image[y : y + height, x : x + width]))
         return results
 
-    def execute_preprocess_plan(self, image, plan: PreprocessPlan):
+    def execute_preprocess_plan(
+        self,
+        image,
+        plan: PreprocessPlan,
+        device_roi_offset: tuple[int, int] = (0, 0),
+    ):
         if self.gpu_active and self._cuda_preprocess_executor is not None:
             report = self._cuda_preprocess_executor.capability_report(plan, image).to_dict()
             self.last_preprocess_capability = report
@@ -75,7 +81,11 @@ class BaseDetector:
                     report["reason"],
                     self._cpu_preprocess_executor,
                 )
-            return self._cuda_preprocess_executor.execute(image, plan)
+            return self._cuda_preprocess_executor.execute(
+                image,
+                plan,
+                device_roi=self._device_roi_for(image, device_roi_offset),
+            )
         report = self._cpu_preprocess_executor.capability_report(plan).to_dict()
         if self.use_gpu and self.gpu_fallback_reason:
             report.update(
@@ -90,7 +100,12 @@ class BaseDetector:
     def cached_preprocess_plan(self, image, signature, factory) -> PreprocessPlan | PreprocessDagPlan:
         return self._preprocess_plan_cache.get_or_create(image, signature, factory)
 
-    def execute_preprocess_dag(self, image, plan: PreprocessDagPlan) -> dict:
+    def execute_preprocess_dag(
+        self,
+        image,
+        plan: PreprocessDagPlan,
+        device_roi_offset: tuple[int, int] = (0, 0),
+    ) -> dict:
         if self.gpu_active and self._cuda_preprocess_dag_executor is not None:
             report = self._cuda_preprocess_dag_executor.capability_report(plan, image).to_dict()
             self.last_preprocess_capability = report
@@ -98,7 +113,11 @@ class BaseDetector:
                 return self._execute_cpu_fallback(
                     image, plan, report["reason"], self._cpu_preprocess_dag_executor
                 )
-            return self._cuda_preprocess_dag_executor.execute(image, plan)
+            return self._cuda_preprocess_dag_executor.execute(
+                image,
+                plan,
+                device_roi=self._device_roi_for(image, device_roi_offset),
+            )
         report = self._cpu_preprocess_dag_executor.capability_report(plan).to_dict()
         if self.use_gpu and self.gpu_fallback_reason:
             report.update(
@@ -116,6 +135,13 @@ class BaseDetector:
         self.gpu_fallback_reason = reason
         return executor.execute(image, plan)
 
+    def _device_roi_for(self, image, offset: tuple[int, int]):
+        if self._active_device_roi is None:
+            return None
+        offset_x, offset_y = (int(value) for value in offset)
+        height, width = image.shape[:2]
+        return self._active_device_roi.roi(offset_x, offset_y, width, height)
+
     @property
     def _gpu_fallback_enabled(self) -> bool:
         return bool(getattr(self.gpu_runtime, "fallback_to_cpu", True))
@@ -124,16 +150,22 @@ class BaseDetector:
     def preprocess_plan_cache_size(self) -> int:
         return self._preprocess_plan_cache.size
 
-    def run(self, image) -> dict:
+    def run(self, image, device_roi=None) -> dict:
+        previous_device_roi = self._active_device_roi
+        self._active_device_roi = device_roi
         try:
-            processed = self.preprocess(image)
-            defects = self.detect(processed)
-        except Exception as exc:
-            if not self.gpu_active or not self._gpu_fallback_enabled:
-                raise
-            self.gpu_fallback_reason = str(exc)
-            processed = self.preprocess(image)
-            defects = self.detect(processed)
+            try:
+                processed = self.preprocess(image)
+                defects = self.detect(processed)
+            except Exception as exc:
+                if not self.gpu_active or not self._gpu_fallback_enabled:
+                    raise
+                self.gpu_fallback_reason = str(exc)
+                self._active_device_roi = None
+                processed = self.preprocess(image)
+                defects = self.detect(processed)
+        finally:
+            self._active_device_roi = previous_device_roi
         max_confidence = max((defect.get("confidence", 0.0) for defect in defects), default=0.0)
         return {
             "detector_id": self.detector_id,

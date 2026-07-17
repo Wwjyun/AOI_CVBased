@@ -30,7 +30,7 @@ class Detector401_2(BaseDetector):
 
     def detect(self, image) -> list[dict]:
         roi, offset_x, offset_y = self._roi_image(image)
-        binary = self._make_binary(roi)
+        binary = self._make_binary(roi, offset_x, offset_y)
         contours, _ = cv2.findContours(binary, self._contour_mode(), cv2.CHAIN_APPROX_SIMPLE)
         defects = []
         ratio_threshold = float(self.params.get("white_pixel_ratio_threshold", 0.625))
@@ -113,7 +113,7 @@ class Detector401_2(BaseDetector):
 
         return gray[inset : height - inset, inset : width - inset], inset, inset
 
-    def _make_binary(self, gray):
+    def _make_binary(self, gray, offset_x: int = 0, offset_y: int = 0):
         blur_size = self._odd_at_least(int(self.params.get("blur_size", 25)), 3)
         block_size = self._odd_at_least(int(self.params.get("adaptive_block_size", 35)), 3)
         adaptive_c = float(self.params.get("adaptive_c", -2.0))
@@ -143,7 +143,7 @@ class Detector401_2(BaseDetector):
                 ),
             ),
         )
-        return self.execute_preprocess_plan(gray, plan)
+        return self.execute_preprocess_plan(gray, plan, (offset_x, offset_y))
 
     def _contour_mode(self) -> int:
         mode = str(self.params.get("contour_mode", "list")).lower()

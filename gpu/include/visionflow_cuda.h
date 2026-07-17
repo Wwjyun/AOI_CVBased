@@ -100,6 +100,10 @@ VF_CUDA_API int vf_context_create(void** context);
 VF_CUDA_API int vf_context_destroy(void* context);
 VF_CUDA_API int vf_context_stats(
     void* context, uint64_t* reserved_bytes, uint64_t* allocation_count);
+VF_CUDA_API int vf_context_upload_u8(
+    void* context,
+    const uint8_t* src, int width, int height, int src_stride, int src_channels,
+    uint64_t* generation);
 
 /*
  * Optional generic plan ABI. The descriptor is backend-neutral and contains
@@ -117,6 +121,9 @@ VF_CUDA_API int vf_plan_execute(
     const uint8_t* src, int width, int height, int src_stride, int src_channels,
     uint8_t* dst, int dst_stride, int dst_channels);
 VF_CUDA_API int vf_plan_destroy(void* plan);
+VF_CUDA_API int vf_plan_execute_roi(
+    void* plan, uint64_t generation, int x, int y,
+    uint8_t* dst, int dst_stride, int dst_channels);
 
 /*
  * Optional detector-neutral DAG extension. Nodes are topologically ordered,
@@ -134,6 +141,9 @@ VF_CUDA_API int vf_dag_plan_execute(
     const uint8_t* src, int width, int height, int src_stride, int src_channels,
     const VfDagOutputV1* outputs, int output_count);
 VF_CUDA_API int vf_dag_plan_destroy(void* plan);
+VF_CUDA_API int vf_dag_plan_execute_roi(
+    void* plan, uint64_t generation, int x, int y,
+    const VfDagOutputV1* outputs, int output_count);
 
 VF_CUDA_API int vf_bgr_to_gray_u8(
     const uint8_t* src, int width, int height, int src_stride, int src_channels,

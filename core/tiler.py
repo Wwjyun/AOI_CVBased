@@ -29,6 +29,7 @@ class Tile:
     col: int
     image: object
     metadata: dict | None = None
+    device_roi: object | None = None
 
 
 @dataclass(frozen=True)
@@ -419,6 +420,7 @@ class Tiler:
         overlap_y: int = 0,
         anchor_config: GridAnchorConfig | None = None,
         gpu_runtime=None,
+        resident_image=None,
     ):
         if width <= 0 or height <= 0:
             raise ValueError("Tile width and height must be positive.")
@@ -434,9 +436,10 @@ class Tiler:
         self.anchor_config = anchor_config
         self.image_loader = ImageLoader()
         self.gpu_runtime = gpu_runtime
+        self.resident_image = resident_image
 
     @classmethod
-    def from_config(cls, config: dict, gpu_runtime=None) -> "Tiler":
+    def from_config(cls, config: dict, gpu_runtime=None, resident_image=None) -> "Tiler":
         anchor_config = GridAnchorConfig.from_dict(config) if str(config.get("template_path", "")).strip() else None
         width = int(config.get("width", config.get("roi_w", 512)))
         height = int(config.get("height", config.get("roi_h", 512)))
@@ -447,6 +450,7 @@ class Tiler:
             overlap_y=int(config.get("overlap_y", 0)),
             anchor_config=anchor_config,
             gpu_runtime=gpu_runtime,
+            resident_image=resident_image,
         )
 
     def iter_tiles(self, image) -> Iterator[Tile]:
@@ -473,6 +477,10 @@ class Tiler:
                     col=col,
                     image=tile_image,
                     metadata={"mode": "grid"},
+                    device_roi=(
+                        self.resident_image.roi(x, y, x2 - x, y2 - y)
+                        if self.resident_image is not None else None
+                    ),
                 )
 
     def _iter_anchor_grid_tiles(self, image) -> Iterator[Tile]:
@@ -511,6 +519,10 @@ class Tiler:
                     row=row,
                     col=col,
                     image=tile_image,
+                    device_roi=(
+                        self.resident_image.roi(x1, y1, x2 - x1, y2 - y1)
+                        if self.resident_image is not None else None
+                    ),
                     metadata={
                         "mode": "grid",
                         "grid_anchor": "template_match",
@@ -686,10 +698,12 @@ class PatternMatchTiler:
             )
 
 
-def create_tiler(tile_config: dict, gpu_runtime=None):
+def create_tiler(tile_config: dict, gpu_runtime=None, resident_image=None):
     mode = str(tile_config.get("mode", "grid")).lower()
     if mode == "grid":
-        return Tiler.from_config(tile_config, gpu_runtime=gpu_runtime)
+        return Tiler.from_config(
+            tile_config, gpu_runtime=gpu_runtime, resident_image=resident_image
+        )
     if mode == "contour":
         return ContourTiler.from_config(tile_config, gpu_runtime=gpu_runtime)
     if mode == "pattern_match":

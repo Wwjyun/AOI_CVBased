@@ -36,7 +36,7 @@ class Detector401_1(BaseDetector):
 
     def detect(self, image) -> list[dict]:
         roi, offset_x, offset_y = self._roi_image(image)
-        binary, process_scale = self._make_binary(roi)
+        binary, process_scale = self._make_binary(roi, offset_x, offset_y)
         contours, _ = cv2.findContours(binary, self._contour_mode(), cv2.CHAIN_APPROX_SIMPLE)
         image_area = max(float(image.shape[0] * image.shape[1]), 1.0)
         defects = []
@@ -106,7 +106,7 @@ class Detector401_1(BaseDetector):
 
         return image[inset : height - inset, inset : width - inset], inset, inset
 
-    def _make_binary(self, image):
+    def _make_binary(self, image, offset_x: int = 0, offset_y: int = 0):
         process_scale = min(max(float(self.params.get("process_scale", 1.0)), 0.05), 1.0)
         height, width = image.shape[:2]
         target_width = max(1, int(width * process_scale))
@@ -147,7 +147,7 @@ class Detector401_1(BaseDetector):
                 ),
             ),
         )
-        return self.execute_preprocess_plan(image, plan), process_scale
+        return self.execute_preprocess_plan(image, plan, (offset_x, offset_y)), process_scale
 
     def _passes_filters(self, area: float, circularity: float, fill_ratio: float) -> bool:
         min_area = float(self.params.get("min_area", 100))

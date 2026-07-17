@@ -38,6 +38,12 @@ class AOIPipeline(LogMixin):
         self.detector_manager = DetectorManager()
 
     def run(self, image_path: Path) -> dict:
+        if self.gpu_session is not None:
+            with self.gpu_session.execution_scope():
+                return self._run(image_path)
+        return self._run(image_path)
+
+    def _run(self, image_path: Path) -> dict:
         started = time.perf_counter()
         profiler = PipelineProfiler()
         self.logger.info(
@@ -91,7 +97,25 @@ class AOIPipeline(LogMixin):
         self._progress(10, "Image loaded")
         with profiler.measure("initialization"):
             tile_config = recipe["tile"]
-            tiler = create_tiler(tile_config, gpu_runtime=gpu_runtime if tiling_gpu_requested else None)
+            resident_image = None
+            detector_gpu_requested = detector_gpu_allowed and any(
+                bool(config.get("use_gpu", False)) for config in detector_configs.values()
+            )
+            if (
+                detector_gpu_requested
+                and gpu_runtime.available
+                and gpu_runtime.supports_resident_roi
+                and str(tile_config.get("mode", "grid")).lower() == "grid"
+            ):
+                try:
+                    resident_image = gpu_runtime.upload_image(image)
+                except Exception as exc:
+                    gpu_runtime.fallback_or_raise(exc)
+            tiler = create_tiler(
+                tile_config,
+                gpu_runtime=(gpu_runtime if tiling_gpu_requested and resident_image is None else None),
+                resident_image=resident_image,
+            )
             if not detector_gpu_allowed:
                 for config in detector_configs.values():
                     config["use_gpu"] = False
@@ -121,7 +145,7 @@ class AOIPipeline(LogMixin):
                 detector_results = []
                 for detector in detectors:
                     with profiler.measure(f"detector:{detector.detector_id}"):
-                        detector_result = detector.run(tile.image)
+                        detector_result = detector.run(tile.image, device_roi=tile.device_roi)
                         detector_results.append(map_tile_result_to_global(tile, detector_result))
                     completed_work += 1
                     percent = 20 + int(completed_work / total_work * 60)
@@ -179,6 +203,14 @@ class AOIPipeline(LogMixin):
             "execution": {
                 "gpu": {
                     "mode": gpu_mode,
+                    "resident_image": {
+                        "active": resident_image is not None,
+                        "generation": resident_image.generation if resident_image is not None else 0,
+                        "shape": (
+                            [resident_image.height, resident_image.width, resident_image.channels]
+                            if resident_image is not None else []
+                        ),
+                    },
                     "tiling": gpu_runtime.status(tiling_gpu_requested),
                     "display_requested": self.recipe_manager.gpu_feature_requested(gpu_config, "display"),
                     "detectors": {

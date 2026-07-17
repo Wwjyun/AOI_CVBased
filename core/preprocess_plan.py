@@ -448,11 +448,20 @@ class CudaPreprocessDagExecutor:
             unsupported_operators=() if supported else (reason,),
         )
 
-    def execute(self, image: np.ndarray, plan: PreprocessDagPlan) -> dict[str, np.ndarray]:
+    def execute(
+        self,
+        image: np.ndarray,
+        plan: PreprocessDagPlan,
+        device_roi=None,
+    ) -> dict[str, np.ndarray]:
         supported, reason = self.runtime.native_dag_plan_capability(plan, image)
         if not supported:
             raise UnsupportedPreprocessPlan(reason)
-        outputs = self.runtime.execute_dag_plan(image, plan)
+        outputs = (
+            self.runtime.execute_dag_plan(image, plan, device_roi=device_roi)
+            if device_roi is not None
+            else self.runtime.execute_dag_plan(image, plan)
+        )
         if tuple(outputs) != plan.outputs:
             raise InvalidPreprocessPlan("CUDA DAG output names/order do not match the plan")
         expected = plan.output_specs(image)
@@ -540,13 +549,17 @@ class CudaPreprocessExecutor:
             plan_signature=plan.signature,
         )
 
-    def execute(self, image: np.ndarray, plan: PreprocessPlan) -> np.ndarray:
+    def execute(self, image: np.ndarray, plan: PreprocessPlan, device_roi=None) -> np.ndarray:
         expected = plan.validate_input(image)
         if bool(getattr(self.runtime, "supports_native_plan", False)):
             supported, reason = self.runtime.native_plan_capability(plan, image)
             if not supported:
                 raise UnsupportedPreprocessPlan(reason)
-            output = self.runtime.execute_plan(image, plan)
+            output = (
+                self.runtime.execute_plan(image, plan, device_roi=device_roi)
+                if device_roi is not None
+                else self.runtime.execute_plan(image, plan)
+            )
             return plan.validate_output(output, expected)
         fused = self._execute_legacy_fused(image, plan)
         if fused is not None:

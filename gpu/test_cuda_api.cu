@@ -102,6 +102,15 @@ int main() {
             plan, bgr.data(), width, height, width * 3, 3,
             plan_binary.data(), width, 1);
     }
+    uint64_t resident_generation = 0;
+    if (result == VF_CUDA_OK) {
+        result = vf_context_upload_u8(
+            context, bgr.data(), width, height, width * 3, 3, &resident_generation);
+    }
+    if (result == VF_CUDA_OK) {
+        result = vf_plan_execute_roi(
+            plan, resident_generation, 0, 0, plan_binary.data(), width, 1);
+    }
     uint64_t plan_allocation_count = 0;
     if (result == VF_CUDA_OK) {
         result = vf_context_stats(context, &reserved_bytes, &plan_allocation_count);
@@ -152,6 +161,10 @@ int main() {
         result = vf_dag_plan_execute(
             dag_plan, bgr.data(), width, height, width * 3, 3, dag_outputs, 2);
     }
+    if (result == VF_CUDA_OK) {
+        result = vf_dag_plan_execute_roi(
+            dag_plan, resident_generation, 0, 0, dag_outputs, 2);
+    }
     int dag_destroy_result = vf_dag_plan_destroy(dag_plan);
     int plan_destroy_result = vf_plan_destroy(plan);
     int destroy_result = vf_context_destroy(context);
@@ -167,6 +180,6 @@ int main() {
         return 8;
     }
 
-    std::cout << "C ABI, grayscale, fused 401-2, generic plan and DAG smoke passed\n";
+    std::cout << "C ABI, grayscale, fused 401-2, generic plan/DAG and resident ROI smoke passed\n";
     return 0;
 }

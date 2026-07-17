@@ -5,6 +5,7 @@ from pathlib import Path
 
 from gpu.preflight_cuda_build import (
     OPTIONAL_GENERIC_PLAN_EXPORTS,
+    OPTIONAL_RESIDENT_ROI_EXPORTS,
     REQUIRED_ABI_V1_EXPORTS,
     inspect_contract,
 )
@@ -18,6 +19,7 @@ class CudaSourceContractTests(unittest.TestCase):
         self.assertEqual(result["abi_version"], 1)
         self.assertTrue(REQUIRED_ABI_V1_EXPORTS.issubset(result["exports"]))
         self.assertEqual(set(result["optional_generic_plan_exports"]), OPTIONAL_GENERIC_PLAN_EXPORTS)
+        self.assertEqual(set(result["optional_resident_roi_exports"]), OPTIONAL_RESIDENT_ROI_EXPORTS)
         self.assertEqual(result["dll_sources"], ["gpu/visionflow_cuda.cu"])
         self.assertEqual(result["smoke_sources"], ["gpu/test_cuda_api.cu"])
 
@@ -27,18 +29,22 @@ class CudaSourceContractTests(unittest.TestCase):
         execute = source.split("VF_CUDA_API int vf_plan_execute(", 1)[1].split(
             "VF_CUDA_API int vf_plan_destroy(", 1
         )[0]
+        device_execute = source.split("static int execute_linear_plan_device(", 1)[1].split(
+            "static int execute_dag_plan_device(", 1
+        )[0]
         header = (root / "gpu" / "include" / "visionflow_cuda.h").read_text(encoding="utf-8")
         descriptor = header.split("typedef struct VfPlanOperatorV1", 1)[1].split(
             "VF_CUDA_API int vf_gpu_abi_version", 1
         )[0]
 
-        self.assertEqual(execute.count("cudaMemcpy2DAsync("), 2)
+        self.assertEqual(execute.count("cudaMemcpyHostToDevice"), 1)
+        self.assertEqual(device_execute.count("cudaMemcpyDeviceToHost"), 1)
         self.assertEqual(execute.count("cudaStreamSynchronize"), 0)
-        self.assertEqual(execute.count("stream_result"), 1)
+        self.assertEqual(device_execute.count("stream_result"), 1)
         self.assertNotIn("cudaMalloc", execute)
         self.assertNotIn("reserve_plan_buffers", execute)
         self.assertIn("context->stream", execute)
-        self.assertIn("context->u8[4]", execute)
+        self.assertIn("context->u8[4]", device_execute)
         self.assertNotIn("detector", descriptor.lower())
 
     def test_persistent_context_owns_stream_and_fused_path_uses_it(self):
@@ -60,13 +66,31 @@ class CudaSourceContractTests(unittest.TestCase):
         execute = source.split("VF_CUDA_API int vf_dag_plan_execute(", 1)[1].split(
             "VF_CUDA_API int vf_dag_plan_destroy(", 1
         )[0]
+        device_execute = source.split("static int execute_dag_plan_device(", 1)[1].split(
+            "VF_CUDA_API int vf_gpu_abi_version", 1
+        )[0]
 
         self.assertEqual(execute.count("cudaMemcpyHostToDevice"), 1)
-        self.assertEqual(execute.count("cudaMemcpyDeviceToHost"), 1)
-        self.assertIn("for (int index = 0; index < output_count; ++index)", execute)
-        self.assertEqual(execute.count("stream_result"), 1)
+        self.assertEqual(device_execute.count("cudaMemcpyDeviceToHost"), 1)
+        self.assertIn("for (int index = 0; index < output_count; ++index)", device_execute)
+        self.assertEqual(device_execute.count("stream_result"), 1)
         self.assertNotIn("cudaMalloc", execute)
-        self.assertIn("values[op.input_node]", execute)
+        self.assertIn("values[op.input_node]", device_execute)
+
+    def test_resident_roi_execution_uses_device_copy_without_host_upload(self):
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "gpu" / "visionflow_cuda.cu").read_text(encoding="utf-8")
+        linear = source.split("VF_CUDA_API int vf_plan_execute_roi(", 1)[1].split(
+            "VF_CUDA_API int vf_dag_plan_query(", 1
+        )[0]
+        dag = source.split("VF_CUDA_API int vf_dag_plan_execute_roi(", 1)[1].split(
+            "VF_CUDA_API int vf_bgr_to_gray_u8(", 1
+        )[0]
+
+        for execute in (linear, dag):
+            self.assertIn("cudaMemcpyDeviceToDevice", execute)
+            self.assertNotIn("cudaMemcpyHostToDevice", execute)
+            self.assertNotIn("cudaMalloc", execute)
 
 
 if __name__ == "__main__":

@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from copy import deepcopy
 from pathlib import Path
 from unittest.mock import Mock, patch
 
 from core.batch_processor import BatchImageResult, BatchInspectionProcessor
-from core.gpu_runtime import GpuRuntimeError
+from core.gpu_runtime import GpuResidentImage, GpuRuntimeError
 from core.gpu_session import GpuExecutionSession
 from core.monitor_processor import FolderMonitorProcessor
 from core.pipeline import AOIPipeline
@@ -23,7 +24,106 @@ class _CloseTrackingRuntime:
         self.close_calls += 1
 
 
+class _ResidentRuntime:
+    available = True
+    supports_resident_roi = True
+    fallback_to_cpu = True
+    last_error = ""
+    unavailable_reason = ""
+    dll_path = Path("fake_resident.dll")
+    device_name = "fake"
+    compute_capability = "8.6"
+
+    def __init__(self):
+        self.upload_calls = 0
+        self.close_calls = 0
+
+    def upload_image(self, image):
+        self.upload_calls += 1
+        height, width = image.shape[:2]
+        channels = 1 if image.ndim == 2 else image.shape[2]
+        return GpuResidentImage(self, self.upload_calls, width, height, channels)
+
+    def performance_stats(self):
+        return {"call_count": self.upload_calls, "functions": {}}
+
+    def status(self, requested=False):
+        return {"requested": requested, "active": requested, "backend": "cuda_dll"}
+
+    def close(self):
+        self.close_calls += 1
+
+
+class _RoiCapturingDetector:
+    detector_id = "401"
+    detector_name = "fake"
+    display_name = "fake"
+    use_gpu = True
+    gpu_active = True
+    gpu_fallback_reason = ""
+
+    def __init__(self):
+        self.device_rois = []
+
+    def run(self, _image, device_roi=None):
+        self.device_rois.append(device_roi)
+        return {
+            "detector_id": self.detector_id,
+            "detector_name": self.detector_name,
+            "display_name": self.display_name,
+            "pass": True,
+            "score": 0.0,
+            "defects": [],
+            "execution": {},
+        }
+
+
 class GpuExecutionSessionTests(unittest.TestCase):
+    def test_pipeline_uploads_grid_source_once_and_routes_device_rois_to_tiles(self):
+        recipe_path = ROOT / "recipes" / "PRODUCT_A_NEGATIVE_401_AOI_01.yaml"
+        recipe = deepcopy(AOIPipeline(recipe_path, ROOT / "outputs").recipe_manager.load(recipe_path))
+        recipe["gpu"] = {
+            "mode": "cuda",
+            "dll_path": "fake_resident.dll",
+            "fallback_to_cpu": True,
+            "tiling": False,
+        }
+        for config in recipe["detectors"].values():
+            config["enabled"] = False
+        recipe["detectors"]["401"]["enabled"] = True
+        recipe["detectors"]["401"]["use_gpu"] = True
+        runtime = _ResidentRuntime()
+        session = GpuExecutionSession(runtime, requested=True, config=recipe["gpu"])
+        detector = _RoiCapturingDetector()
+        output_overrides = {
+            "save_overlay": False,
+            "save_ng_tiles": False,
+            "save_csv": False,
+            "save_matrix_csv": False,
+            "save_json": False,
+        }
+
+        with tempfile.TemporaryDirectory(prefix="visionflow_resident_pipeline_") as temporary:
+            pipeline = AOIPipeline(
+                recipe_path,
+                Path(temporary),
+                output_overrides=output_overrides,
+                gpu_session=session,
+            )
+            pipeline.recipe_manager.load = Mock(return_value=recipe)
+            pipeline.detector_manager.create_enabled = Mock(return_value=[detector])
+            result = pipeline.run(ROOT / "tmp_validation_input.png")
+
+        self.assertEqual(runtime.upload_calls, 1)
+        self.assertEqual(len(detector.device_rois), result["summary"]["tile_count"])
+        self.assertTrue(all(roi is not None for roi in detector.device_rois))
+        self.assertTrue(result["execution"]["gpu"]["resident_image"]["active"])
+        for tile, roi in zip(result["tiles"], detector.device_rois):
+            self.assertEqual(
+                (roi.x, roi.y, roi.width, roi.height),
+                (tile["tile"]["x"], tile["tile"]["y"], tile["tile"]["width"], tile["tile"]["height"]),
+            )
+
     def test_latency_and_throughput_sessions_select_distinct_queue_policy(self):
         recipe_path = ROOT / "recipes" / "PRODUCT_A_NEGATIVE_401_AOI_01.yaml"
         latency = GpuExecutionSession.from_recipe_path(recipe_path)

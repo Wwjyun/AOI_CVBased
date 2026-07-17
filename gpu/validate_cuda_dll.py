@@ -289,6 +289,39 @@ def validate_primitives(runtime: GpuRuntime) -> list[dict]:
         print(f"PASS native 900 DAG reuse: {second_context_stats}")
     else:
         print(f"SKIP generic native DAG plan: {runtime.native_dag_plan_unavailable_reason}")
+    if runtime.supports_resident_roi:
+        resident = runtime.upload_image(bgr)
+        device_roi = resident.roi(17, 13, 64, 64)
+        host_roi = bgr[13:77, 17:81]
+        roi_plan = PreprocessPlan((Gray(), Threshold(128, 255, False)), name="resident_roi_plan")
+        expected_roi = CpuPreprocessExecutor().execute(host_roi, roi_plan)
+        before = runtime.performance_stats()
+        actual_roi = runtime.execute_plan(host_roi, roi_plan, device_roi=device_roi)
+        after = runtime.performance_stats()
+        metrics.append(compare("resident_roi_plan", actual_roi, expected_roi, max_diff=1))
+        if after["host_to_device_bytes"] != before["host_to_device_bytes"]:
+            raise AssertionError("resident linear ROI unexpectedly uploaded detector input")
+
+        roi_dag = PreprocessDagPlan(
+            name="resident_roi_dag",
+            nodes=(
+                PreprocessDagNode("gray", "root", Gray()),
+                PreprocessDagNode("dark", "gray", Threshold(128, 255, True)),
+                PreprocessDagNode("light", "gray", Threshold(128, 255, False)),
+            ),
+            outputs=("dark", "light"),
+        )
+        expected_dag = CpuPreprocessDagExecutor().execute(host_roi, roi_dag)
+        before = runtime.performance_stats()
+        actual_dag = runtime.execute_dag_plan(host_roi, roi_dag, device_roi=device_roi)
+        after = runtime.performance_stats()
+        for name in roi_dag.outputs:
+            metrics.append(compare(f"resident_roi_dag_{name}", actual_dag[name], expected_dag[name], max_diff=1))
+        if after["host_to_device_bytes"] != before["host_to_device_bytes"]:
+            raise AssertionError("resident DAG ROI unexpectedly uploaded detector input")
+        print(f"PASS resident image/ROI routing: generation={resident.generation}")
+    else:
+        print("SKIP resident image/ROI routing: optional exports unavailable")
     return metrics
 
 
