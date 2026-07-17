@@ -6,7 +6,7 @@ import sys
 import tempfile
 from unittest.mock import patch
 
-from gui_launcher import bundled_recipe_path
+from gui_launcher import bundled_recipe_path, run_packaged_gpu_fallback_smoke_test
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -25,6 +25,9 @@ class GuiThreadingPackagingContractTests(unittest.TestCase):
         self.assertIn('"--smoke-test" in sys.argv[1:]', launcher)
         self.assertIn("window.recipe_panel.load_recipe(recipe_path)", launcher)
         self.assertIn("window.recipe_panel.detector_list.count() > 0", launcher)
+
+    def test_packaged_smoke_exercises_missing_dll_fallback_policy(self):
+        self.assertEqual(run_packaged_gpu_fallback_smoke_test(), 0)
 
     def test_cuda_pipeline_workers_are_moved_to_qthreads_before_start(self):
         source = (ROOT / "gui" / "main_window.py").read_text(encoding="utf-8")

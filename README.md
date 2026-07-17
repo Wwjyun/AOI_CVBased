@@ -556,6 +556,8 @@ dist\VisionFlow AOI\VisionFlow AOI.exe
 Start-Process -FilePath '.\dist\VisionFlow AOI\VisionFlow AOI.exe' -ArgumentList '--smoke-test' -WindowStyle Hidden -Wait -PassThru
 ```
 
+This smoke mode validates the bundled recipe and Qt window, then runs a small full-pipeline matrix inside the packaged executable: CPU-only, a missing CUDA DLL with CPU fallback enabled, and a missing CUDA DLL with strict CUDA mode. Exit code `0` means the fallback result matched CPU and strict mode failed explicitly as expected.
+
 `build_exe.ps1` 使用受版控的 `VisionFlow AOI.spec`，不會在每次建置時覆寫 CUDA DLL 的條件式收錄規則。
 
 發行檔命名格式：

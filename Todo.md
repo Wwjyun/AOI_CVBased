@@ -154,7 +154,7 @@
 - [x] GUI worker 不在 UI thread 等待 CUDA；monitor 取消、錯誤與進度以 stop callback／Qt signals 保持可回應。
 - [x] GUI 顯示實際 backend，不得因 recipe 勾選 GPU 就顯示 CUDA active。
 - [x] PyInstaller 有 DLL 時條件式包含 `gpu/visionflow_cuda.dll`，無 DLL 時建立 CPU-compatible package 且 runtime 可 fallback。
-- [ ] 有 GPU、無 GPU、DLL 缺少、DLL 版本不符、fallback 開/關各完成一次打包實機測試。（runtime tests 已覆蓋 missing/ABI mismatch/no-device/context-failure 與 fallback policy；目前 working tree 已在無 NVIDIA/CUDA DLL 電腦完成 CPU-compatible package build、5 recipes bundle 與 packaged MainWindow smoke exit 0；有 GPU 與其餘 packaged fault matrix 待實機）
+- [ ] 有 GPU、無 GPU、DLL 缺少、DLL 版本不符、fallback 開/關各完成一次打包實機測試。（runtime tests 已覆蓋 missing/ABI mismatch/no-device/context-failure 與 fallback policy；無 NVIDIA/CUDA DLL 電腦已完成 CPU-compatible package build 與 5 recipes bundle，packaged smoke 進一步驗證 MainWindow、CPU-only pipeline、缺 DLL fallback 開啟時與 CPU 結果一致且 GPU call count=0、fallback 關閉/strict CUDA 明確失敗，EXE exit 0；有 GPU 與 packaged ABI mismatch 待實機）
 
 ## P7：CI、GitHub Actions 與發布
 
@@ -271,3 +271,4 @@
 - [x] 2026-07-17：401-2 profiler 將 contour white-pixel mask/count 從 geometry 拆成 `white_ratio_analysis`；bbox-local 統計由 NumPy boolean temporaries 改成 OpenCV `bitwise_and`/`countNonZero`，保持 count/ratio/order/metadata 等價，512² synthetic microbenchmark median 由 0.0343 ms 降至 0.0151 ms；是否移至 GPU 留待 RTX production 占比。
 - [x] 2026-07-17：完成 native linear `VF_PLAN_RESIZE_AREA` source routing：descriptor 固定 area target、query 拒絕放大/混合軸語意、compiled plan 追蹤 output shape，401-1 下採樣維持單次 H2D/D2H；同步 Python encoding、C++ smoke、RTX validator、舊 DLL fallback 與 fake handle/OOP lifecycle tests，真實 CUDA 等價待 RTX runner。
 - [x] 2026-07-17：修正 `build_exe.ps1` 每次覆寫受版控 spec、導致 CUDA 條件式收錄規則遺失的缺陷；改由固定 `VisionFlow AOI.spec` 建置，新增 packaged `--smoke-test` 從 PyInstaller bundle 載入 recipe 並建立 MainWindow。CPU-compatible package 在目前無 GPU 電腦實跑 exit 0、5 recipes、無 CUDA DLL，validation ZIP 103,993,603 bytes、SHA-256 `5E4E833AEA184A7889F2911B56AB22DCFAD3F2E1A6E82D46D60C5C431A4C134F`。
+- [x] 2026-07-17：擴充 packaged `--smoke-test` 為缺 DLL fallback policy 全 pipeline 矩陣；CPU-only 與 auto fallback 的 PASS/NG、tiles、defects、bbox、metadata 一致且 GPU call count=0，strict CUDA 明確回報 DLL 不存在；重建 CPU-compatible EXE（5,550,515 bytes、5 recipes、無 CUDA DLL）後實際 exit 0，Windows CI run `29588663917` 通過，最新 RTX run `29588795879` 因無 runner 排隊中。
