@@ -115,19 +115,58 @@ int main() {
     if (result == VF_CUDA_OK) {
         result = vf_context_stats(context, &reserved_bytes, &repeated_allocation_count);
     }
+    VfPlanOperatorV1 dag_operators[3]{};
+    dag_operators[0] = operators[0];
+    dag_operators[1].struct_size = sizeof(VfPlanOperatorV1);
+    dag_operators[1].kind = VF_PLAN_THRESHOLD;
+    dag_operators[1].input_node = 0;
+    dag_operators[1].output_node = 1;
+    dag_operators[1].int_params[0] = 127;
+    dag_operators[1].int_params[1] = 255;
+    dag_operators[1].int_params[2] = 1;
+    dag_operators[2] = operators[2];
+    dag_operators[2].input_node = 0;
+    int32_t dag_output_nodes[2]{1, 2};
+    VfDagPlanDescV1 dag_descriptor{};
+    dag_descriptor.struct_size = sizeof(VfDagPlanDescV1);
+    dag_descriptor.version = VF_CUDA_PLAN_VERSION;
+    dag_descriptor.input_channels = 3;
+    dag_descriptor.operator_count = 3;
+    dag_descriptor.operators = dag_operators;
+    dag_descriptor.output_count = 2;
+    dag_descriptor.output_nodes = dag_output_nodes;
+    char dag_reason[256]{};
+    void* dag_plan = nullptr;
+    if (result == VF_CUDA_OK) {
+        result = vf_dag_plan_query(&dag_descriptor, width, height, dag_reason, sizeof(dag_reason));
+    }
+    if (result == VF_CUDA_OK) {
+        result = vf_dag_plan_create(context, &dag_descriptor, width, height, &dag_plan);
+    }
+    std::vector<uint8_t> outer_mask(width * height, 0);
+    std::vector<uint8_t> inner_mask(width * height, 0);
+    VfDagOutputV1 dag_outputs[2]{};
+    dag_outputs[0] = {sizeof(VfDagOutputV1), 1, outer_mask.data(), width, 1};
+    dag_outputs[1] = {sizeof(VfDagOutputV1), 2, inner_mask.data(), width, 1};
+    if (result == VF_CUDA_OK) {
+        result = vf_dag_plan_execute(
+            dag_plan, bgr.data(), width, height, width * 3, 3, dag_outputs, 2);
+    }
+    int dag_destroy_result = vf_dag_plan_destroy(dag_plan);
     int plan_destroy_result = vf_plan_destroy(plan);
     int destroy_result = vf_context_destroy(context);
     if (result != VF_CUDA_OK || plan_destroy_result != VF_CUDA_OK ||
-        destroy_result != VF_CUDA_OK || plan_allocation_count != repeated_allocation_count) {
+        dag_destroy_result != VF_CUDA_OK || destroy_result != VF_CUDA_OK ||
+        plan_allocation_count != repeated_allocation_count) {
         char message[256]{};
         int failed = result != VF_CUDA_OK ? result :
             plan_destroy_result != VF_CUDA_OK ? plan_destroy_result : destroy_result;
         vf_gpu_error_message(failed, message, static_cast<int>(sizeof(message)));
-        std::cerr << "Generic native plan smoke failed: " << message
-                  << " reason=" << plan_reason << "\n";
+        std::cerr << "Generic native plan/DAG smoke failed: " << message
+                  << " plan_reason=" << plan_reason << " dag_reason=" << dag_reason << "\n";
         return 8;
     }
 
-    std::cout << "C ABI, grayscale, fused 401-2 and generic plan smoke passed\n";
+    std::cout << "C ABI, grayscale, fused 401-2, generic plan and DAG smoke passed\n";
     return 0;
 }

@@ -112,7 +112,7 @@
 - [x] 401 遷移到 cached 共用 plan，保留 BGR Gaussian → Morphology → Gray → AdaptiveMean、threshold 與 contour 語意。
 - [x] 401-2 preprocessing 已遷移到共用 plan，並保留 fused/legacy/CPU 路徑。
 - [x] 900 遷移成 cached CPU DAG plan，共用一次 gray 產生 outer global 與 inner adaptive masks。
-- [ ] 900 DAG 接上 CUDA/native executor，共用 device gray 並只下載必要 masks。
+- [x] 900 DAG 接上 CUDA/native executor，共用 device gray 並只下載必要 masks。
 - [x] 401/401-1/401-2 的 `findContours` 與少量幾何分析暫留 CPU，只下載 binary mask。
 - [x] 401-2 contour mask 改為局部 bbox mask，避免每個 contour 配置整張 ROI mask。
 - [ ] 評估 401-2 white-pixel reduction 移至 GPU，只下載統計值與必要 mask。
@@ -245,3 +245,4 @@
 - [x] 2026-07-17：修正 CUDA capability preflight routing；unsupported linear/DAG plan 不再先執行部分 GPU primitive，並讓 `fallback_to_cpu: false` 對 runtime/semantic failure 維持嚴格失敗。
 - [x] 2026-07-17：完成 generic native linear plan 原始碼與 OOP routing：versioned detector-neutral structs、optional query/create/execute/destroy、compiled-plan cache、persistent buffers、Gray/Gaussian/Threshold/AdaptiveMean/Morphology 單次 H2D/D2H execution，並同步 Python bridge、fake-DLL lifecycle、C++ smoke、validator、preflight 與文件；RTX 3090 編譯/實測仍保留待辦。
 - [x] 2026-07-17：persistent context 納入 non-blocking CUDA stream、plan scratch 與 morphology device ping-pong；新增 `GpuExecutionSession` 讓 batch/monitor 跨影像共用同一 runtime/context，並以 pipeline、batch、monitor 與 CUDA source contract 測試驗證生命週期；RTX 3090 runtime 驗證仍保留待辦。
+- [x] 2026-07-17：新增 detector-neutral native DAG/multi-output ABI、compiled-plan cache 與 CUDA executor；900 以一次 root H2D 共用 device gray，僅下載 outer/inner masks 並同步一次，已覆蓋 descriptor、fake-DLL lifecycle、detector routing、C++ smoke、validator 與 source contract；RTX 3090 編譯/實測仍保留待辦。

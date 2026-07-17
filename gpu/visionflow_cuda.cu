@@ -6,6 +6,7 @@
 #include <cmath>
 #include <cstring>
 #include <new>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -25,6 +26,8 @@ struct PersistentContext {
     size_t float_capacity = 0;
     unsigned long long* u64[2]{};
     size_t u64_capacity[2]{};
+    std::vector<uint8_t*> dag_u8;
+    std::vector<size_t> dag_u8_capacity;
     unsigned long long allocation_count = 0;
     cudaStream_t stream = nullptr;
     cudaError_t initialization_error = cudaSuccess;
@@ -37,6 +40,7 @@ struct PersistentContext {
         for (void* pointer : u8) visionflow_cuda::free_device(pointer);
         visionflow_cuda::free_device(float_buffer);
         for (void* pointer : u64) visionflow_cuda::free_device(pointer);
+        for (void* pointer : dag_u8) visionflow_cuda::free_device(pointer);
         if (stream != nullptr) cudaStreamDestroy(stream);
     }
 };
@@ -48,6 +52,16 @@ struct NativePlan {
     int input_channels = 0;
     int output_channels = 0;
     std::vector<VfPlanOperatorV1> operators;
+};
+
+struct NativeDagPlan {
+    PersistentContext* context = nullptr;
+    int width = 0;
+    int height = 0;
+    int input_channels = 0;
+    std::vector<VfPlanOperatorV1> operators;
+    std::vector<int> node_channels;
+    std::vector<int> output_nodes;
 };
 
 template <typename T>
@@ -211,6 +225,150 @@ int validate_plan_desc(
     if (output_channels != nullptr) *output_channels = channels;
     write_reason(reason, reason_capacity, "Supported generic native linear plan");
     return VF_CUDA_OK;
+}
+
+int validate_dag_plan_desc(
+    const VfDagPlanDescV1* desc,
+    int width,
+    int height,
+    std::vector<int>* node_channels,
+    char* reason,
+    int reason_capacity) {
+    if (desc == nullptr || desc->struct_size != sizeof(VfDagPlanDescV1) ||
+        desc->version != VF_CUDA_PLAN_VERSION || width <= 0 || height <= 0 ||
+        (desc->input_channels != 1 && desc->input_channels != 3) ||
+        desc->operator_count <= 0 || desc->operator_count > 64 || desc->operators == nullptr ||
+        desc->output_count <= 0 || desc->output_count > desc->operator_count ||
+        desc->output_nodes == nullptr) {
+        write_reason(reason, reason_capacity, "Invalid DAG descriptor, version, shape or counts");
+        return VF_CUDA_INVALID_ARGUMENT;
+    }
+    if (static_cast<size_t>(width) > SIZE_MAX / static_cast<size_t>(height) ||
+        static_cast<size_t>(width) * static_cast<size_t>(height) > INT_MAX) {
+        write_reason(reason, reason_capacity, "DAG image shape is unsupported");
+        return VF_CUDA_UNSUPPORTED;
+    }
+    std::vector<int> channels;
+    try {
+        channels.resize(desc->operator_count);
+    } catch (const std::bad_alloc&) {
+        return VF_CUDA_ALLOCATION_FAILED;
+    }
+    for (int index = 0; index < desc->operator_count; ++index) {
+        const VfPlanOperatorV1& op = desc->operators[index];
+        if (op.struct_size != sizeof(VfPlanOperatorV1) || op.output_node != index ||
+            op.input_node < VF_PLAN_INPUT_NODE || op.input_node >= index) {
+            write_reason(reason, reason_capacity, "DAG nodes must be topologically ordered");
+            return VF_CUDA_INVALID_ARGUMENT;
+        }
+        int input_channels = op.input_node == VF_PLAN_INPUT_NODE
+            ? desc->input_channels : channels[op.input_node];
+        int output_channels = input_channels;
+        switch (op.kind) {
+            case VF_PLAN_GRAY:
+                output_channels = 1;
+                break;
+            case VF_PLAN_GAUSSIAN:
+                if (op.int_params[0] < 3 || op.int_params[0] % 2 == 0 ||
+                    op.int_params[0] > MAX_GAUSSIAN_KERNEL) {
+                    write_reason(reason, reason_capacity, "DAG Gaussian kernel is unsupported");
+                    return VF_CUDA_UNSUPPORTED;
+                }
+                break;
+            case VF_PLAN_THRESHOLD:
+                if (input_channels != 1 || op.int_params[0] < 0 || op.int_params[0] > 255 ||
+                    op.int_params[1] < 0 || op.int_params[1] > 255 ||
+                    (op.int_params[2] != 0 && op.int_params[2] != 1)) {
+                    write_reason(reason, reason_capacity, "DAG Threshold parameters are unsupported");
+                    return VF_CUDA_UNSUPPORTED;
+                }
+                break;
+            case VF_PLAN_ADAPTIVE_MEAN: {
+                int radius = 0, padded_width = 0, padded_height = 0;
+                size_t padded_count = 0;
+                if (input_channels != 1 || op.int_params[1] < 0 || op.int_params[1] > 255 ||
+                    (op.int_params[2] != 0 && op.int_params[2] != 1) ||
+                    !std::isfinite(op.float_params[0]) ||
+                    adaptive_layout(width, height, op.int_params[0], &radius, &padded_width,
+                                    &padded_height, &padded_count) != VF_CUDA_OK) {
+                    write_reason(reason, reason_capacity, "DAG AdaptiveMean parameters are unsupported");
+                    return VF_CUDA_UNSUPPORTED;
+                }
+                break;
+            }
+            case VF_PLAN_MORPHOLOGY:
+                if (op.int_params[0] < VF_MORPH_OPEN || op.int_params[0] > VF_MORPH_ERODE ||
+                    op.int_params[1] < 3 || op.int_params[1] % 2 == 0 ||
+                    op.int_params[2] < 1 || op.int_params[2] > INT_MAX / 2) {
+                    write_reason(reason, reason_capacity, "DAG Morphology parameters are unsupported");
+                    return VF_CUDA_UNSUPPORTED;
+                }
+                break;
+            default:
+                write_reason(reason, reason_capacity, "DAG contains an unsupported operator kind");
+                return VF_CUDA_UNSUPPORTED;
+        }
+        channels[index] = output_channels;
+    }
+    std::vector<bool> seen(desc->operator_count, false);
+    for (int index = 0; index < desc->output_count; ++index) {
+        int node = desc->output_nodes[index];
+        if (node < 0 || node >= desc->operator_count || seen[node]) {
+            write_reason(reason, reason_capacity, "DAG outputs must be unique existing nodes");
+            return VF_CUDA_INVALID_ARGUMENT;
+        }
+        seen[node] = true;
+    }
+    if (node_channels != nullptr) *node_channels = std::move(channels);
+    write_reason(reason, reason_capacity, "Supported generic native DAG plan");
+    return VF_CUDA_OK;
+}
+
+int reserve_dag_plan_buffers(PersistentContext* context, const NativeDagPlan& plan) {
+    if (context == nullptr) return VF_CUDA_INVALID_ARGUMENT;
+    try {
+        if (context->dag_u8.size() < plan.operators.size()) {
+            context->dag_u8.resize(plan.operators.size(), nullptr);
+            context->dag_u8_capacity.resize(plan.operators.size(), 0);
+        }
+    } catch (const std::bad_alloc&) {
+        return VF_CUDA_ALLOCATION_FAILED;
+    }
+    const size_t pixels = static_cast<size_t>(plan.width) * plan.height;
+    bool needs_float = false;
+    bool needs_morph_scratch = false;
+    size_t maximum_padded_count = 0;
+    for (size_t index = 0; index < plan.operators.size(); ++index) {
+        int result = reserve_device(
+            &context->dag_u8[index], &context->dag_u8_capacity[index],
+            pixels * static_cast<size_t>(plan.node_channels[index]), &context->allocation_count);
+        if (result != VF_CUDA_OK) return result;
+        const VfPlanOperatorV1& op = plan.operators[index];
+        needs_float = needs_float || op.kind == VF_PLAN_GAUSSIAN;
+        needs_morph_scratch = needs_morph_scratch || op.kind == VF_PLAN_MORPHOLOGY;
+        if (op.kind == VF_PLAN_ADAPTIVE_MEAN) {
+            int radius = 0, padded_width = 0, padded_height = 0;
+            size_t padded_count = 0;
+            result = adaptive_layout(plan.width, plan.height, op.int_params[0], &radius,
+                                     &padded_width, &padded_height, &padded_count);
+            if (result != VF_CUDA_OK) return result;
+            maximum_padded_count = std::max(maximum_padded_count, padded_count);
+        }
+    }
+    int result = reserve_device(&context->u8[0], &context->u8_capacity[0],
+                                pixels * static_cast<size_t>(plan.input_channels),
+                                &context->allocation_count);
+    if (result == VF_CUDA_OK && needs_morph_scratch) result = reserve_device(
+        &context->u8[4], &context->u8_capacity[4], pixels * 3, &context->allocation_count);
+    if (result == VF_CUDA_OK && needs_float) result = reserve_device(
+        &context->float_buffer, &context->float_capacity, pixels * 3, &context->allocation_count);
+    if (result == VF_CUDA_OK && maximum_padded_count > 0) result = reserve_device(
+        &context->u8[3], &context->u8_capacity[3], maximum_padded_count, &context->allocation_count);
+    if (result == VF_CUDA_OK && maximum_padded_count > 0) result = reserve_device(
+        &context->u64[0], &context->u64_capacity[0], maximum_padded_count, &context->allocation_count);
+    if (result == VF_CUDA_OK && maximum_padded_count > 0) result = reserve_device(
+        &context->u64[1], &context->u64_capacity[1], maximum_padded_count, &context->allocation_count);
+    return result;
 }
 
 int reserve_plan_buffers(PersistentContext* context, const NativePlan& plan) {
@@ -626,6 +784,7 @@ VF_CUDA_API int vf_context_stats(
     for (size_t capacity : persistent->u64_capacity) {
         bytes += static_cast<uint64_t>(capacity) * sizeof(unsigned long long);
     }
+    for (size_t capacity : persistent->dag_u8_capacity) bytes += static_cast<uint64_t>(capacity);
     *reserved_bytes = bytes;
     *allocation_count = persistent->allocation_count;
     return VF_CUDA_OK;
@@ -791,6 +950,183 @@ VF_CUDA_API int vf_plan_execute(
 
 VF_CUDA_API int vf_plan_destroy(void* plan) {
     delete static_cast<NativePlan*>(plan);
+    return VF_CUDA_OK;
+}
+
+VF_CUDA_API int vf_dag_plan_query(
+    const VfDagPlanDescV1* desc,
+    int width,
+    int height,
+    char* reason,
+    int reason_capacity) {
+    return validate_dag_plan_desc(desc, width, height, nullptr, reason, reason_capacity);
+}
+
+VF_CUDA_API int vf_dag_plan_create(
+    void* context,
+    const VfDagPlanDescV1* desc,
+    int width,
+    int height,
+    void** plan) {
+    if (context == nullptr || plan == nullptr) return VF_CUDA_INVALID_ARGUMENT;
+    *plan = nullptr;
+    std::vector<int> node_channels;
+    int result = validate_dag_plan_desc(desc, width, height, &node_channels, nullptr, 0);
+    if (result != VF_CUDA_OK) return result;
+    NativeDagPlan* created = new (std::nothrow) NativeDagPlan();
+    if (created == nullptr) return VF_CUDA_ALLOCATION_FAILED;
+    created->context = static_cast<PersistentContext*>(context);
+    created->width = width;
+    created->height = height;
+    created->input_channels = desc->input_channels;
+    try {
+        created->operators.assign(desc->operators, desc->operators + desc->operator_count);
+        created->node_channels = std::move(node_channels);
+        created->output_nodes.assign(desc->output_nodes, desc->output_nodes + desc->output_count);
+    } catch (const std::bad_alloc&) {
+        delete created;
+        return VF_CUDA_ALLOCATION_FAILED;
+    }
+    result = reserve_dag_plan_buffers(created->context, *created);
+    if (result != VF_CUDA_OK) {
+        delete created;
+        return result;
+    }
+    *plan = created;
+    return VF_CUDA_OK;
+}
+
+VF_CUDA_API int vf_dag_plan_execute(
+    void* plan,
+    const uint8_t* src,
+    int width,
+    int height,
+    int src_stride,
+    int src_channels,
+    const VfDagOutputV1* outputs,
+    int output_count) {
+    NativeDagPlan* compiled = static_cast<NativeDagPlan*>(plan);
+    if (compiled == nullptr || compiled->context == nullptr || width != compiled->width ||
+        height != compiled->height || src_channels != compiled->input_channels ||
+        output_count != static_cast<int>(compiled->output_nodes.size()) || outputs == nullptr ||
+        !visionflow_cuda::valid_image(src, width, height, src_stride, src_channels)) {
+        return VF_CUDA_INVALID_ARGUMENT;
+    }
+    for (int index = 0; index < output_count; ++index) {
+        int node = compiled->output_nodes[index];
+        if (outputs[index].struct_size != sizeof(VfDagOutputV1) || outputs[index].node != node ||
+            outputs[index].channels != compiled->node_channels[node] ||
+            !visionflow_cuda::valid_image(
+                outputs[index].data, width, height, outputs[index].stride, outputs[index].channels)) {
+            return VF_CUDA_INVALID_ARGUMENT;
+        }
+    }
+    PersistentContext* context = compiled->context;
+    const size_t source_row_bytes = static_cast<size_t>(width) * src_channels;
+    cudaError_t error = cudaMemcpy2DAsync(
+        context->u8[0], source_row_bytes, src, src_stride, source_row_bytes, height,
+        cudaMemcpyHostToDevice, context->stream);
+    if (error != cudaSuccess) return cuda_result(error);
+
+    const size_t pixels = static_cast<size_t>(width) * height;
+    std::vector<uint8_t*> values(compiled->operators.size(), nullptr);
+    for (size_t index = 0; index < compiled->operators.size(); ++index) {
+        const VfPlanOperatorV1& op = compiled->operators[index];
+        uint8_t* input = op.input_node == VF_PLAN_INPUT_NODE
+            ? context->u8[0] : values[op.input_node];
+        uint8_t* output = context->dag_u8[index];
+        int channels = op.input_node == VF_PLAN_INPUT_NODE
+            ? compiled->input_channels : compiled->node_channels[op.input_node];
+        switch (op.kind) {
+            case VF_PLAN_GRAY:
+                if (channels == 3) {
+                    bgr_gray_kernel<<<grid2d(width, height), dim3(BLOCK_X, BLOCK_Y), 0, context->stream>>>(
+                        input, output, width, height);
+                    values[index] = output;
+                } else {
+                    values[index] = input;
+                }
+                break;
+            case VF_PLAN_GAUSSIAN: {
+                int radius = 0;
+                int result = prepare_gaussian_weights(op.int_params[0], &radius);
+                if (result != VF_CUDA_OK) return result;
+                gaussian_horizontal_kernel<<<grid2d(width, height), dim3(BLOCK_X, BLOCK_Y), 0, context->stream>>>(
+                    input, context->float_buffer, width, height, channels, radius);
+                gaussian_vertical_kernel<<<grid2d(width, height), dim3(BLOCK_X, BLOCK_Y), 0, context->stream>>>(
+                    context->float_buffer, output, width, height, channels, radius);
+                values[index] = output;
+                break;
+            }
+            case VF_PLAN_THRESHOLD:
+                threshold_kernel<<<(static_cast<int>(pixels) + 255) / 256, 256, 0, context->stream>>>(
+                    input, output, static_cast<int>(pixels), op.int_params[0],
+                    op.int_params[1], op.int_params[2]);
+                values[index] = output;
+                break;
+            case VF_PLAN_ADAPTIVE_MEAN: {
+                int radius = 0, padded_width = 0, padded_height = 0;
+                size_t padded_count = 0;
+                int result = adaptive_layout(width, height, op.int_params[0], &radius, &padded_width,
+                                             &padded_height, &padded_count);
+                if (result != VF_CUDA_OK) return result;
+                replicate_border_kernel<<<grid2d(padded_width, padded_height), dim3(BLOCK_X, BLOCK_Y), 0, context->stream>>>(
+                    input, context->u8[3], width, height, padded_width, padded_height, radius);
+                row_prefix_u8_kernel<<<padded_height, SCAN_THREADS, 0, context->stream>>>(
+                    context->u8[3], context->u64[0], padded_width, padded_height);
+                dim3 transpose_block(TRANSPOSE_TILE, TRANSPOSE_ROWS);
+                dim3 transpose_grid(
+                    (padded_width + TRANSPOSE_TILE - 1) / TRANSPOSE_TILE,
+                    (padded_height + TRANSPOSE_TILE - 1) / TRANSPOSE_TILE);
+                transpose_u64_kernel<<<transpose_grid, transpose_block, 0, context->stream>>>(
+                    context->u64[0], context->u64[1], padded_width, padded_height);
+                row_prefix_u64_inplace_kernel<<<padded_width, SCAN_THREADS, 0, context->stream>>>(
+                    context->u64[1], padded_height, padded_width);
+                adaptive_integral_kernel<<<grid2d(width, height), dim3(BLOCK_X, BLOCK_Y), 0, context->stream>>>(
+                    input, context->u64[1], output, width, height, padded_height,
+                    op.int_params[0], op.float_params[0], op.int_params[1], op.int_params[2]);
+                values[index] = output;
+                break;
+            }
+            case VF_PLAN_MORPHOLOGY: {
+                const int operation = op.int_params[0];
+                const int iterations = op.int_params[2];
+                const int passes = (operation == VF_MORPH_OPEN || operation == VF_MORPH_CLOSE)
+                    ? iterations * 2 : iterations;
+                uint8_t* source_buffer = input;
+                uint8_t* destination = passes % 2 == 1 ? output : context->u8[4];
+                for (int pass = 0; pass < passes; ++pass) {
+                    int dilate = operation == VF_MORPH_DILATE;
+                    if (operation == VF_MORPH_OPEN) dilate = pass >= iterations;
+                    if (operation == VF_MORPH_CLOSE) dilate = pass < iterations;
+                    morph_kernel<<<grid2d(width, height), dim3(BLOCK_X, BLOCK_Y), 0, context->stream>>>(
+                        source_buffer, destination, width, height, channels,
+                        op.int_params[1] / 2, dilate);
+                    source_buffer = destination;
+                    destination = destination == output ? context->u8[4] : output;
+                }
+                values[index] = source_buffer;
+                break;
+            }
+            default:
+                return VF_CUDA_UNSUPPORTED;
+        }
+    }
+    int result = visionflow_cuda::kernel_launch_result();
+    if (result != VF_CUDA_OK) return result;
+    for (int index = 0; index < output_count; ++index) {
+        int node = compiled->output_nodes[index];
+        size_t row_bytes = static_cast<size_t>(width) * compiled->node_channels[node];
+        error = cudaMemcpy2DAsync(
+            outputs[index].data, outputs[index].stride, values[node], row_bytes,
+            row_bytes, height, cudaMemcpyDeviceToHost, context->stream);
+        if (error != cudaSuccess) return cuda_result(error);
+    }
+    return visionflow_cuda::stream_result(context->stream);
+}
+
+VF_CUDA_API int vf_dag_plan_destroy(void* plan) {
+    delete static_cast<NativeDagPlan*>(plan);
     return VF_CUDA_OK;
 }
 

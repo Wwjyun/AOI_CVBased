@@ -44,6 +44,10 @@ OPTIONAL_GENERIC_PLAN_EXPORTS = {
     "vf_plan_create",
     "vf_plan_execute",
     "vf_plan_destroy",
+    "vf_dag_plan_query",
+    "vf_dag_plan_create",
+    "vf_dag_plan_execute",
+    "vf_dag_plan_destroy",
 }
 CONTRACT_FILES = {
     "header": Path("gpu/include/visionflow_cuda.h"),

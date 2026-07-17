@@ -250,6 +250,37 @@ class PreprocessDagPlan:
     def node_plans(self) -> tuple[PreprocessPlan, ...]:
         return self._node_plans
 
+    def output_specs(self, image: np.ndarray) -> dict[str, PreprocessTensorSpec]:
+        if not isinstance(image, np.ndarray) or image.dtype != np.uint8 or image.ndim not in {2, 3}:
+            raise InvalidPreprocessPlan("DAG input must be a 2D gray or 3-channel BGR uint8 array")
+        if image.shape[0] <= 0 or image.shape[1] <= 0:
+            raise InvalidPreprocessPlan("DAG input height and width must be positive")
+        root_channels = 1 if image.ndim == 2 else int(image.shape[2])
+        if root_channels not in {1, 3} or (image.ndim == 3 and root_channels != 3):
+            raise InvalidPreprocessPlan("DAG input must be 2D gray or 3-channel BGR")
+        specs = {
+            "root": PreprocessTensorSpec(
+                shape=tuple(int(value) for value in image.shape),
+                dtype="uint8",
+                channels=root_channels,
+            )
+        }
+        for node in self.nodes:
+            source = specs[node.input_name]
+            height, width = source.shape[:2]
+            channels = source.channels
+            if isinstance(node.operator, Gray):
+                channels = 1
+            elif isinstance(node.operator, Resize):
+                height, width = node.operator.height, node.operator.width
+            elif isinstance(node.operator, (Threshold, AdaptiveMean)) and channels != 1:
+                raise InvalidPreprocessPlan(
+                    f"{type(node.operator).__name__} requires single-channel DAG input"
+                )
+            shape = (height, width) if channels == 1 else (height, width, channels)
+            specs[node.name] = PreprocessTensorSpec(shape=shape, dtype="uint8", channels=channels)
+        return {name: specs[name] for name in self.outputs}
+
 
 class PreprocessPlanCache:
     """Small per-detector LRU cache for immutable, shape-aware preprocessing plans."""
@@ -387,6 +418,48 @@ class CpuPreprocessDagExecutor:
             reason="CPU OpenCV DAG reference executor selected",
             plan_signature=plan.signature,
         )
+
+
+class CudaPreprocessDagExecutor:
+    """Detector-neutral native CUDA DAG executor with named multi-output results."""
+
+    def __init__(self, runtime) -> None:
+        self.runtime = runtime
+
+    def capability_report(self, plan: PreprocessDagPlan, image: np.ndarray) -> PreprocessCapabilityReport:
+        if not bool(getattr(self.runtime, "supports_native_dag_plan", False)):
+            reason = getattr(
+                self.runtime,
+                "native_dag_plan_unavailable_reason",
+                "CUDA DAG executor is not available",
+            )
+            return PreprocessCapabilityReport(
+                requested_backend="cuda", selected_backend="cpu", route="fallback",
+                reason=reason, plan_signature=plan.signature,
+                unsupported_operators=(reason,),
+            )
+        supported, reason = self.runtime.native_dag_plan_capability(plan, image)
+        return PreprocessCapabilityReport(
+            requested_backend="cuda",
+            selected_backend="cuda" if supported else "cpu",
+            route="native_dag_plan" if supported else "fallback",
+            reason=reason,
+            plan_signature=plan.signature,
+            unsupported_operators=() if supported else (reason,),
+        )
+
+    def execute(self, image: np.ndarray, plan: PreprocessDagPlan) -> dict[str, np.ndarray]:
+        supported, reason = self.runtime.native_dag_plan_capability(plan, image)
+        if not supported:
+            raise UnsupportedPreprocessPlan(reason)
+        outputs = self.runtime.execute_dag_plan(image, plan)
+        if tuple(outputs) != plan.outputs:
+            raise InvalidPreprocessPlan("CUDA DAG output names/order do not match the plan")
+        expected = plan.output_specs(image)
+        return {
+            name: PreprocessPlan.validate_output(outputs[name], expected[name])
+            for name in plan.outputs
+        }
 
 
 class CudaPreprocessExecutor:

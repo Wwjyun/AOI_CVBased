@@ -6,6 +6,7 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
+from core.preprocess_plan import CpuPreprocessDagExecutor
 from detectors.detector_401 import Detector401
 from detectors.detector_401_1 import Detector401_1
 from detectors.detector_401_2 import Detector401_2
@@ -55,6 +56,24 @@ class _AvailableRuntimeWithoutDag:
     available = True
     unavailable_reason = ""
     supports_fused_401_2 = False
+
+
+class _NativeDagRuntime:
+    available = True
+    unavailable_reason = ""
+    fallback_to_cpu = True
+    supports_native_dag_plan = True
+
+    def __init__(self):
+        self.calls = 0
+
+    @staticmethod
+    def native_dag_plan_capability(_plan, _image):
+        return True, "supported fake native DAG plan"
+
+    def execute_dag_plan(self, image, plan):
+        self.calls += 1
+        return CpuPreprocessDagExecutor().execute(image, plan)
 
 
 class Detector4011PlanMigrationTests(unittest.TestCase):
@@ -374,6 +393,22 @@ class Detector900DagMigrationTests(unittest.TestCase):
         self.assertEqual(execution["backend"], "cpu")
         self.assertEqual(execution["preprocess_capability"]["route"], "fallback")
         self.assertIn("CUDA DAG executor is not available", execution["fallback_reason"])
+
+    def test_native_cuda_dag_routes_900_once_and_preserves_results(self):
+        image = np.random.default_rng(902).integers(0, 256, size=(72, 84, 3), dtype=np.uint8)
+        params = self._params()
+        cpu_result = Detector900(params=params).run(image)
+        runtime = _NativeDagRuntime()
+
+        gpu_result = Detector900(params=params, use_gpu=True, gpu_runtime=runtime).run(image)
+
+        self.assertEqual(runtime.calls, 1)
+        self.assertEqual(gpu_result["defects"], cpu_result["defects"])
+        self.assertEqual(gpu_result["pass"], cpu_result["pass"])
+        self.assertEqual(
+            gpu_result["execution"]["preprocess_capability"]["route"],
+            "native_dag_plan",
+        )
 
 
 if __name__ == "__main__":

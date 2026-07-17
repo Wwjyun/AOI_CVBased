@@ -54,6 +54,20 @@ class CudaSourceContractTests(unittest.TestCase):
         self.assertIn("persistent->stream", fused)
         self.assertEqual(fused.count("cudaMemcpy2DAsync("), 2)
 
+    def test_native_dag_uploads_root_once_and_downloads_requested_outputs(self):
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "gpu" / "visionflow_cuda.cu").read_text(encoding="utf-8")
+        execute = source.split("VF_CUDA_API int vf_dag_plan_execute(", 1)[1].split(
+            "VF_CUDA_API int vf_dag_plan_destroy(", 1
+        )[0]
+
+        self.assertEqual(execute.count("cudaMemcpyHostToDevice"), 1)
+        self.assertEqual(execute.count("cudaMemcpyDeviceToHost"), 1)
+        self.assertIn("for (int index = 0; index < output_count; ++index)", execute)
+        self.assertEqual(execute.count("stream_result"), 1)
+        self.assertNotIn("cudaMalloc", execute)
+        self.assertIn("values[op.input_node]", execute)
+
 
 if __name__ == "__main__":
     unittest.main()

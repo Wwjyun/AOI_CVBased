@@ -6,6 +6,8 @@ Detectors must describe preprocessing with the backend-neutral operators in `cor
 
 The optional versioned `VfPlanDescV1` ABI supports detector-neutral linear Gray, Gaussian, Threshold, AdaptiveMean and Morphology graphs. `vf_plan_query/create/execute/destroy` validate and compile a complete graph before execution. A supported plan uses a context-owned non-blocking CUDA stream, persistent scratch and morphology ping-pong buffers, one asynchronous host-to-device upload, continuous kernels, and one necessary asynchronous device-to-host download followed by a single stream synchronization. An unsupported operator rejects the whole plan before any CUDA primitive executes.
 
+The additive `VfDagPlanDescV1` ABI uses the same detector-neutral operators with topological input-node references and an explicit output-node list. `vf_dag_plan_query/create/execute/destroy` upload the root once, keep branch intermediates in context-owned grow-only device buffers, copy only requested outputs, and synchronize once. Detector 900 uses this route to share device grayscale across its outer and inner masks.
+
 `vf_preprocess_401_2_u8` remains an additive ABI v1 compatibility adapter. It is not the template for future detector APIs.
 
 `visionflow_cuda.dll` 是 AOI 的可選 CUDA backend。Recipe 未勾選 GPU 時不載入它；勾選但 DLL/裝置不可用時，依 `fallback_to_cpu` 決定回退 CPU 或明確失敗。

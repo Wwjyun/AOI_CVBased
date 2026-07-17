@@ -72,6 +72,24 @@ typedef struct VfPlanDescV1 {
     int32_t output_node;
 } VfPlanDescV1;
 
+typedef struct VfDagPlanDescV1 {
+    uint32_t struct_size;
+    uint32_t version;
+    int32_t input_channels;
+    int32_t operator_count;
+    const VfPlanOperatorV1* operators;
+    int32_t output_count;
+    const int32_t* output_nodes;
+} VfDagPlanDescV1;
+
+typedef struct VfDagOutputV1 {
+    uint32_t struct_size;
+    int32_t node;
+    uint8_t* data;
+    int32_t stride;
+    int32_t channels;
+} VfDagOutputV1;
+
 VF_CUDA_API int vf_gpu_abi_version(void);
 VF_CUDA_API int vf_gpu_device_count(void);
 VF_CUDA_API int vf_gpu_compute_capability(void);
@@ -99,6 +117,23 @@ VF_CUDA_API int vf_plan_execute(
     const uint8_t* src, int width, int height, int src_stride, int src_channels,
     uint8_t* dst, int dst_stride, int dst_channels);
 VF_CUDA_API int vf_plan_destroy(void* plan);
+
+/*
+ * Optional detector-neutral DAG extension. Nodes are topologically ordered,
+ * may reference the root or an earlier node, and may expose multiple named-by-
+ * index outputs. Execution uploads the root once and synchronizes after all
+ * requested host outputs have been copied.
+ */
+VF_CUDA_API int vf_dag_plan_query(
+    const VfDagPlanDescV1* desc, int width, int height,
+    char* reason, int reason_capacity);
+VF_CUDA_API int vf_dag_plan_create(
+    void* context, const VfDagPlanDescV1* desc, int width, int height, void** plan);
+VF_CUDA_API int vf_dag_plan_execute(
+    void* plan,
+    const uint8_t* src, int width, int height, int src_stride, int src_channels,
+    const VfDagOutputV1* outputs, int output_count);
+VF_CUDA_API int vf_dag_plan_destroy(void* plan);
 
 VF_CUDA_API int vf_bgr_to_gray_u8(
     const uint8_t* src, int width, int height, int src_stride, int src_channels,

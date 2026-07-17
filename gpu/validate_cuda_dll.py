@@ -21,10 +21,13 @@ from core.pipeline import AOIPipeline  # noqa: E402
 from core.preprocess_plan import (  # noqa: E402
     AdaptiveMean,
     CpuPreprocessExecutor,
+    CpuPreprocessDagExecutor,
     Gaussian,
     Gray,
     Morphology,
     PreprocessPlan,
+    PreprocessDagNode,
+    PreprocessDagPlan,
     Threshold,
 )
 from core.recipe_manager import RecipeManager  # noqa: E402
@@ -254,6 +257,35 @@ def validate_primitives(runtime: GpuRuntime) -> list[dict]:
             print(f"PASS {plan.name} native plan reuse: {second_context_stats}")
     else:
         print(f"SKIP generic native plan: {runtime.native_plan_unavailable_reason}")
+    if runtime.supports_native_dag_plan:
+        dag_plan = PreprocessDagPlan(
+            name="native_900_shared_gray",
+            nodes=(
+                PreprocessDagNode("gray", "root", Gray()),
+                PreprocessDagNode("outer_mask", "gray", Threshold(128, 255, True)),
+                PreprocessDagNode("inner_mask", "gray", AdaptiveMean(11, -2.0, 255, False)),
+            ),
+            outputs=("outer_mask", "inner_mask"),
+        )
+        expected_outputs = CpuPreprocessDagExecutor().execute(bgr, dag_plan)
+        before_calls = runtime.performance_stats()["call_count"]
+        actual_outputs = runtime.execute_dag_plan(bgr, dag_plan)
+        after_first = runtime.performance_stats()
+        for name in dag_plan.outputs:
+            metrics.append(compare(f"{dag_plan.name}_{name}", actual_outputs[name], expected_outputs[name]))
+        if after_first["call_count"] != before_calls + 1:
+            raise AssertionError("native 900 DAG did not execute as one CUDA call")
+        first_context_stats = after_first["persistent_context"]
+        runtime.execute_dag_plan(bgr, dag_plan)
+        second_context_stats = runtime.performance_stats()["persistent_context"]
+        if first_context_stats.get("allocation_count") != second_context_stats.get("allocation_count"):
+            raise AssertionError(
+                "native 900 DAG allocated again for an unchanged shape: "
+                f"first={first_context_stats}, second={second_context_stats}"
+            )
+        print(f"PASS native 900 DAG reuse: {second_context_stats}")
+    else:
+        print(f"SKIP generic native DAG plan: {runtime.native_dag_plan_unavailable_reason}")
     return metrics
 
 

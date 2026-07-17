@@ -111,6 +111,40 @@ class _NativePlanDll(_FusedDll):
         return super()._destroy(context)
 
 
+class _NativeDagPlanDll(_NativePlanDll):
+    def __init__(self):
+        super().__init__()
+        self.dag_create_calls = 0
+        self.dag_execute_calls = 0
+        self.vf_dag_plan_query = _Function(self._dag_query)
+        self.vf_dag_plan_create = _Function(self._dag_create)
+        self.vf_dag_plan_execute = _Function(self._dag_execute)
+        self.vf_dag_plan_destroy = _Function(self._dag_destroy)
+
+    @staticmethod
+    def _dag_query(_descriptor, _width, _height, reason, _capacity):
+        reason.value = b"supported fake native DAG plan"
+        return 0
+
+    def _dag_create(self, _context, _descriptor, _width, _height, output):
+        self.dag_create_calls += 1
+        output._obj.value = 6789
+        return 0
+
+    def _dag_execute(
+        self, _plan, _src, _width, height, _src_stride, _src_channels,
+        outputs, output_count,
+    ):
+        self.dag_execute_calls += 1
+        for index in range(int(output_count)):
+            ctypes.memset(outputs[index].data, index, int(height) * int(outputs[index].stride))
+        return 0
+
+    def _dag_destroy(self, plan):
+        self.events.append(("dag_plan", plan.value if hasattr(plan, "value") else int(plan)))
+        return 0
+
+
 class _FusedRuntimeStub:
     available = True
     supports_fused_401_2 = True
@@ -289,6 +323,52 @@ class GpuRuntimeMetricsTests(unittest.TestCase):
         self.assertEqual(list(operators[1].int_params)[:3], [1, 7, 2])
         self.assertEqual(list(operators[3].int_params)[:3], [11, 255, 1])
         self.assertAlmostEqual(operators[3].float_params[0], -2.5)
+
+    def test_generic_native_dag_is_cached_multi_output_and_destroyed_first(self):
+        runtime = GpuRuntime(enabled=False)
+        dll = _NativeDagPlanDll()
+        runtime._dll = dll
+        runtime.device_count = 1
+        runtime._load_optional_context()
+        plan = PreprocessDagPlan(
+            nodes=(
+                PreprocessDagNode("gray", "root", Gray()),
+                PreprocessDagNode("dark", "gray", Threshold(127, invert=True)),
+                PreprocessDagNode("light", "gray", Threshold(127, invert=False)),
+            ),
+            outputs=("dark", "light"),
+        )
+        image = np.zeros((4, 5, 3), dtype=np.uint8)
+
+        first = runtime.execute_dag_plan(image, plan)
+        second = runtime.execute_dag_plan(image.copy(), plan)
+
+        self.assertTrue(runtime.supports_native_dag_plan)
+        self.assertEqual(tuple(first), ("dark", "light"))
+        np.testing.assert_array_equal(first["dark"], np.zeros((4, 5), dtype=np.uint8))
+        np.testing.assert_array_equal(first["light"], np.ones((4, 5), dtype=np.uint8))
+        self.assertEqual(dll.dag_create_calls, 1)
+        self.assertEqual(dll.dag_execute_calls, 2)
+        np.testing.assert_array_equal(first["light"], second["light"])
+        runtime.close()
+        self.assertEqual(dll.events, [("dag_plan", 6789), ("context", 1234)])
+
+    def test_native_dag_descriptor_preserves_branch_inputs_and_outputs(self):
+        image = np.zeros((8, 9, 3), dtype=np.uint8)
+        plan = PreprocessDagPlan(
+            nodes=(
+                PreprocessDagNode("gray", "root", Gray()),
+                PreprocessDagNode("outer", "gray", Threshold(100, invert=True)),
+                PreprocessDagNode("inner", "gray", AdaptiveMean(7, -1.5)),
+            ),
+            outputs=("outer", "inner"),
+        )
+
+        descriptor, operators, output_nodes = GpuRuntime._native_dag_plan_descriptor(plan, image)
+
+        self.assertEqual(descriptor.operator_count, 3)
+        self.assertEqual([operators[index].input_node for index in range(3)], [-1, 0, 0])
+        self.assertEqual(list(output_nodes), [1, 2])
 
     def test_native_compiled_plan_cache_is_bounded(self):
         runtime = GpuRuntime(enabled=False)

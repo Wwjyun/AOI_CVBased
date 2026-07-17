@@ -6,6 +6,7 @@ from core.preprocess_plan import (
     CpuPreprocessExecutor,
     CpuPreprocessDagExecutor,
     CudaPreprocessExecutor,
+    CudaPreprocessDagExecutor,
     PreprocessPlan,
     PreprocessDagPlan,
     PreprocessPlanCache,
@@ -31,6 +32,7 @@ class BaseDetector:
         self._cpu_preprocess_executor = CpuPreprocessExecutor()
         self._cpu_preprocess_dag_executor = CpuPreprocessDagExecutor()
         self._cuda_preprocess_executor = CudaPreprocessExecutor(gpu_runtime) if gpu_runtime is not None else None
+        self._cuda_preprocess_dag_executor = CudaPreprocessDagExecutor(gpu_runtime) if gpu_runtime is not None else None
         self._preprocess_plan_cache = PreprocessPlanCache()
         self.last_preprocess_capability: dict = {}
 
@@ -71,21 +73,14 @@ class BaseDetector:
         return self._preprocess_plan_cache.get_or_create(image, signature, factory)
 
     def execute_preprocess_dag(self, image, plan: PreprocessDagPlan) -> dict:
-        if self.gpu_active:
-            reason = "CUDA DAG executor is not available; full detector CPU fallback required"
-            self.last_preprocess_capability = {
-                **self._cpu_preprocess_dag_executor.capability_report(plan).to_dict(),
-                "requested_backend": "cuda",
-                "selected_backend": "cpu",
-                "route": "fallback",
-                "reason": reason,
-            }
-            return self._execute_cpu_fallback(
-                image,
-                plan,
-                reason,
-                self._cpu_preprocess_dag_executor,
-            )
+        if self.gpu_active and self._cuda_preprocess_dag_executor is not None:
+            report = self._cuda_preprocess_dag_executor.capability_report(plan, image).to_dict()
+            self.last_preprocess_capability = report
+            if report["selected_backend"] != "cuda":
+                return self._execute_cpu_fallback(
+                    image, plan, report["reason"], self._cpu_preprocess_dag_executor
+                )
+            return self._cuda_preprocess_dag_executor.execute(image, plan)
         report = self._cpu_preprocess_dag_executor.capability_report(plan).to_dict()
         if self.use_gpu and self.gpu_fallback_reason:
             report.update(
