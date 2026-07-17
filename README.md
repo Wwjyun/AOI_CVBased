@@ -550,6 +550,14 @@ dist\VisionFlow AOI\VisionFlow AOI.exe
 
 發佈時必須複製或壓縮整個 `dist\VisionFlow AOI` 資料夾，不能只取出 `.exe`，因為執行檔需要相鄰的 `_internal` runtime 目錄。
 
+打包後可用非互動 smoke 模式驗證 bundled recipes 與 MainWindow 啟動；成功時 exit code 為 `0`：
+
+```powershell
+Start-Process -FilePath '.\dist\VisionFlow AOI\VisionFlow AOI.exe' -ArgumentList '--smoke-test' -WindowStyle Hidden -Wait -PassThru
+```
+
+`build_exe.ps1` 使用受版控的 `VisionFlow AOI.spec`，不會在每次建置時覆寫 CUDA DLL 的條件式收錄規則。
+
 發行檔命名格式：
 
 ```text

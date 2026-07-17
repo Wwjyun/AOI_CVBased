@@ -154,7 +154,7 @@
 - [x] GUI worker 不在 UI thread 等待 CUDA；monitor 取消、錯誤與進度以 stop callback／Qt signals 保持可回應。
 - [x] GUI 顯示實際 backend，不得因 recipe 勾選 GPU 就顯示 CUDA active。
 - [x] PyInstaller 有 DLL 時條件式包含 `gpu/visionflow_cuda.dll`，無 DLL 時建立 CPU-compatible package 且 runtime 可 fallback。
-- [ ] 有 GPU、無 GPU、DLL 缺少、DLL 版本不符、fallback 開/關各完成一次打包實機測試。（runtime tests 已覆蓋 missing/ABI mismatch/no-device/context-failure 與 fallback policy；打包實機仍待兩類機器）
+- [ ] 有 GPU、無 GPU、DLL 缺少、DLL 版本不符、fallback 開/關各完成一次打包實機測試。（runtime tests 已覆蓋 missing/ABI mismatch/no-device/context-failure 與 fallback policy；目前 working tree 已在無 NVIDIA/CUDA DLL 電腦完成 CPU-compatible package build、5 recipes bundle 與 packaged MainWindow smoke exit 0；有 GPU 與其餘 packaged fault matrix 待實機）
 
 ## P7：CI、GitHub Actions 與發布
 
@@ -198,7 +198,7 @@
 - [ ] `PRODUCT_A_FRAME_900_AOI_01.yaml` PASS/NG 樣本一致。
 - [ ] 比較 tiles、PASS/NG、defect count、bbox、area、confidence、metadata 與 fallback log。
 - [ ] GUI 的 recipe 儲存/載入、viewer backend、status、overlay、輸出與 fallback 正確。
-- [ ] 打包版在有 NVIDIA GPU 與無 NVIDIA GPU 電腦均完成驗證。
+- [ ] 打包版在有 NVIDIA GPU 與無 NVIDIA GPU 電腦均完成驗證。（目前無 GPU 電腦已完成 CPU-compatible package build 與 bundled recipe/MainWindow smoke；有 GPU 電腦待驗收）
 - [ ] warm-up 5 張後測 10、100、1000 張；VRAM 穩定、GUI 可回應、無 crash/error。（validator/workflow 已加入 checkpoints、allocation/VRAM/median/P95；待 RTX 執行）
 
 ## 未來 AI Detector
@@ -270,3 +270,4 @@
 - [x] 2026-07-17：RTX workflow 新增可選 `production_manifest` dispatch input，可直接執行五 recipes PASS/NG acceptance；新增 Nsight Systems smoke capture，runner 有 `nsys` 時產生 `.nsys-rep`，否則保存明確 skip status，兩者均納入 artifacts。
 - [x] 2026-07-17：401-2 profiler 將 contour white-pixel mask/count 從 geometry 拆成 `white_ratio_analysis`；bbox-local 統計由 NumPy boolean temporaries 改成 OpenCV `bitwise_and`/`countNonZero`，保持 count/ratio/order/metadata 等價，512² synthetic microbenchmark median 由 0.0343 ms 降至 0.0151 ms；是否移至 GPU 留待 RTX production 占比。
 - [x] 2026-07-17：完成 native linear `VF_PLAN_RESIZE_AREA` source routing：descriptor 固定 area target、query 拒絕放大/混合軸語意、compiled plan 追蹤 output shape，401-1 下採樣維持單次 H2D/D2H；同步 Python encoding、C++ smoke、RTX validator、舊 DLL fallback 與 fake handle/OOP lifecycle tests，真實 CUDA 等價待 RTX runner。
+- [x] 2026-07-17：修正 `build_exe.ps1` 每次覆寫受版控 spec、導致 CUDA 條件式收錄規則遺失的缺陷；改由固定 `VisionFlow AOI.spec` 建置，新增 packaged `--smoke-test` 從 PyInstaller bundle 載入 recipe 並建立 MainWindow。CPU-compatible package 在目前無 GPU 電腦實跑 exit 0、5 recipes、無 CUDA DLL，validation ZIP 103,993,603 bytes、SHA-256 `5E4E833AEA184A7889F2911B56AB22DCFAD3F2E1A6E82D46D60C5C431A4C134F`。
