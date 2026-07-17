@@ -22,6 +22,7 @@ gpu/
 │   └── visionflow_cuda_internal.cuh # .cu 內部 CUDA helper
 ├── visionflow_cuda.cu               # 正式 DLL kernels 與 exports
 ├── test_cuda_api.cu                 # C++ ABI/device smoke
+├── preflight_cuda_build.py          # ABI/source/runtime/build 靜態契約與 hash manifest
 ├── validate_cuda_dll.py             # OpenCV 與 AOI CPU/GPU 比對
 └── build_cuda_dll.ps1               # Windows 編譯與測試入口
 ```
@@ -41,6 +42,8 @@ gpu/
 - `gpu/test_cuda_api.exe`
 
 build script 明確使用 static CUDA runtime；`nvcuda.dll` 仍由 NVIDIA Driver 提供。
+
+編譯前會先執行 `preflight_cuda_build.py`，核對 public header、`.cu` definitions、Python bridge、native smoke 與明確 source manifest，並將 SHA-256 manifest 寫到 `outputs_validation/cuda_build_preflight.json`。DLL、LIB 與 smoke EXE 會先在 ignored staging 目錄完成，通過 `dumpbin /exports` 與 `/dependents` 後才取代正式 artifacts，避免失敗時誤用半成品或 stale DLL。
 
 ## 編譯並測試
 
