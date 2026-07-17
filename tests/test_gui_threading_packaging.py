@@ -42,6 +42,17 @@ class GuiThreadingPackagingContractTests(unittest.TestCase):
         self.assertIn('"--add-binary", "$cudaDll;gpu"', build)
         self.assertIn("CPU-compatible package", build)
 
+    def test_rtx_workflow_can_accept_production_samples_and_capture_nsight(self):
+        workflow = (ROOT / ".github" / "workflows" / "rtx3090-validation.yml").read_text(
+            encoding="utf-8"
+        )
+
+        self.assertIn("production_manifest:", workflow)
+        self.assertIn('"--production-manifest"', workflow)
+        self.assertIn("Get-Command nsys", workflow)
+        self.assertIn("nsys.Source profile", workflow)
+        self.assertIn("outputs_validation/**/*.nsys-rep", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()

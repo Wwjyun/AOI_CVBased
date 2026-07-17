@@ -33,7 +33,7 @@
 - [x] 加入 GUI 顯示、QImage/QPixmap 轉換與使用者實際等待時間計時。
 - [x] DLL 加入 CUDA event，拆分 context、allocation、H2D、device copy、kernel、synchronize、D2H 與 free；RTX 數值驗證仍列在實機驗收清單。
 - [x] benchmark JSON 保存 CPU、GPU、RAM、Driver、recipe、影像資訊與 commit hash；Toolkit 另由 runner environment artifact 保存。
-- [ ] 在 RTX 3090 固定 production 測試集執行並建立可重現 baseline。
+- [ ] 在 RTX 3090 固定 production 測試集執行並建立可重現 baseline。（workflow_dispatch 已支援可選 production manifest；待真實樣本與 runner）
 - [x] benchmark 分開記錄 cold、warm-up 次數、純檢測與既有 pipeline/report 端到端數據。
 - [x] benchmark 記錄平均、median、P95、process CPU%、GPU utilization、VRAM、溫度與功耗快照。
 
@@ -165,7 +165,7 @@
 - [x] self-hosted runner 使用 `self-hosted`、`Windows`、`X64`、`gpu`、`rtx3090` labels。
 - [x] 不允許不受信任的 fork PR 直接在可接觸本機資料的 self-hosted runner 執行。
 - [x] GPU job 支援手動與 nightly；PR 至少完成 compile/static checks。
-- [ ] 保存 benchmark JSON、Nsight report、Driver/Toolkit/GPU 與 commit hash，支援 commit 間比較。（JSON、環境與 commit 已完成；Nsight capture 待 RTX runner）
+- [ ] 保存 benchmark JSON、Nsight report、Driver/Toolkit/GPU 與 commit hash，支援 commit 間比較。（JSON、環境與 commit 已完成；workflow 已加入可用時執行 nsys smoke capture 並記錄 skip/status，report 待 RTX runner）
 
 ## RTX 3090 編譯與實機驗收
 
@@ -267,3 +267,4 @@
 - [x] 2026-07-17：`VfCudaTimingsV1` 新增 morphology CUDA event 分項，linear/DAG native plan 均量測完整 morphology passes；RTX validator 加入 detector-401-style close iterations 1/2/4/8 的 CPU/GPU cold/warm/median/P95、含傳輸 speedup 與 morphology/kernel 占比，separable kernel 與 routing threshold 仍待實機數據決策。
 - [x] 2026-07-17：新增 persistent context reuse matrix，依序覆蓋 BGR shape grow、gray channel 切換、BGR shrink 與 plan parameter 改變，第二輪要求 allocation count 不再增加；source contract 證明 grow-only reserve 先成功配置 replacement 才釋放舊 pointer，因此單次 OOM 不會破壞既有 buffer，真實 CUDA error/OOM 注入仍待 RTX。
 - [x] 2026-07-17：補齊 CUDA loader failure matrix，實跑 ABI mismatch、零 CUDA device 與 persistent context create failure；context failure 現在一致傳遞到 fused、native linear、native DAG capability reason，避免 fallback metadata 誤報成缺少 generic ABI。
+- [x] 2026-07-17：RTX workflow 新增可選 `production_manifest` dispatch input，可直接執行五 recipes PASS/NG acceptance；新增 Nsight Systems smoke capture，runner 有 `nsys` 時產生 `.nsys-rep`，否則保存明確 skip status，兩者均納入 artifacts。

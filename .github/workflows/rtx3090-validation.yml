@@ -2,6 +2,11 @@ name: RTX 3090 validation
 
 on:
   workflow_dispatch:
+    inputs:
+      production_manifest:
+        description: Optional PASS/NG production manifest path available on the runner
+        required: false
+        type: string
   schedule:
     - cron: "0 18 * * *"
 
@@ -39,7 +44,34 @@ jobs:
         run: .\gpu\test_cuda_api.exe
       - name: Equivalence and benchmark
         shell: pwsh
-        run: .\env\Scripts\python.exe gpu\validate_cuda_dll.py --warmup 5 --benchmark 20 --crossover --morphology-profile --stress 10 100 1000 --json-output outputs_validation/rtx3090_benchmark.json
+        run: |
+          $arguments = @(
+            "gpu\validate_cuda_dll.py",
+            "--warmup", "5",
+            "--benchmark", "20",
+            "--crossover",
+            "--morphology-profile",
+            "--stress", "10", "100", "1000",
+            "--json-output", "outputs_validation\rtx3090_benchmark.json"
+          )
+          $productionManifest = "${{ inputs.production_manifest }}"
+          if ($productionManifest) {
+            $arguments += @("--production-manifest", $productionManifest)
+          }
+          & .\env\Scripts\python.exe @arguments
+          if ($LASTEXITCODE -ne 0) { throw "CUDA validator failed with exit code $LASTEXITCODE" }
+      - name: Capture Nsight Systems smoke profile
+        shell: pwsh
+        run: |
+          $nsys = Get-Command nsys -ErrorAction SilentlyContinue
+          if (-not $nsys) {
+            "nsys unavailable; Nsight capture skipped" | Tee-Object -FilePath outputs_validation/nsight_status.txt
+            exit 0
+          }
+          & $nsys.Source profile --force-overwrite true --sample none --trace cuda,nvtx,osrt `
+            --output outputs_validation/visionflow_cuda_smoke .\gpu\test_cuda_api.exe
+          if ($LASTEXITCODE -ne 0) { throw "nsys profile failed with exit code $LASTEXITCODE" }
+          "nsys capture completed" | Tee-Object -FilePath outputs_validation/nsight_status.txt
       - name: Upload CUDA build and benchmark artifacts
         if: always()
         uses: actions/upload-artifact@v4
@@ -54,5 +86,6 @@ jobs:
             outputs_validation/cuda_build.log
             outputs_validation/gpu_environment.txt
             outputs_validation/rtx3090_benchmark.json
+            outputs_validation/nsight_status.txt
             outputs_validation/**/*.nsys-rep
           if-no-files-found: warn
