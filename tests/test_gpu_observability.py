@@ -32,7 +32,13 @@ from core.preprocess_plan import (
 )
 from detectors.detector_401_2 import Detector401_2
 from detectors.detector_401 import Detector401
-from gpu.validate_cuda_dll import compare, environment_snapshot, _timing_summary
+from gpu.validate_cuda_dll import (
+    benchmark_crossover,
+    compare,
+    environment_snapshot,
+    stress_persistent_plan,
+    _timing_summary,
+)
 
 
 class _SuccessfulDll:
@@ -94,6 +100,7 @@ class _NativePlanDll(_FusedDll):
         self.events = []
         self.plan_create_calls = 0
         self.plan_execute_calls = 0
+        self.fail_next_plan_execute = False
         self.vf_plan_query = _Function(self._query)
         self.vf_plan_create = _Function(self._plan_create)
         self.vf_plan_execute = _Function(self._plan_execute)
@@ -114,6 +121,9 @@ class _NativePlanDll(_FusedDll):
         dst, dst_stride, _dst_channels,
     ):
         self.plan_execute_calls += 1
+        if self.fail_next_plan_execute:
+            self.fail_next_plan_execute = False
+            return 2
         ctypes.memset(dst, 0, int(height) * int(dst_stride))
         return 0
 
@@ -446,6 +456,25 @@ class GpuRuntimeMetricsTests(unittest.TestCase):
 
         runtime.close()
         self.assertEqual(dll.events, [("plan", 5678), ("context", 1234)])
+
+    def test_native_plan_can_be_reused_after_an_execution_error(self):
+        runtime = GpuRuntime(enabled=False)
+        dll = _NativePlanDll()
+        runtime._dll = dll
+        runtime.device_count = 1
+        runtime._load_optional_context()
+        plan = PreprocessPlan((Gray(),), name="recover_after_error")
+        image = np.zeros((4, 5, 3), dtype=np.uint8)
+        dll.fail_next_plan_execute = True
+
+        with self.assertRaisesRegex(GpuRuntimeError, "vf_plan_execute failed"):
+            runtime.execute_plan(image, plan)
+        recovered = runtime.execute_plan(image, plan)
+
+        self.assertEqual(recovered.shape, (4, 5))
+        self.assertEqual(dll.plan_create_calls, 1)
+        self.assertEqual(dll.plan_execute_calls, 2)
+        self.assertEqual(len(runtime._native_plans), 1)
 
     def test_native_descriptor_encodes_detector_neutral_nodes_and_parameters(self):
         image = np.zeros((12, 16, 3), dtype=np.uint8)
@@ -979,6 +1008,31 @@ class BenchmarkMetadataTests(unittest.TestCase):
         snapshot = environment_snapshot("image.png", "recipe.yaml")
 
         self.assertTrue({"platform", "cpu", "logical_cpu_count", "python", "ram_total_bytes", "gpu", "image", "recipe"}.issubset(snapshot))
+
+    def test_stress_checkpoints_reuse_warmed_persistent_buffers(self):
+        runtime = GpuRuntime(enabled=False)
+        runtime._dll = _NativeDagPlanDll()
+        runtime.device_count = 1
+        runtime._load_optional_context()
+
+        result = stress_persistent_plan(runtime, [5, 3, 5], warmup=2)
+
+        self.assertEqual(result["checkpoints"], [3, 5])
+        self.assertEqual([item["completed"] for item in result["snapshots"]], [3, 5])
+        self.assertEqual(runtime._dll.plan_create_calls, 1)
+        self.assertEqual(runtime._dll.plan_execute_calls, 7)
+
+    def test_crossover_benchmark_reports_evidence_without_changing_policy(self):
+        runtime = GpuRuntime(enabled=False)
+        runtime._dll = _NativeDagPlanDll()
+        runtime.device_count = 1
+        runtime._load_optional_context()
+
+        result = benchmark_crossover(runtime, repetitions=1, warmup=0, sizes=(16, 8))
+
+        self.assertEqual([item["pixels"] for item in result["measurements"]], [64, 256])
+        self.assertFalse(result["policy_changed"])
+        self.assertIn("observed_stable_crossover_pixels", result)
 
 
 class CpuFallbackRegressionTests(unittest.TestCase):

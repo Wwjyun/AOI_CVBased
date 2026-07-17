@@ -97,7 +97,7 @@
 - [x] `GpuRuntime` 提供 `close()`、context manager、destructor 與 `RLock` 序列化。
 - [x] 將 CUDA stream、morphology ping-pong 與所有 plan scratch 納入同一 context。
 - [x] monitor/batch 跨多張影像重用同一個長生命週期 `GpuRuntime`/context。
-- [ ] 測試尺寸增減、channel 切換、參數改變、CUDA error/OOM 後的重用與釋放。
+- [ ] 測試尺寸增減、channel 切換、參數改變、CUDA error/OOM 後的重用與釋放。（fake DLL 已覆蓋 execution error recovery 與 ROI batch OOM 降批；真實 CUDA error/OOM 仍待 RTX）
 - [ ] 評估 `cudaMallocAsync`/memory pool；只有相容且實測有收益時採用。
 
 ### Morphology
@@ -141,7 +141,7 @@
 - [x] 移除不必要的 detector `image.copy()` 與完整尺寸 temporary masks；必要的 non-contiguous CUDA/QImage 邊界 copy 保留。
 - [x] 相同 tile 的 CPU detectors 共用一次 gray；GPU detectors 共用 resident source，避免各自重傳原圖。
 - [ ] RTX profiler 證明有收益後，再加入跨 detector 的 device-gray／完整 preprocessing result cache。
-- [ ] 對小圖、小 ROI、少 tiles 建立 CPU/GPU crossover benchmark；低於門檻自動選 CPU。
+- [ ] 對小圖、小 ROI、少 tiles 建立 CPU/GPU crossover benchmark；低於門檻自動選 CPU。（64²～1024² native 401-style matrix 與穩定 1.0x/1.5x threshold 報告已完成；production policy 待 RTX 數據）
 - [x] Overlay、NG tiles、CSV/JSON 與純檢測計時分離；目前各 reporter 與 `detectors_total` 已獨立計時，是否背景化由實測決定。
 - [x] Pattern matching 目前維持 CPU；只有 RTX profiler 證明為主要熱點後才另案 GPU 化，並要求模板常駐與 CPU 等價路徑。
 - [x] PNG 編碼、YAML、彙總、logging 與 GUI 控制邏輯維持 CPU，除非量測證明需要改變。
@@ -199,7 +199,7 @@
 - [ ] 比較 tiles、PASS/NG、defect count、bbox、area、confidence、metadata 與 fallback log。
 - [ ] GUI 的 recipe 儲存/載入、viewer backend、status、overlay、輸出與 fallback 正確。
 - [ ] 打包版在有 NVIDIA GPU 與無 NVIDIA GPU 電腦均完成驗證。
-- [ ] warm-up 5 張後測 10、100、1000 張；VRAM 穩定、GUI 可回應、無 crash/error。
+- [ ] warm-up 5 張後測 10、100、1000 張；VRAM 穩定、GUI 可回應、無 crash/error。（validator/workflow 已加入 checkpoints、allocation/VRAM/median/P95；待 RTX 執行）
 
 ## 未來 AI Detector
 
@@ -261,3 +261,5 @@
 - [x] 2026-07-17：首次手動 dispatch RTX 3090 workflow run `29574501971`；workflow active 且 request 成功，但持續 queued、updated_at 未變，確認目前 self-hosted RTX runner 尚未上線接單。
 - [x] 2026-07-17：統一 GPU `auto/cpu/cuda` policy：auto 可安全 fallback、cpu 完全不要求/載入 CUDA、cuda 強制成功且禁止 fallback；recipe 驗證、pipeline、長生命週期 session、GUI preview/tiling worker 與設計器均共用同一語意，GUI/history 顯示實際 backend。
 - [x] 2026-07-17：新增 `VfCudaTimingsV1` 與 `vf_context_last_timings`，persistent plan 以 CUDA events 拆分 H2D/D2D、kernel、D2H、Gaussian、Adaptive Mean、threshold 與 device total，host clock 補 context/allocation/synchronize/free；Python metrics、C++ smoke、preflight 與 source/runtime tests 已同步，數值正確性待 RTX runner 驗證。
+- [x] 2026-07-17：RTX validator 新增 persistent native plan 累積壓測 checkpoints，workflow 固定 warm-up 5 後跑 10/100/1000 次並保存 allocation count、VRAM、telemetry、average/median/P95 與 CUDA metrics；fake DLL 測試確認 warm-up 後不再配置，且一次 execution error 後可安全重用同一 plan handle。
+- [x] 2026-07-17：RTX validator 新增 64²、128²、256²、512²、1024² 的 401-style native plan CPU/GPU crossover matrix，包含 cold/warm-up/median/P95、含傳輸 speedup、穩定 1.0x/1.5x 門檻候選；只輸出證據、不在 RTX 驗收前改 production routing。

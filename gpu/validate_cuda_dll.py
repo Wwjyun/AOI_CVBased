@@ -45,10 +45,20 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--recipe", help="Recipe used with --image.")
     parser.add_argument("--benchmark", type=int, default=20, help="Primitive benchmark repetitions.")
     parser.add_argument("--warmup", type=int, default=5, help="Warm-up calls excluded from benchmark statistics.")
+    parser.add_argument(
+        "--stress", type=int, nargs="*", default=[], metavar="COUNT",
+        help="Run cumulative persistent-plan stress checkpoints, for example: --stress 10 100 1000.",
+    )
+    parser.add_argument(
+        "--crossover", action="store_true",
+        help="Benchmark small-to-large CPU/GPU native-plan crossover without changing production policy.",
+    )
     parser.add_argument("--json-output", help="Write validation, benchmark, device and commit metadata as JSON.")
     args = parser.parse_args()
     if bool(args.image) != bool(args.recipe):
         parser.error("--image and --recipe must be provided together")
+    if any(count <= 0 for count in args.stress):
+        parser.error("--stress checkpoints must be positive")
     return args
 
 
@@ -381,6 +391,12 @@ def _timing_summary(operation, repetitions: int, warmup: int) -> dict:
     }
 
 
+def _p95(samples) -> float:
+    ordered = sorted(samples)
+    index = min(len(ordered) - 1, max(0, int(np.ceil(len(ordered) * 0.95)) - 1))
+    return float(ordered[index])
+
+
 def gpu_telemetry_snapshot() -> dict:
     executable = shutil.which("nvidia-smi")
     if executable is None:
@@ -514,6 +530,115 @@ def benchmark(runtime: GpuRuntime, repetitions: int, warmup: int = 5) -> dict:
     return result
 
 
+def stress_persistent_plan(runtime: GpuRuntime, checkpoints, warmup: int = 5) -> dict:
+    ordered = sorted({int(count) for count in checkpoints if int(count) > 0})
+    if not ordered:
+        return {}
+    if not runtime.supports_native_plan:
+        raise AssertionError("Persistent-plan stress requires the generic native plan ABI")
+    image = np.random.default_rng(20260717).integers(
+        0, 256, size=(512, 512, 3), dtype=np.uint8
+    )
+    plan = PreprocessPlan(
+        (Gaussian(5), Gray(), AdaptiveMean(11, -2.0, 255, True)),
+        name="stress_401_style",
+    )
+    for _ in range(max(0, int(warmup))):
+        runtime.execute_plan(image, plan)
+    baseline = runtime.performance_stats()["persistent_context"]
+    memory_before = runtime.memory_info()
+    samples_ms = []
+    snapshots = []
+    completed = 0
+    checksum = 0
+    for checkpoint in ordered:
+        while completed < checkpoint:
+            started = time.perf_counter()
+            output = runtime.execute_plan(image, plan)
+            samples_ms.append((time.perf_counter() - started) * 1000.0)
+            checksum = (checksum + int(output[completed % output.shape[0], completed % output.shape[1]])) % (2**32)
+            completed += 1
+        context = runtime.performance_stats()["persistent_context"]
+        if context.get("allocation_count") != baseline.get("allocation_count"):
+            raise AssertionError(
+                f"Persistent plan allocated after warm-up at checkpoint {checkpoint}: "
+                f"baseline={baseline}, current={context}"
+            )
+        current_samples = samples_ms[:checkpoint]
+        snapshots.append({
+            "completed": checkpoint,
+            "average_ms": round(statistics.fmean(current_samples), 3),
+            "median_ms": round(statistics.median(current_samples), 3),
+            "p95_ms": round(_p95(current_samples), 3),
+            "persistent_context": context,
+            "gpu_memory": runtime.memory_info(),
+            "gpu_telemetry": gpu_telemetry_snapshot(),
+        })
+    result = {
+        "warmup": max(0, int(warmup)),
+        "checkpoints": ordered,
+        "image_shape": list(image.shape),
+        "checksum": checksum,
+        "gpu_memory_before": memory_before,
+        "snapshots": snapshots,
+        "gpu_metrics": runtime.performance_stats(),
+    }
+    print(f"STRESS {result}")
+    return result
+
+
+def benchmark_crossover(
+    runtime: GpuRuntime,
+    repetitions: int = 20,
+    warmup: int = 5,
+    sizes=(64, 128, 256, 512, 1024),
+) -> dict:
+    if not runtime.supports_native_plan:
+        raise AssertionError("Crossover benchmark requires the generic native plan ABI")
+    plan = PreprocessPlan(
+        (Gaussian(5), Morphology("close", 3, 2), Gray(), AdaptiveMean(11, -2.0, 255, True)),
+        name="crossover_401_style",
+    )
+    cpu_executor = CpuPreprocessExecutor()
+    measurements = []
+    rng = np.random.default_rng(20260717)
+    for size in sorted({int(value) for value in sizes if int(value) > 0}):
+        image = rng.integers(0, 256, size=(size, size, 3), dtype=np.uint8)
+        cpu = _timing_summary(
+            lambda image=image: cpu_executor.execute(image, plan), repetitions, warmup
+        )
+        gpu = _timing_summary(
+            lambda image=image: runtime.execute_plan(image, plan), repetitions, warmup
+        )
+        speedup = cpu["median_ms"] / gpu["median_ms"] if gpu["median_ms"] > 0 else None
+        measurements.append({
+            "size": [size, size],
+            "pixels": size * size,
+            "cpu": cpu,
+            "gpu_including_transfer": gpu,
+            "speedup": round(speedup, 3) if speedup is not None else None,
+        })
+
+    def stable_threshold(target: float):
+        for index, item in enumerate(measurements):
+            suffix = [entry["speedup"] for entry in measurements[index:]]
+            if suffix and all(value is not None and value >= target for value in suffix):
+                return item["pixels"]
+        return None
+
+    result = {
+        "repetitions": max(1, int(repetitions)),
+        "warmup": max(0, int(warmup)),
+        "measurements": measurements,
+        "observed_stable_crossover_pixels": stable_threshold(1.0),
+        "observed_stable_1_5x_pixels": stable_threshold(1.5),
+        "policy_changed": False,
+        "note": "Observed thresholds are evidence only; production routing remains unchanged until RTX acceptance.",
+    }
+    print(f"CROSSOVER {result}")
+    return result
+
+
 def normalized_result(result: dict) -> dict:
     normalized = deepcopy(result)
     for key in ("duration_sec", "outputs", "execution"):
@@ -593,6 +718,8 @@ def main() -> int:
     )
     validation = validate_primitives(runtime)
     benchmark_result = benchmark(runtime, args.benchmark, args.warmup)
+    crossover_result = benchmark_crossover(runtime, args.benchmark, args.warmup) if args.crossover else {}
+    stress_result = stress_persistent_plan(runtime, args.stress, args.warmup)
     if args.image and args.recipe:
         validate_pipeline(Path(args.image), Path(args.recipe), str(runtime.dll_path))
     if args.json_output:
@@ -608,6 +735,8 @@ def main() -> int:
                     "compute_capability": runtime.compute_capability,
                     "validation": validation,
                     "benchmark": benchmark_result,
+                    "crossover": crossover_result,
+                    "stress": stress_result,
                     "gpu_metrics": runtime.performance_stats(),
                 },
                 ensure_ascii=False,
