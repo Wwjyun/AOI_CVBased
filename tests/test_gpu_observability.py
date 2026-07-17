@@ -9,7 +9,7 @@ import cv2
 import numpy as np
 import yaml
 
-from core.gpu_runtime import GpuRuntime
+from core.gpu_runtime import GpuRuntime, GpuRuntimeError
 from core.performance import PipelineProfiler
 from core.pipeline import AOIPipeline
 from core.preprocess_plan import (
@@ -348,6 +348,19 @@ class CpuFallbackRegressionTests(unittest.TestCase):
         self.assertEqual(fallback_result["execution"]["gpu"]["metrics"]["call_count"], 0)
         self.assertIn("performance", cpu_result["execution"])
         self.assertIn("401-1", cpu_result["execution"]["performance"]["detectors_sec"])
+
+    def test_missing_gpu_without_cpu_fallback_fails_explicitly(self):
+        with tempfile.TemporaryDirectory(prefix="visionflow_strict_gpu_") as temporary:
+            root = Path(temporary)
+            recipe = self._recipe()
+            recipe["gpu"]["tiling"] = True
+            recipe["gpu"]["fallback_to_cpu"] = False
+            recipe["gpu"]["dll_path"] = str(root / "definitely_missing.dll")
+            recipe_path = root / "strict_gpu.yaml"
+            recipe_path.write_text(yaml.safe_dump(recipe, sort_keys=False), encoding="utf-8")
+
+            with self.assertRaisesRegex(GpuRuntimeError, "CUDA DLL not found"):
+                AOIPipeline(recipe_path, root / "output").run(root / "image_is_not_read.png")
 
 
 if __name__ == "__main__":

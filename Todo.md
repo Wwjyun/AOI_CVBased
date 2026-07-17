@@ -40,11 +40,12 @@
 
 - [x] 缺少 DLL 時，CPU fallback 與純 CPU 的 PASS/NG、tiles、defects、bbox 與 metadata 完整一致。
 - [x] fused GPU 呼叫失敗時不採用部分結果，整個 detector 重新從 CPU preprocess 開始執行。
-- [ ] 建立固定 random seed 測例：BGR、gray、全黑、全白、棋盤格、邊界像素及真實 AOI 影像。
-- [ ] 覆蓋奇數尺寸、極小圖、4K、non-contiguous stride、1/3 channels 與不同 ROI 尺寸。
+- [x] 建立固定 random seed 合成測例：BGR、gray、全黑、全白、棋盤格與邊界像素。
+- [ ] 補入固定真實 AOI 影像測例；待取得可追蹤的生產樣本後執行。
+- [x] 覆蓋奇數尺寸、極小圖、4K、non-contiguous stride、1/3 channels 與不同 ROI 尺寸。
 - [ ] 五個 production recipes 各準備至少一張 PASS 與一張 NG 樣本。
 - [ ] 實機注入 kernel error、CUDA 初始化失敗與 OOM，確認 fallback 後無 stale pointer 或錯誤中間結果。
-- [ ] `fallback_to_cpu: false` 時必須明確失敗，不可回報假的 GPU success。
+- [x] `fallback_to_cpu: false` 且 CUDA DLL 不可用時必須明確失敗，不可回報假的 GPU success。
 
 ## P1：共用 Preprocess Plan 架構
 
@@ -228,3 +229,4 @@
 - [x] 2026-07-15：整理 2026-07-09 至 2026-07-15 Git 紀錄、GPU/CUDA 進度與待驗收項目，完成本週流水帳報告。
 - [x] 2026-07-15：更新並完整中文化根目錄 `README.md`，同步目前 CLI、GUI、配方、Detector、輸出、CUDA fallback、打包與驗證方式。
 - [x] 2026-07-17：加入 GUI 預覽影像載入、色彩轉換、QImage/QPixmap、scene 顯示與使用者實際等待時間量測，並輸出至日誌及 viewer backend tooltip。
+- [x] 2026-07-17：補齊固定 seed 合成影像、奇數/極小/4K、non-contiguous、1/3 channels、ROI 尺寸 CPU 測試，並驗證關閉 fallback 時缺少 CUDA DLL 會明確失敗；真實照片與 GPU 實機項目保留待辦。
