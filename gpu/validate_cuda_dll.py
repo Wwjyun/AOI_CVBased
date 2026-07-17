@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
+import platform
 import sys
 import tempfile
 import time
@@ -39,6 +41,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--image", help="Optional real image for full CPU/GPU pipeline comparison.")
     parser.add_argument("--recipe", help="Recipe used with --image.")
     parser.add_argument("--benchmark", type=int, default=20, help="Primitive benchmark repetitions.")
+    parser.add_argument("--json-output", help="Write validation, benchmark, device and commit metadata as JSON.")
     args = parser.parse_args()
     if bool(args.image) != bool(args.recipe):
         parser.error("--image and --recipe must be provided together")
@@ -427,10 +430,30 @@ def main() -> int:
         f"CUDA DLL ready: device={runtime.device_name}, capability={runtime.compute_capability}, "
         f"path={runtime.dll_path}"
     )
-    validate_primitives(runtime)
-    benchmark(runtime, args.benchmark)
+    validation = validate_primitives(runtime)
+    benchmark_result = benchmark(runtime, args.benchmark)
     if args.image and args.recipe:
         validate_pipeline(Path(args.image), Path(args.recipe), str(runtime.dll_path))
+    if args.json_output:
+        output_path = Path(args.json_output)
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(
+            json.dumps(
+                {
+                    "schema_version": 1,
+                    "commit": os.environ.get("GITHUB_SHA", ""),
+                    "platform": platform.platform(),
+                    "device": runtime.device_name,
+                    "compute_capability": runtime.compute_capability,
+                    "validation": validation,
+                    "benchmark": benchmark_result,
+                    "gpu_metrics": runtime.performance_stats(),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
     print("All requested CUDA validations passed")
     return 0
 

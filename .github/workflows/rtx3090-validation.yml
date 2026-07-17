@@ -1,0 +1,58 @@
+name: RTX 3090 validation
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 18 * * *"
+
+jobs:
+  cuda-runtime:
+    if: github.repository_owner == 'Wwjyun'
+    runs-on: [self-hosted, Windows, X64, gpu, rtx3090]
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Prepare isolated environment
+        shell: pwsh
+        run: |
+          python -m venv env
+          .\env\Scripts\python.exe -m pip install -r requirements.txt
+      - name: Record GPU toolchain
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force outputs_validation | Out-Null
+          nvidia-smi | Out-File -Encoding utf8 outputs_validation/gpu_environment.txt
+          nvcc --version | Out-File -Append -Encoding utf8 outputs_validation/gpu_environment.txt
+          where.exe cl | Out-File -Append -Encoding utf8 outputs_validation/gpu_environment.txt
+          git rev-parse HEAD | Out-File -Append -Encoding utf8 outputs_validation/gpu_environment.txt
+      - name: Build CUDA artifacts for RTX 3090
+        shell: pwsh
+        run: |
+          Start-Transcript -Path outputs_validation/cuda_build.log
+          try { .\gpu\build_cuda_dll.ps1 -Architecture sm_86 } finally { Stop-Transcript }
+      - name: Native ABI smoke
+        shell: pwsh
+        run: .\gpu\test_cuda_api.exe
+      - name: Equivalence and benchmark
+        shell: pwsh
+        run: .\env\Scripts\python.exe gpu\validate_cuda_dll.py --benchmark 20 --json-output outputs_validation/rtx3090_benchmark.json
+      - name: Upload CUDA build and benchmark artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rtx3090-${{ github.sha }}
+          path: |
+            gpu/visionflow_cuda.dll
+            gpu/visionflow_cuda.lib
+            gpu/test_cuda_api.exe
+            outputs_validation/cuda_build_stage/
+            outputs_validation/cuda_build_preflight.json
+            outputs_validation/cuda_build.log
+            outputs_validation/gpu_environment.txt
+            outputs_validation/rtx3090_benchmark.json
+            outputs_validation/**/*.nsys-rep
+          if-no-files-found: warn

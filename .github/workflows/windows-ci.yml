@@ -1,0 +1,49 @@
+name: Windows CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  cpu-static:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Compile Python sources
+        run: python -m compileall main.py core detectors gui gpu
+      - name: Validate CUDA headers and source contract
+        run: python gpu/preflight_cuda_build.py
+      - name: Recipe and CLI smoke
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force outputs_validation | Out-Null
+          python -c "import cv2,numpy as np; cv2.imwrite('outputs_validation/ci_input.png', np.zeros((128,128,3),np.uint8))"
+          python main.py --image outputs_validation/ci_input.png --recipe recipes/PRODUCT_A_NEGATIVE_401_AOI_01.yaml --output outputs_validation/ci_cli
+          if ($LASTEXITCODE -gt 1) { exit $LASTEXITCODE }
+          exit 0
+      - name: GUI offscreen smoke
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -c "from pathlib import Path; from PySide6.QtWidgets import QApplication; from gui.main_window import MainWindow; app=QApplication([]); w=MainWindow(); w.recipe_panel.load_recipe(Path('recipes/PRODUCT_A_AOI_01.yaml')); assert w.recipe_panel.detector_list.count() > 0"
+      - name: Upload static validation artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-static-${{ github.sha }}
+          path: |
+            gpu/include/
+            outputs_validation/cuda_build_preflight.json
+            outputs_validation/ci_cli/
+          if-no-files-found: warn
