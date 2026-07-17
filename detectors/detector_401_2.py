@@ -34,6 +34,7 @@ class Detector401_2(BaseDetector):
         with self.measure_detection_stage("find_contours"):
             contours, _ = cv2.findContours(binary, self._contour_mode(), cv2.CHAIN_APPROX_SIMPLE)
         geometry_started = time.perf_counter()
+        white_ratio_duration = 0.0
         defects = []
         ratio_threshold = float(self.params.get("white_pixel_ratio_threshold", 0.625))
 
@@ -45,9 +46,9 @@ class Detector401_2(BaseDetector):
             if area <= 0.0 or not self._passes_area_filter(area):
                 continue
 
-            x, y, w, h, white_pixel_count, contour_pixel_count = self._contour_white_pixel_stats(
-                binary, contour
-            )
+            ratio_started = time.perf_counter()
+            x, y, w, h, white_pixel_count, contour_pixel_count = self._contour_white_pixel_stats(binary, contour)
+            white_ratio_duration += time.perf_counter() - ratio_started
             if contour_pixel_count <= 0:
                 continue
 
@@ -86,7 +87,11 @@ class Detector401_2(BaseDetector):
                 }
             )
 
-        self._detection_stage_durations["geometry_analysis"] = time.perf_counter() - geometry_started
+        geometry_duration = time.perf_counter() - geometry_started
+        self._detection_stage_durations["white_ratio_analysis"] = white_ratio_duration
+        self._detection_stage_durations["geometry_analysis"] = max(
+            0.0, geometry_duration - white_ratio_duration
+        )
         defects.sort(key=lambda item: item["metadata"]["white_pixel_ratio"], reverse=True)
         return defects
 
@@ -99,9 +104,9 @@ class Detector401_2(BaseDetector):
 
         mask = np.zeros((h, w), dtype=np.uint8)
         cv2.drawContours(mask, [local_contour], -1, 255, thickness=cv2.FILLED)
-        contour_pixel_count = int(np.count_nonzero(mask))
+        contour_pixel_count = int(cv2.countNonZero(mask))
         white_pixel_count = int(
-            np.count_nonzero((binary[y : y + h, x : x + w] == 255) & (mask > 0))
+            cv2.countNonZero(cv2.bitwise_and(binary[y : y + h, x : x + w], mask))
         )
         return x, y, w, h, white_pixel_count, contour_pixel_count
 

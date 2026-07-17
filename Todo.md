@@ -116,7 +116,7 @@
 - [x] 900 DAG 接上 CUDA/native executor，共用 device gray 並只下載必要 masks。
 - [x] 401/401-1/401-2 的 `findContours` 與少量幾何分析暫留 CPU，只下載 binary mask。
 - [x] 401-2 contour mask 改為局部 bbox mask，避免每個 contour 配置整張 ROI mask。
-- [ ] 評估 401-2 white-pixel reduction 移至 GPU，只下載統計值與必要 mask。
+- [ ] 評估 401-2 white-pixel reduction 移至 GPU，只下載統計值與必要 mask。（已拆出 `white_ratio_analysis` profiler；CPU bbox-local counting 改用 OpenCV countNonZero/bitwise_and，512² synthetic median 0.0343→0.0151 ms；GPU 搬移待 RTX/production 佔比證明）
 - [x] 評估 connected components；bbox 雖可一致，但 pixel area、孔洞 contour 數與既有排序語意不等價，且固定 seed 4K CPU benchmark 無收益，因此不取代 contours。
 - [ ] 全部 detector 遷移並通過 RTX 3090 驗收後，才評估移除 detector-specific compatibility adapter。
 
@@ -268,3 +268,4 @@
 - [x] 2026-07-17：新增 persistent context reuse matrix，依序覆蓋 BGR shape grow、gray channel 切換、BGR shrink 與 plan parameter 改變，第二輪要求 allocation count 不再增加；source contract 證明 grow-only reserve 先成功配置 replacement 才釋放舊 pointer，因此單次 OOM 不會破壞既有 buffer，真實 CUDA error/OOM 注入仍待 RTX。
 - [x] 2026-07-17：補齊 CUDA loader failure matrix，實跑 ABI mismatch、零 CUDA device 與 persistent context create failure；context failure 現在一致傳遞到 fused、native linear、native DAG capability reason，避免 fallback metadata 誤報成缺少 generic ABI。
 - [x] 2026-07-17：RTX workflow 新增可選 `production_manifest` dispatch input，可直接執行五 recipes PASS/NG acceptance；新增 Nsight Systems smoke capture，runner 有 `nsys` 時產生 `.nsys-rep`，否則保存明確 skip status，兩者均納入 artifacts。
+- [x] 2026-07-17：401-2 profiler 將 contour white-pixel mask/count 從 geometry 拆成 `white_ratio_analysis`；bbox-local 統計由 NumPy boolean temporaries 改成 OpenCV `bitwise_and`/`countNonZero`，保持 count/ratio/order/metadata 等價，512² synthetic microbenchmark median 由 0.0343 ms 降至 0.0151 ms；是否移至 GPU 留待 RTX production 占比。

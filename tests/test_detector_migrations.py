@@ -286,6 +286,25 @@ class Detector401PlanMigrationTests(unittest.TestCase):
 
 
 class Detector4012LocalContourMaskTests(unittest.TestCase):
+    def test_white_ratio_work_is_profiled_separately_from_geometry(self):
+        detector = Detector401_2(params={
+            "blur_size": 3,
+            "adaptive_block_size": 3,
+            "adaptive_c": 0.0,
+            "contour_mode": "external",
+            "white_pixel_ratio_threshold": 0.0,
+        })
+        image = np.zeros((32, 32, 3), dtype=np.uint8)
+        cv2.rectangle(image, (8, 8), (23, 23), (255, 255, 255), thickness=-1)
+
+        result = detector.run(image)
+
+        stages = result["execution"]["performance"]["stages_sec"]
+        self.assertIn("white_ratio_analysis", stages)
+        self.assertIn("geometry_analysis", stages)
+        self.assertGreaterEqual(stages["white_ratio_analysis"], 0.0)
+        self.assertGreaterEqual(stages["geometry_analysis"], 0.0)
+
     @staticmethod
     def _full_roi_stats(binary, contour):
         mask = np.zeros(binary.shape, dtype=np.uint8)
