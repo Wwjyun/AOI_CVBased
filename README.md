@@ -490,6 +490,8 @@ detectors:
 - `CudaPreprocessExecutor` 依 DLL 能力優先選擇 versioned generic native plan，再選相容的 fused adapter、舊版通用 primitive 或 CPU fallback。
 - Generic native linear plan 支援 Gray、Gaussian、Threshold、Adaptive Mean 與 Morphology，整份 plan capability 通過後只做一次 H2D、連續 kernels 與一次必要 D2H。
 - Detector 401-2 已有一次呼叫完成灰階、Gaussian 與 Adaptive Mean 的 persistent context 相容路徑。
+- Persistent context 現在持有 non-blocking CUDA stream、grow-only scratch 與 morphology ping-pong buffers；plan 內的中間結果不回傳 CPU。
+- Batch 與 monitor 會透過 `GpuExecutionSession` 跨多張影像共用同一個 `GpuRuntime`/CUDA context，結束工作後才統一釋放。
 - 舊版 DLL 缺少新 exports 時仍保留既有路徑或 CPU fallback。
 
 目前 CUDA 原始碼包含 separable Gaussian、constant weights、64-bit integral Adaptive Mean Threshold、persistent context 與 grow-only buffers。這些功能仍需在目標 RTX 3090（`sm_86`）完成正式編譯、五份配方等價、效能、VRAM 與壓力驗收後，才能視為 production-ready 或預設啟用。

@@ -94,8 +94,8 @@
 - [x] context 擁有 grow-only uint8、float Gaussian 與 64-bit integral buffers。
 - [x] 相同或較小尺寸的 401-2 fused 呼叫不再重複 `cudaMalloc/cudaFree`。
 - [x] `GpuRuntime` 提供 `close()`、context manager、destructor 與 `RLock` 序列化。
-- [ ] 將 CUDA stream、morphology ping-pong 與所有 plan scratch 納入同一 context。
-- [ ] monitor/batch 跨多張影像重用同一個長生命週期 `GpuRuntime`/context。
+- [x] 將 CUDA stream、morphology ping-pong 與所有 plan scratch 納入同一 context。
+- [x] monitor/batch 跨多張影像重用同一個長生命週期 `GpuRuntime`/context。
 - [ ] 測試尺寸增減、channel 切換、參數改變、CUDA error/OOM 後的重用與釋放。
 - [ ] 評估 `cudaMallocAsync`/memory pool；只有相容且實測有收益時採用。
 
@@ -103,7 +103,7 @@
 
 - [ ] 量測 detector 401 多 iterations 的 morphology 占比。
 - [ ] 評估矩形 kernel 的 horizontal/vertical separable min/max filter。
-- [ ] 多 iterations 使用 device ping-pong buffers，中間不得回傳 CPU。
+- [x] 多 iterations 使用 device ping-pong buffers，中間不得回傳 CPU。
 - [ ] 小 kernel/少 iterations 建立 CPU/GPU crossover 規則。
 
 ## P3：Detector 遷移與 CPU/GPU 邊界
@@ -244,3 +244,4 @@
 - [x] 2026-07-17：加入 CUDA build preflight 與 SHA-256 manifest，靜態核對 17 個 ABI v1 header/source/runtime/smoke exports；DLL、LIB、test EXE 改在 staging 成功編譯並通過 dumpbin exports/dependencies 後才發布，避免 stale artifacts。
 - [x] 2026-07-17：修正 CUDA capability preflight routing；unsupported linear/DAG plan 不再先執行部分 GPU primitive，並讓 `fallback_to_cpu: false` 對 runtime/semantic failure 維持嚴格失敗。
 - [x] 2026-07-17：完成 generic native linear plan 原始碼與 OOP routing：versioned detector-neutral structs、optional query/create/execute/destroy、compiled-plan cache、persistent buffers、Gray/Gaussian/Threshold/AdaptiveMean/Morphology 單次 H2D/D2H execution，並同步 Python bridge、fake-DLL lifecycle、C++ smoke、validator、preflight 與文件；RTX 3090 編譯/實測仍保留待辦。
+- [x] 2026-07-17：persistent context 納入 non-blocking CUDA stream、plan scratch 與 morphology device ping-pong；新增 `GpuExecutionSession` 讓 batch/monitor 跨影像共用同一 runtime/context，並以 pipeline、batch、monitor 與 CUDA source contract 測試驗證生命週期；RTX 3090 runtime 驗證仍保留待辦。

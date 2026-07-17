@@ -32,10 +32,27 @@ class CudaSourceContractTests(unittest.TestCase):
             "VF_CUDA_API int vf_gpu_abi_version", 1
         )[0]
 
-        self.assertEqual(execute.count("cudaMemcpy2D("), 2)
+        self.assertEqual(execute.count("cudaMemcpy2DAsync("), 2)
+        self.assertEqual(execute.count("cudaStreamSynchronize"), 0)
+        self.assertEqual(execute.count("stream_result"), 1)
         self.assertNotIn("cudaMalloc", execute)
         self.assertNotIn("reserve_plan_buffers", execute)
+        self.assertIn("context->stream", execute)
+        self.assertIn("context->u8[4]", execute)
         self.assertNotIn("detector", descriptor.lower())
+
+    def test_persistent_context_owns_stream_and_fused_path_uses_it(self):
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "gpu" / "visionflow_cuda.cu").read_text(encoding="utf-8")
+        context = source.split("struct PersistentContext", 1)[1].split("struct NativePlan", 1)[0]
+        fused = source.split("VF_CUDA_API int vf_preprocess_401_2_u8(", 1)[1].split(
+            "VF_CUDA_API int vf_morphology_rect_u8(", 1
+        )[0]
+
+        self.assertIn("cudaStreamCreateWithFlags", context)
+        self.assertIn("cudaStreamDestroy", context)
+        self.assertIn("persistent->stream", fused)
+        self.assertEqual(fused.count("cudaMemcpy2DAsync("), 2)
 
 
 if __name__ == "__main__":

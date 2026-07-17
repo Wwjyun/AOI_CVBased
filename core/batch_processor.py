@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Callable
 
 from core.image_loader import SUPPORTED_EXTENSIONS
+from core.gpu_session import GpuExecutionSession
 from core.logging_system import LogMixin
 from core.pipeline import AOIPipeline
 from core.result_compactor import compact_inspection_result
@@ -89,42 +90,50 @@ class BatchInspectionProcessor(LogMixin):
         worker_count = self._worker_count(total)
         self._progress(0, f"Batch inspection running with {worker_count} workers")
 
-        with ThreadPoolExecutor(max_workers=worker_count) as executor:
-            futures = {
-                executor.submit(self._process_image, image_path, batch_output_dir): index
-                for index, image_path in enumerate(image_paths)
-            }
-            for future in as_completed(futures):
-                index = futures[future]
-                image_path = image_paths[index]
-                try:
-                    result = future.result()
-                except Exception as exc:
-                    self.logger.exception("Batch image failed: image=%s", image_path)
-                    result = BatchImageResult(
-                        image_path=image_path,
-                        final_result="ERROR",
-                        defect_count=0,
-                        ng_count=0,
-                        tile_count=0,
-                        duration_sec=0.0,
-                        outputs={},
-                        detail={},
-                        error=str(exc),
+        with GpuExecutionSession.from_recipe_path(self.recipe_path) as gpu_session:
+            with ThreadPoolExecutor(max_workers=worker_count) as executor:
+                futures = {
+                    executor.submit(
+                        self._process_image, image_path, batch_output_dir, gpu_session
+                    ): index
+                    for index, image_path in enumerate(image_paths)
+                }
+                for future in as_completed(futures):
+                    index = futures[future]
+                    image_path = image_paths[index]
+                    try:
+                        result = future.result()
+                    except Exception as exc:
+                        self.logger.exception("Batch image failed: image=%s", image_path)
+                        result = BatchImageResult(
+                            image_path=image_path,
+                            final_result="ERROR",
+                            defect_count=0,
+                            ng_count=0,
+                            tile_count=0,
+                            duration_sec=0.0,
+                            outputs={},
+                            detail={},
+                            error=str(exc),
+                        )
+                    results_by_index[index] = result
+                    completed += 1
+                    self._progress(
+                        int(completed / total * 100),
+                        f"Batch {completed}/{total}: finished {image_path.name}",
                     )
-                results_by_index[index] = result
-                completed += 1
-                self._progress(
-                    int(completed / total * 100),
-                    f"Batch {completed}/{total}: finished {image_path.name}",
-                )
 
         results = [results_by_index[index] for index in range(total)]
         summary = self._build_summary(started_at, batch_output_dir, results)
         self.logger.info("Batch inspection completed: summary=%s", summary["summary"])
         return summary
 
-    def _process_image(self, image_path: Path, batch_output_dir: Path) -> BatchImageResult:
+    def _process_image(
+        self,
+        image_path: Path,
+        batch_output_dir: Path,
+        gpu_session: GpuExecutionSession,
+    ) -> BatchImageResult:
         self.logger.info("Batch image started: image=%s", image_path)
         result: dict | None = None
         try:
@@ -132,6 +141,7 @@ class BatchInspectionProcessor(LogMixin):
                 recipe_path=self.recipe_path,
                 output_dir=batch_output_dir,
                 output_overrides=self.output_overrides,
+                gpu_session=gpu_session,
             )
             result = pipeline.run(image_path)
             summary = result.get("summary", {})

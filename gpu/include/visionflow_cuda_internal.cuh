@@ -75,6 +75,14 @@ inline int kernel_result() {
     return runtime_error(cudaDeviceSynchronize());
 }
 
+inline int kernel_launch_result() {
+    return runtime_error(cudaGetLastError());
+}
+
+inline int stream_result(cudaStream_t stream) {
+    return runtime_error(cudaStreamSynchronize(stream));
+}
+
 inline void free_device(void* pointer) {
     if (pointer != nullptr) cudaFree(pointer);
 }

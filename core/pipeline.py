@@ -8,6 +8,7 @@ from core.aggregator import Aggregator
 from core.detector_manager import DetectorManager
 from core.image_loader import load_image
 from core.gpu_runtime import GpuRuntime, GpuRuntimeError
+from core.gpu_session import GpuExecutionSession
 from core.logging_system import LogMixin
 from core.performance import PipelineProfiler
 from core.recipe_manager import RecipeManager
@@ -25,12 +26,14 @@ class AOIPipeline(LogMixin):
         debug: bool = False,
         progress_callback: Callable[[int, str], None] | None = None,
         output_overrides: dict | None = None,
+        gpu_session: GpuExecutionSession | None = None,
     ):
         self.recipe_path = Path(recipe_path)
         self.output_dir = Path(output_dir)
         self.debug = debug
         self.progress_callback = progress_callback
         self.output_overrides = output_overrides
+        self.gpu_session = gpu_session
         self.recipe_manager = RecipeManager()
         self.detector_manager = DetectorManager()
 
@@ -55,10 +58,14 @@ class AOIPipeline(LogMixin):
             gpu_requested = bool(gpu_config.get("tiling", False)) or any(
                 bool(config.get("use_gpu", False)) for config in detector_configs.values()
             )
-            gpu_runtime = GpuRuntime(
-                gpu_config.get("dll_path", GpuRuntime.DEFAULT_DLL),
-                fallback_to_cpu=gpu_config.get("fallback_to_cpu", True),
-                enabled=gpu_requested,
+            gpu_runtime = (
+                self.gpu_session.runtime_for(gpu_config, gpu_requested)
+                if self.gpu_session is not None
+                else GpuRuntime(
+                    gpu_config.get("dll_path", GpuRuntime.DEFAULT_DLL),
+                    fallback_to_cpu=gpu_config.get("fallback_to_cpu", True),
+                    enabled=gpu_requested,
+                )
             )
         if gpu_requested and not gpu_runtime.available and not gpu_runtime.fallback_to_cpu:
             raise GpuRuntimeError(gpu_runtime.unavailable_reason)

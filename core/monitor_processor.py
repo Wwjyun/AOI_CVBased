@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Callable
 
 from core.image_loader import SUPPORTED_EXTENSIONS
+from core.gpu_session import GpuExecutionSession
 from core.logging_system import LogMixin
 from core.pipeline import AOIPipeline
 from core.result_compactor import compact_inspection_result
@@ -103,16 +104,17 @@ class FolderMonitorProcessor(LogMixin):
         )
         self._progress(0, f"Monitoring {self.input_dir}")
 
-        while not self._should_stop():
-            self._enqueue_new_stable_images()
-            while self._pending and not self._should_stop():
-                image_path = self._pending.pop(0)
-                result = self._process_image(image_path, monitor_output_dir)
-                self._processed_count += 1
-                if self.item_callback is not None:
-                    self.item_callback(result.to_dict())
-                self._progress(100, f"Processed {image_path.name}")
-            self._sleep_interval()
+        with GpuExecutionSession.from_recipe_path(self.recipe_path) as gpu_session:
+            while not self._should_stop():
+                self._enqueue_new_stable_images()
+                while self._pending and not self._should_stop():
+                    image_path = self._pending.pop(0)
+                    result = self._process_image(image_path, monitor_output_dir, gpu_session)
+                    self._processed_count += 1
+                    if self.item_callback is not None:
+                        self.item_callback(result.to_dict())
+                    self._progress(100, f"Processed {image_path.name}")
+                self._sleep_interval()
 
         finished_at = datetime.datetime.now()
         summary = {
@@ -137,7 +139,12 @@ class FolderMonitorProcessor(LogMixin):
             self.logger.info("Monitor queued image: %s", image_path)
             self._progress(5, f"Queued {image_path.name}")
 
-    def _process_image(self, image_path: Path, monitor_output_dir: Path) -> MonitorImageResult:
+    def _process_image(
+        self,
+        image_path: Path,
+        monitor_output_dir: Path,
+        gpu_session: GpuExecutionSession,
+    ) -> MonitorImageResult:
         result: dict | None = None
         try:
             self.logger.info("Monitor image started: image=%s", image_path)
@@ -145,6 +152,7 @@ class FolderMonitorProcessor(LogMixin):
                 recipe_path=self.recipe_path,
                 output_dir=monitor_output_dir,
                 output_overrides=self.output_overrides,
+                gpu_session=gpu_session,
                 progress_callback=lambda pct, msg: self._progress(pct, f"{image_path.name}: {msg}"),
             )
             result = pipeline.run(image_path)

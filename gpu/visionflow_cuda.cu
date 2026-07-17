@@ -26,11 +26,18 @@ struct PersistentContext {
     unsigned long long* u64[2]{};
     size_t u64_capacity[2]{};
     unsigned long long allocation_count = 0;
+    cudaStream_t stream = nullptr;
+    cudaError_t initialization_error = cudaSuccess;
+
+    PersistentContext() {
+        initialization_error = cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+    }
 
     ~PersistentContext() {
         for (void* pointer : u8) visionflow_cuda::free_device(pointer);
         visionflow_cuda::free_device(float_buffer);
         for (void* pointer : u64) visionflow_cuda::free_device(pointer);
+        if (stream != nullptr) cudaStreamDestroy(stream);
     }
 };
 
@@ -591,6 +598,11 @@ VF_CUDA_API int vf_context_create(void** context) {
     *context = nullptr;
     PersistentContext* created = new (std::nothrow) PersistentContext();
     if (created == nullptr) return VF_CUDA_ALLOCATION_FAILED;
+    if (created->initialization_error != cudaSuccess) {
+        int result = cuda_result(created->initialization_error);
+        delete created;
+        return result;
+    }
     *context = created;
     return VF_CUDA_OK;
 }
@@ -682,9 +694,9 @@ VF_CUDA_API int vf_plan_execute(
     }
     PersistentContext* context = compiled->context;
     const size_t source_row_bytes = static_cast<size_t>(width) * src_channels;
-    cudaError_t error = cudaMemcpy2D(
+    cudaError_t error = cudaMemcpy2DAsync(
         context->u8[0], source_row_bytes, src, src_stride, source_row_bytes, height,
-        cudaMemcpyHostToDevice);
+        cudaMemcpyHostToDevice, context->stream);
     if (error != cudaSuccess) return cuda_result(error);
 
     uint8_t* current = context->u8[0];
@@ -695,7 +707,7 @@ VF_CUDA_API int vf_plan_execute(
         switch (op.kind) {
             case VF_PLAN_GRAY:
                 if (channels == 3) {
-                    bgr_gray_kernel<<<grid2d(width, height), dim3(BLOCK_X, BLOCK_Y)>>>(
+                    bgr_gray_kernel<<<grid2d(width, height), dim3(BLOCK_X, BLOCK_Y), 0, context->stream>>>(
                         current, next, width, height);
                     current = next;
                     channels = 1;
@@ -705,15 +717,15 @@ VF_CUDA_API int vf_plan_execute(
                 int radius = 0;
                 int result = prepare_gaussian_weights(op.int_params[0], &radius);
                 if (result != VF_CUDA_OK) return result;
-                gaussian_horizontal_kernel<<<grid2d(width, height), dim3(BLOCK_X, BLOCK_Y)>>>(
+                gaussian_horizontal_kernel<<<grid2d(width, height), dim3(BLOCK_X, BLOCK_Y), 0, context->stream>>>(
                     current, context->float_buffer, width, height, channels, radius);
-                gaussian_vertical_kernel<<<grid2d(width, height), dim3(BLOCK_X, BLOCK_Y)>>>(
+                gaussian_vertical_kernel<<<grid2d(width, height), dim3(BLOCK_X, BLOCK_Y), 0, context->stream>>>(
                     context->float_buffer, next, width, height, channels, radius);
                 current = next;
                 break;
             }
             case VF_PLAN_THRESHOLD:
-                threshold_kernel<<<(static_cast<int>(pixels) + 255) / 256, 256>>>(
+                threshold_kernel<<<(static_cast<int>(pixels) + 255) / 256, 256, 0, context->stream>>>(
                     current, next, static_cast<int>(pixels), op.int_params[0],
                     op.int_params[1], op.int_params[2]);
                 current = next;
@@ -724,19 +736,19 @@ VF_CUDA_API int vf_plan_execute(
                 int result = adaptive_layout(width, height, op.int_params[0], &radius, &padded_width,
                                              &padded_height, &padded_count);
                 if (result != VF_CUDA_OK) return result;
-                replicate_border_kernel<<<grid2d(padded_width, padded_height), dim3(BLOCK_X, BLOCK_Y)>>>(
+                replicate_border_kernel<<<grid2d(padded_width, padded_height), dim3(BLOCK_X, BLOCK_Y), 0, context->stream>>>(
                     current, context->u8[3], width, height, padded_width, padded_height, radius);
-                row_prefix_u8_kernel<<<padded_height, SCAN_THREADS>>>(
+                row_prefix_u8_kernel<<<padded_height, SCAN_THREADS, 0, context->stream>>>(
                     context->u8[3], context->u64[0], padded_width, padded_height);
                 dim3 transpose_block(TRANSPOSE_TILE, TRANSPOSE_ROWS);
                 dim3 transpose_grid(
                     (padded_width + TRANSPOSE_TILE - 1) / TRANSPOSE_TILE,
                     (padded_height + TRANSPOSE_TILE - 1) / TRANSPOSE_TILE);
-                transpose_u64_kernel<<<transpose_grid, transpose_block>>>(
+                transpose_u64_kernel<<<transpose_grid, transpose_block, 0, context->stream>>>(
                     context->u64[0], context->u64[1], padded_width, padded_height);
-                row_prefix_u64_inplace_kernel<<<padded_width, SCAN_THREADS>>>(
+                row_prefix_u64_inplace_kernel<<<padded_width, SCAN_THREADS, 0, context->stream>>>(
                     context->u64[1], padded_height, padded_width);
-                adaptive_integral_kernel<<<grid2d(width, height), dim3(BLOCK_X, BLOCK_Y)>>>(
+                adaptive_integral_kernel<<<grid2d(width, height), dim3(BLOCK_X, BLOCK_Y), 0, context->stream>>>(
                     current, context->u64[1], next, width, height, padded_height,
                     op.int_params[0], op.float_params[0], op.int_params[1], op.int_params[2]);
                 current = next;
@@ -754,7 +766,7 @@ VF_CUDA_API int vf_plan_execute(
                     int dilate = operation == VF_MORPH_DILATE;
                     if (operation == VF_MORPH_OPEN) dilate = pass >= iterations;
                     if (operation == VF_MORPH_CLOSE) dilate = pass < iterations;
-                    morph_kernel<<<grid2d(width, height), dim3(BLOCK_X, BLOCK_Y)>>>(
+                    morph_kernel<<<grid2d(width, height), dim3(BLOCK_X, BLOCK_Y), 0, context->stream>>>(
                         source_buffer, destination, width, height, channels, kernel / 2, dilate);
                     source_buffer = destination;
                     destination = destination == next ? context->u8[4] : next;
@@ -767,13 +779,14 @@ VF_CUDA_API int vf_plan_execute(
         }
     }
 
-    int result = visionflow_cuda::kernel_result();
+    int result = visionflow_cuda::kernel_launch_result();
     if (result != VF_CUDA_OK) return result;
     const size_t output_row_bytes = static_cast<size_t>(width) * compiled->output_channels;
-    error = cudaMemcpy2D(
+    error = cudaMemcpy2DAsync(
         dst, dst_stride, current, output_row_bytes, output_row_bytes, height,
-        cudaMemcpyDeviceToHost);
-    return cuda_result(error);
+        cudaMemcpyDeviceToHost, context->stream);
+    if (error != cudaSuccess) return cuda_result(error);
+    return visionflow_cuda::stream_result(context->stream);
 }
 
 VF_CUDA_API int vf_plan_destroy(void* plan) {
@@ -1030,27 +1043,28 @@ VF_CUDA_API int vf_preprocess_401_2_u8(
     if (result != VF_CUDA_OK) return result;
 
     size_t source_row_bytes = static_cast<size_t>(w) * static_cast<size_t>(sc);
-    cudaError_t error = cudaMemcpy2D(
+    cudaError_t error = cudaMemcpy2DAsync(
         persistent->u8[0],
         source_row_bytes,
         src,
         stride,
         source_row_bytes,
         h,
-        cudaMemcpyHostToDevice);
+        cudaMemcpyHostToDevice,
+        persistent->stream);
     if (error != cudaSuccess) return cuda_result(error);
 
     uint8_t* gray = persistent->u8[0];
     if (sc == 3) {
         gray = persistent->u8[1];
-        bgr_gray_kernel<<<grid2d(w, h), dim3(BLOCK_X, BLOCK_Y)>>>(
+        bgr_gray_kernel<<<grid2d(w, h), dim3(BLOCK_X, BLOCK_Y), 0, persistent->stream>>>(
             persistent->u8[0], gray, w, h);
     }
-    gaussian_horizontal_kernel<<<grid2d(w, h), dim3(BLOCK_X, BLOCK_Y)>>>(
+    gaussian_horizontal_kernel<<<grid2d(w, h), dim3(BLOCK_X, BLOCK_Y), 0, persistent->stream>>>(
         gray, persistent->float_buffer, w, h, 1, radius);
-    gaussian_vertical_kernel<<<grid2d(w, h), dim3(BLOCK_X, BLOCK_Y)>>>(
+    gaussian_vertical_kernel<<<grid2d(w, h), dim3(BLOCK_X, BLOCK_Y), 0, persistent->stream>>>(
         persistent->float_buffer, gray, w, h, 1, radius);
-    replicate_border_kernel<<<grid2d(padded_width, padded_height), dim3(BLOCK_X, BLOCK_Y)>>>(
+    replicate_border_kernel<<<grid2d(padded_width, padded_height), dim3(BLOCK_X, BLOCK_Y), 0, persistent->stream>>>(
         gray,
         persistent->u8[3],
         w,
@@ -1058,17 +1072,17 @@ VF_CUDA_API int vf_preprocess_401_2_u8(
         padded_width,
         padded_height,
         adaptive_radius);
-    row_prefix_u8_kernel<<<padded_height, SCAN_THREADS>>>(
+    row_prefix_u8_kernel<<<padded_height, SCAN_THREADS, 0, persistent->stream>>>(
         persistent->u8[3], persistent->u64[0], padded_width, padded_height);
     dim3 transpose_block(TRANSPOSE_TILE, TRANSPOSE_ROWS);
     dim3 transpose_grid(
         (padded_width + TRANSPOSE_TILE - 1) / TRANSPOSE_TILE,
         (padded_height + TRANSPOSE_TILE - 1) / TRANSPOSE_TILE);
-    transpose_u64_kernel<<<transpose_grid, transpose_block>>>(
+    transpose_u64_kernel<<<transpose_grid, transpose_block, 0, persistent->stream>>>(
         persistent->u64[0], persistent->u64[1], padded_width, padded_height);
-    row_prefix_u64_inplace_kernel<<<padded_width, SCAN_THREADS>>>(
+    row_prefix_u64_inplace_kernel<<<padded_width, SCAN_THREADS, 0, persistent->stream>>>(
         persistent->u64[1], padded_height, padded_width);
-    adaptive_integral_kernel<<<grid2d(w, h), dim3(BLOCK_X, BLOCK_Y)>>>(
+    adaptive_integral_kernel<<<grid2d(w, h), dim3(BLOCK_X, BLOCK_Y), 0, persistent->stream>>>(
         gray,
         persistent->u64[1],
         persistent->u8[2],
@@ -1079,18 +1093,20 @@ VF_CUDA_API int vf_preprocess_401_2_u8(
         adaptive_c,
         max_value,
         invert);
-    result = visionflow_cuda::kernel_result();
+    result = visionflow_cuda::kernel_launch_result();
     if (result != VF_CUDA_OK) return result;
 
-    error = cudaMemcpy2D(
+    error = cudaMemcpy2DAsync(
         dst,
         dstride,
         persistent->u8[2],
         static_cast<size_t>(w),
         static_cast<size_t>(w),
         h,
-        cudaMemcpyDeviceToHost);
-    return cuda_result(error);
+        cudaMemcpyDeviceToHost,
+        persistent->stream);
+    if (error != cudaSuccess) return cuda_result(error);
+    return visionflow_cuda::stream_result(persistent->stream);
 }
 
 VF_CUDA_API int vf_morphology_rect_u8(const uint8_t* src,int w,int h,int stride,int sc,uint8_t* dst,int dstride,int dc,int operation,int kernel,int iterations) {
