@@ -3,6 +3,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+from core.preprocess_plan import AdaptiveMean, Gaussian, Gray, Morphology, PreprocessPlan
 from detectors.base_detector import BaseDetector
 
 
@@ -102,63 +103,39 @@ class Detector401(BaseDetector):
 
     def _make_binary(self, image):
         blur_size = self._odd_at_least(int(self.params.get("blur_size", 15)), 3)
-        if self.gpu_active:
-            blurred = self.gpu_runtime.gaussian_blur(image, blur_size)
-            morphed = self._morph_gpu(blurred)
-            gray = self.gpu_runtime.bgr_to_gray(morphed) if morphed.ndim == 3 else morphed
-            block_size = self._odd_at_least(int(self.params.get("adaptive_block_size", 29)), 3)
-            return self.gpu_runtime.adaptive_threshold(
-                gray,
-                block_size,
-                float(self.params.get("adaptive_c", 5)),
-                int(self.params.get("max_value", 255)),
-                bool(self.params.get("binary_inv", True)),
-            )
-        blurred = cv2.GaussianBlur(image, (blur_size, blur_size), 0)
-        morphed = self._morph(blurred)
-        gray = cv2.cvtColor(morphed, cv2.COLOR_BGR2GRAY) if morphed.ndim == 3 else morphed
         block_size = self._odd_at_least(int(self.params.get("adaptive_block_size", 29)), 3)
-        threshold_type = cv2.THRESH_BINARY_INV if self.params.get("binary_inv", True) else cv2.THRESH_BINARY
-        return cv2.adaptiveThreshold(
-            gray,
-            int(self.params.get("max_value", 255)),
-            cv2.ADAPTIVE_THRESH_MEAN_C,
-            threshold_type,
+        operation = str(self.params.get("morph_operation", "open")).lower()
+        iterations = max(0, int(self.params.get("morph_iterations", 10)))
+        raw_kernel_size = int(self.params.get("morph_kernel", 5))
+        kernel_size = 1 if raw_kernel_size <= 1 else self._odd_at_least(raw_kernel_size, 3)
+        adaptive_c = float(self.params.get("adaptive_c", 5))
+        max_value = int(self.params.get("max_value", 255))
+        invert = bool(self.params.get("binary_inv", True))
+        signature = (
+            "401_preprocess",
+            blur_size,
+            operation,
+            kernel_size,
+            iterations,
             block_size,
-            float(self.params.get("adaptive_c", 5)),
+            adaptive_c,
+            max_value,
+            invert,
         )
-
-    def _morph_gpu(self, image):
-        operation = str(self.params.get("morph_operation", "open")).lower()
-        iterations = int(self.params.get("morph_iterations", 10))
-        kernel_size = int(self.params.get("morph_kernel", 5))
-        if operation in {"none", ""} or iterations <= 0 or kernel_size <= 1:
-            return image
-        return self.gpu_runtime.morphology(image, operation, self._odd_at_least(kernel_size, 3), iterations)
-
-    def _morph(self, image):
-        operation = str(self.params.get("morph_operation", "open")).lower()
-        iterations = int(self.params.get("morph_iterations", 10))
-        kernel_size = int(self.params.get("morph_kernel", 5))
-        if operation in {"none", ""} or iterations <= 0 or kernel_size <= 1:
-            return image
-
-        kernel_size = self._odd_at_least(kernel_size, 3)
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, kernel_size))
-        operations = {
-            "open": cv2.MORPH_OPEN,
-            "close": cv2.MORPH_CLOSE,
-            "dilate": cv2.MORPH_DILATE,
-            "erode": cv2.MORPH_ERODE,
-        }
-        cv_operation = operations.get(operation)
-        if cv_operation is None:
-            raise ValueError(f"Unsupported morphology operation: {operation}")
-        if cv_operation == cv2.MORPH_DILATE:
-            return cv2.dilate(image, kernel, iterations=iterations)
-        if cv_operation == cv2.MORPH_ERODE:
-            return cv2.erode(image, kernel, iterations=iterations)
-        return cv2.morphologyEx(image, cv_operation, kernel, iterations=iterations)
+        plan = self.cached_preprocess_plan(
+            image,
+            signature,
+            lambda: PreprocessPlan(
+                name="401_gaussian_morphology_gray_adaptive_mean",
+                operations=(
+                    Gaussian(blur_size),
+                    Morphology(operation, kernel_size, iterations),
+                    Gray(),
+                    AdaptiveMean(block_size, adaptive_c, max_value, invert),
+                ),
+            ),
+        )
+        return self.execute_preprocess_plan(image, plan)
 
     def _passes_area_filter(self, area: float) -> bool:
         min_area = float(self.params.get("min_area", 25))

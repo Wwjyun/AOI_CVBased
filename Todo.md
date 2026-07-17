@@ -107,7 +107,7 @@
 ## P3：Detector 遷移與 CPU/GPU 邊界
 
 - [x] 401-1 遷移到 cached 共用 plan：Gray → Resize(area) → Gaussian → AdaptiveMean → Morphology；CUDA 無法保持 area 語意時整個 detector CPU fallback。
-- [ ] 401 遷移到共用 plan，保留目前 threshold/morphology/contour 語意。
+- [x] 401 遷移到 cached 共用 plan，保留 BGR Gaussian → Morphology → Gray → AdaptiveMean、threshold 與 contour 語意。
 - [x] 401-2 preprocessing 已遷移到共用 plan，並保留 fused/legacy/CPU 路徑。
 - [ ] 900 遷移成 DAG plan，共用 device gray 產生 outer global 與 inner adaptive masks。
 - [ ] 401/401-1/401-2 的 `findContours` 與少量幾何分析暫留 CPU，只下載 binary mask。
@@ -234,3 +234,4 @@
 - [x] 2026-07-17：加入 versioned operator/plan signature、tensor spec 推導及輸入輸出 dtype/channel/shape/order/參數驗證，CPU 與 CUDA executor 共用相同契約並以 fake runtime 覆蓋錯誤輸出。
 - [x] 2026-07-17：加入 preprocess capability report，記錄 requested/selected backend、fused/primitive/CPU/fallback route、原因、plan signature 與不支援項目，並帶入 detector execution metadata。
 - [x] 2026-07-17：將 401-1 遷移到 cached shared plan（Gray/Resize area/Gaussian/AdaptiveMean/Morphology），保留 process scale、ROI、contour 與 metadata 語意，area 不支援時維持 full-detector CPU fallback。
+- [x] 2026-07-17：將 401 遷移到 cached shared plan，保留 BGR Gaussian/Morphology 後轉 Gray/AdaptiveMean 的既有逐像素順序，以及 ROI、contour、座標、排序與 metadata 語意。

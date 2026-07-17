@@ -181,7 +181,7 @@ class PreprocessPlan:
                     if channels == 1
                     else (operator.height, operator.width, channels)
                 )
-            elif isinstance(operator, (Threshold, AdaptiveMean, Morphology)) and channels != 1:
+            elif isinstance(operator, (Threshold, AdaptiveMean)) and channels != 1:
                 raise InvalidPreprocessPlan(
                     f"{type(operator).__name__} requires single-channel input; add Gray first"
                 )
