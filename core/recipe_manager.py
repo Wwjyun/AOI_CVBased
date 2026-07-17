@@ -78,6 +78,30 @@ class RecipeManager:
                 raise RecipeError(f"Recipe detector {detector_id} must be a mapping.")
             if "use_gpu" in config and not isinstance(config["use_gpu"], bool):
                 raise RecipeError(f"Recipe detector {detector_id}.use_gpu must be true or false.")
+        self._validate_detector_parameters(recipe["detectors"])
+
+    @staticmethod
+    def _validate_detector_parameters(detectors: dict[str, Any]) -> None:
+        from core.detector_manager import DetectorManager
+        from core.parameter_schema import validate_parameter_mapping
+
+        definitions = DetectorManager().definitions()
+        for detector_id, config in detectors.items():
+            detector_id = str(detector_id)
+            if detector_id not in definitions:
+                raise RecipeError(f"Recipe detector is not registered: {detector_id}")
+            unknown_config = set(config) - {"enabled", "use_gpu", "display_name", "params"}
+            if unknown_config:
+                raise RecipeError(
+                    f"Recipe detector {detector_id} has unknown keys: {', '.join(sorted(unknown_config))}"
+                )
+            try:
+                validate_parameter_mapping(
+                    config.get("params", {}), DetectorManager().parameter_specs(detector_id),
+                    f"detectors.{detector_id}.params"
+                )
+            except ValueError as exc:
+                raise RecipeError(str(exc)) from exc
 
     @staticmethod
     def enabled_detectors(recipe: dict[str, Any]) -> dict[str, Any]:

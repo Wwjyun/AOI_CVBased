@@ -5,6 +5,7 @@ import numpy as np
 import time
 
 from core.preprocess_plan import AdaptiveMean, Gaussian, Gray, PreprocessPlan
+from core.parameter_schema import specs_from_defaults
 from detectors.base_detector import BaseDetector
 
 
@@ -23,6 +24,16 @@ class Detector401_2(BaseDetector):
         "max_area": 0,
         "white_pixel_ratio_threshold": 0.625,
     }
+    PARAM_SPEC = specs_from_defaults(default_params, {
+        "max_value": {"minimum": 1, "maximum": 255, "engineer_visible": False},
+        "blur_size": {"minimum": 3, "odd": True, "engineer_visible": False},
+        "adaptive_block_size": {"minimum": 3, "odd": True, "engineer_visible": False},
+        "adaptive_c": {"engineer_visible": False},
+        "roi_inset_px": {"minimum": 0},
+        "contour_mode": {"choices": ("external", "list", "tree", "ccomp"), "engineer_visible": False},
+        "min_area": {"minimum": 0}, "max_area": {"minimum": 0},
+        "white_pixel_ratio_threshold": {"minimum": 0.0, "maximum": 1.0, "engineer_visible": False},
+    })
 
     def preprocess(self, image):
         return image if self.gpu_active else self.shared_gray(image)

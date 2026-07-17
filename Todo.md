@@ -167,6 +167,16 @@
 - [x] GPU job 支援手動與 nightly；PR 至少完成 compile/static checks。
 - [ ] 保存 benchmark JSON、Nsight report、Driver/Toolkit/GPU 與 commit hash，支援 commit 間比較。（JSON、環境與 commit 已完成；workflow 已加入可用時執行 nsys smoke capture 並記錄 skip/status，report 待 RTX runner）
 
+## P8：產線安全、追溯與持續驗證
+
+- [x] Detector 宣告共用參數 schema；recipe 載入嚴格拒絕未知 detector、未知參數、錯誤型別、越界值與非法 enum，GUI designer 使用同一份 schema 建立欄位。
+- [x] Inspection 輸出保存原始 recipe SHA-256、套用 runtime override 後的 effective recipe SHA-256，以及 build commit/dirty provenance。
+- [x] 每張 NG tile 旁產生 dataset metadata sidecar，包含 recipe provenance、detector/參數、局部與全域座標、來源影像及人工複判欄位。
+- [x] 五份 production recipe 皆有可重現的合成 PASS/NG golden regression，斷言 final result、defect count、bbox 容差、area/confidence/metadata 與順序；四種 detector 各至少五個合成案例。
+- [x] 建立 Windows 精確 dependency lock；hosted CI、RTX runner 與 PyInstaller build 使用同一份 lock，避免時間與機器造成版本漂移。
+- [x] hosted CI 監測 RTX workflow 最近成功時間（超過 48 小時失敗）、benchmark 與 baseline 比較並 gate P95 退化，另有 weekly PyInstaller build + packaged smoke，Python 版本與部署版本一致。
+- [x] Hypothesis 隨機產生影像與合法 PreprocessPlan，驗證 CPU executor 與直接 OpenCV reference；固定生成順序可供 RTX CPU/GPU fuzzing，recipe/designer schema 與 GPU ABI/metrics 已拆成可 headless 測試模組。
+
 ## RTX 3090 編譯與實機驗收
 
 ### 環境與編譯
@@ -274,3 +284,4 @@
 - [x] 2026-07-17：擴充 packaged `--smoke-test` 為缺 DLL fallback policy 全 pipeline 矩陣；CPU-only 與 auto fallback 的 PASS/NG、tiles、defects、bbox、metadata 一致且 GPU call count=0，strict CUDA 明確回報 DLL 不存在；重建 CPU-compatible EXE（5,550,515 bytes、5 recipes、無 CUDA DLL）後實際 exit 0。validation ZIP 103,996,491 bytes、SHA-256 `7477496D9DC5FD47CA99752235D451A132C9C5BC0279F237760FD308471271AD`；Windows CI 通過，RTX workflow 因 repository 無 self-hosted runner 排隊中。
 - [x] 2026-07-17：依目前 codebase 稽核並更新 `README.md` 與 `AGENT.md`，同步 Windows／RTX CI、shared preprocess plan、GPU session、CUDA preflight、打包 fallback smoke、專案模組地圖與實際驗證命令；未變更 runtime 行為或 RTX 實機驗收狀態。
 - [x] 2026-07-17：修正 Windows CLI smoke 的 exit code 判斷，明確接受 PASS=0 與 NG=2，並讓未捕捉例外等其他 exit code 正確使 CI 失敗。
+- [x] 2026-07-17：完成 P8 產線安全與持續驗證：strict detector schema/GUI 共用、recipe/build SHA-256/commit provenance、NG dataset sidecar、五配方與每 detector 至少五個合成 golden cases、Python 3.13 Windows lock、RTX 48h heartbeat/P95 15% gate/weekly package smoke、100-case Hypothesis preprocess fuzz，並拆分 GPU ABI 與 metrics；本機 CPU-compatible PyInstaller build 及 packaged smoke exit 0。

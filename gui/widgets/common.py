@@ -5,6 +5,7 @@ from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QAbstractButton,
     QButtonGroup,
+    QComboBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -304,8 +305,19 @@ class NumStepper(QWidget):
         self._set_text(self._value)
 
 
-def make_param_widget(value, read_only: bool = False) -> QWidget:
+def make_param_widget(value, read_only: bool = False, spec: dict | None = None) -> QWidget:
     """Build an editable/read-only control from a recipe parameter value."""
+    spec = spec or {}
+
+    choices = list(spec.get("choices") or [])
+    if choices:
+        combo = QComboBox()
+        for choice in choices:
+            combo.addItem(str(choice), choice)
+        index = combo.findData(value)
+        combo.setCurrentIndex(max(0, index))
+        combo.setEnabled(not read_only)
+        return combo
 
     if isinstance(value, bool):
         toggle = Toggle(checked=value)
@@ -323,7 +335,9 @@ def make_param_widget(value, read_only: bool = False) -> QWidget:
         is_float = isinstance(value, float)
         decimals = 4 if is_float else 0
         step = 0.01 if is_float else 1
-        return NumStepper(value=value, minimum=-1_000_000, maximum=1_000_000, step=step, decimals=decimals)
+        minimum = spec.get("minimum", -1_000_000)
+        maximum = spec.get("maximum", 1_000_000)
+        return NumStepper(value=value, minimum=minimum, maximum=maximum, step=step, decimals=decimals)
 
     edit = QLineEdit(str(value))
     edit.setProperty("mono", "true")
@@ -338,4 +352,6 @@ def param_value(widget: QWidget):
         return widget.value()
     if isinstance(widget, QLineEdit):
         return widget.text()
+    if isinstance(widget, QComboBox):
+        return widget.currentData()
     return None

@@ -8,7 +8,7 @@ a = Analysis(
     ['gui_launcher.py'],
     pathex=[],
     binaries=cuda_binaries,
-    datas=[('recipes', 'recipes')],
+    datas=[('recipes', 'recipes'), ('build_provenance.json', '.')],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

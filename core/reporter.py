@@ -29,11 +29,11 @@ class Reporter(LogMixin):
         for directory in (self.overlay_dir, self.ng_tiles_dir, self.csv_dir, self.matrix_csv_dir, self.json_dir):
             directory.mkdir(parents=True, exist_ok=True)
 
-    def write(self, image, result: dict) -> dict[str, str]:
+    def write(self, image, result: dict) -> dict[str, object]:
         stem = Path(result["image_name"]).stem
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
         base_name = f"{stem}_{result['recipe_name']}_{timestamp}_{uuid.uuid4().hex[:8]}"
-        outputs: dict[str, str] = {}
+        outputs: dict[str, object] = {}
         self.logger.info("Writing report outputs: image=%s base=%s", result.get("image_name"), base_name)
 
         if self.output_config.get("save_overlay", True):
@@ -44,8 +44,9 @@ class Reporter(LogMixin):
 
         if self.output_config.get("save_ng_tiles", True):
             with self._measure("ng_tiles"):
-                self._write_ng_tiles(result, base_name)
+                sidecars = self._write_ng_tiles(result, base_name)
                 outputs["ng_tiles_dir"] = str(self.ng_tiles_dir)
+                outputs["ng_tile_sidecars"] = sidecars
 
         if self.output_config.get("save_csv", True):
             with self._measure("csv"):
@@ -77,7 +78,7 @@ class Reporter(LogMixin):
         return self.profiler.measure(f"report:{name}")
 
     @staticmethod
-    def _json_safe_result(result: dict, outputs: dict[str, str]) -> dict:
+    def _json_safe_result(result: dict, outputs: dict[str, object]) -> dict:
         cleaned = dict(result)
         cleaned["outputs"] = dict(outputs)
         cleaned["tiles"] = []
@@ -154,7 +155,8 @@ class Reporter(LogMixin):
             return
         cv2.rectangle(overlay, (x, y), (x + width, y + height), (0, 0, 255), 4)
 
-    def _write_ng_tiles(self, result: dict, base_name: str) -> None:
+    def _write_ng_tiles(self, result: dict, base_name: str) -> list[str]:
+        sidecars: list[str] = []
         for tile_result in result["tiles"]:
             if tile_result.get("result") != "NG":
                 continue
@@ -164,6 +166,46 @@ class Reporter(LogMixin):
                 continue
             path = self.ng_tiles_dir / f"{base_name}_{tile['tile_id']}.png"
             self._write_png(path, self._make_ng_tile_overlay(tile_image, tile_result))
+            sidecar_path = path.with_suffix(".json")
+            sidecar = self._ng_tile_sidecar(result, tile_result, path.name)
+            with sidecar_path.open("w", encoding="utf-8") as handle:
+                json.dump(sidecar, handle, ensure_ascii=False, indent=2)
+            sidecars.append(str(sidecar_path))
+        return sidecars
+
+    @staticmethod
+    def _ng_tile_sidecar(result: dict, tile_result: dict, image_file: str) -> dict:
+        provenance = result.get("provenance", {})
+        detector_params = provenance.get("detector_params", {})
+        detectors = []
+        for detector_result in tile_result.get("detectors", []):
+            detector_id = str(detector_result.get("detector_id", ""))
+            detectors.append({
+                "detector_id": detector_id,
+                "display_name": detector_result.get("display_name", ""),
+                "params": detector_params.get(detector_id, {}),
+                "pass": detector_result.get("pass"),
+                "score": detector_result.get("score"),
+                "defects": detector_result.get("defects", []),
+            })
+        return {
+            "schema_version": 1,
+            "dataset_role": "unreviewed_ng_candidate",
+            "image_file": image_file,
+            "source_image": result.get("image_name"),
+            "recipe_name": result.get("recipe_name"),
+            "recipe_version": result.get("recipe_version"),
+            "provenance": provenance,
+            "tile": tile_result.get("tile", {}),
+            "detectors": detectors,
+            "human_review": {
+                "status": "pending",
+                "label": None,
+                "reviewer": None,
+                "reviewed_at": None,
+                "notes": "",
+            },
+        }
 
     @staticmethod
     def _make_ng_tile_overlay(tile_image, tile_result: dict):

@@ -11,6 +11,7 @@ from core.preprocess_plan import (
     PreprocessDagPlan,
     Threshold,
 )
+from core.parameter_schema import specs_from_defaults
 from detectors.base_detector import BaseDetector
 
 
@@ -38,6 +39,20 @@ class Detector900(BaseDetector):
         "max_edge_gap": 31,
         "roi_inset_px": 0,
     }
+    PARAM_SPEC = specs_from_defaults(default_params, {
+        "max_value": {"minimum": 1, "maximum": 255, "engineer_visible": False},
+        "outer_threshold": {"minimum": 0, "maximum": 255, "engineer_visible": False},
+        "outer_invert": {"engineer_visible": False},
+        "outer_contour_mode": {"choices": ("external", "list", "tree", "ccomp"), "engineer_visible": False},
+        "outer_target_width": {"minimum": 1}, "outer_width_tolerance": {"minimum": 0},
+        "outer_target_height": {"minimum": 1}, "outer_height_tolerance": {"minimum": 0},
+        "inner_adaptive_block_size": {"minimum": 3, "odd": True, "engineer_visible": False},
+        "inner_adaptive_c": {"engineer_visible": False}, "inner_invert": {"engineer_visible": False},
+        "inner_contour_mode": {"choices": ("external", "list", "tree", "ccomp"), "engineer_visible": False},
+        "inner_target_width": {"minimum": 1}, "inner_width_tolerance": {"minimum": 0},
+        "inner_target_height": {"minimum": 1}, "inner_height_tolerance": {"minimum": 0},
+        "max_edge_gap": {"minimum": 0}, "roi_inset_px": {"minimum": 0},
+    })
 
     def preprocess(self, image):
         return image if self.gpu_active else self.shared_gray(image)

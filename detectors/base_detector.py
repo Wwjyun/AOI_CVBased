@@ -23,6 +23,7 @@ class BaseDetector:
     detector_name = ""
     display_name = ""
     default_params: dict = {}
+    PARAM_SPEC: dict = {}
 
     def __init__(self, display_name: str | None = None, params: dict | None = None, use_gpu: bool = False, gpu_runtime=None):
         self.display_name = display_name or self.display_name or self.detector_name

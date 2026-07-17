@@ -1,0 +1,18 @@
+# Windows x64 / CPython 3.13 lock used by CI, RTX validation, and packaging.
+altgraph==0.17.5
+hypothesis==6.156.6
+numpy==2.4.6
+opencv-python==4.13.0.92
+packaging==26.2
+pefile==2024.8.26
+Pillow==12.2.0
+PyInstaller==6.21.0
+pyinstaller-hooks-contrib==2026.6
+PySide6==6.11.1
+PySide6_Addons==6.11.1
+PySide6_Essentials==6.11.1
+pywin32-ctypes==0.2.3
+PyYAML==6.0.3
+setuptools==82.0.1
+shiboken6==6.11.1
+sortedcontainers==2.4.0

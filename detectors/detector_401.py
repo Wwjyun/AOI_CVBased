@@ -5,6 +5,7 @@ import numpy as np
 import time
 
 from core.preprocess_plan import AdaptiveMean, Gaussian, Gray, Morphology, PreprocessPlan
+from core.parameter_schema import specs_from_defaults
 from detectors.base_detector import BaseDetector
 
 
@@ -26,6 +27,20 @@ class Detector401(BaseDetector):
         "min_area": 25,
         "max_area": 10000,
     }
+    PARAM_SPEC = specs_from_defaults(default_params, {
+        "roi_inset_px": {"minimum": 0},
+        "blur_size": {"minimum": 3, "odd": True, "engineer_visible": False},
+        "morph_operation": {"choices": ("none", "open", "close", "erode", "dilate"), "engineer_visible": False},
+        "morph_kernel": {"minimum": 1, "odd": True, "engineer_visible": False},
+        "morph_iterations": {"minimum": 0, "engineer_visible": False},
+        "adaptive_block_size": {"minimum": 3, "odd": True, "engineer_visible": False},
+        "adaptive_c": {"engineer_visible": False},
+        "binary_inv": {"engineer_visible": False},
+        "max_value": {"minimum": 1, "maximum": 255, "engineer_visible": False},
+        "contour_mode": {"choices": ("external", "list", "tree", "ccomp"), "engineer_visible": False},
+        "min_area": {"minimum": 0},
+        "max_area": {"minimum": 0},
+    })
 
     def preprocess(self, image):
         return image

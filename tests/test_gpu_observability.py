@@ -1253,7 +1253,7 @@ class CpuFallbackRegressionTests(unittest.TestCase):
     @staticmethod
     def _normalized(result: dict) -> dict:
         normalized = deepcopy(result)
-        for key in ("duration_sec", "outputs", "execution"):
+        for key in ("duration_sec", "outputs", "execution", "provenance"):
             normalized.pop(key, None)
         for tile_result in normalized["tiles"]:
             for detector_result in tile_result["detectors"]:

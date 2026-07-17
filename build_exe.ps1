@@ -19,11 +19,18 @@ if (Test-Path $cudaDll) {
 
 Push-Location $PSScriptRoot
 try {
+    $commit = (& git rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0) { throw "Unable to resolve build commit" }
+    $dirty = [bool](& git status --porcelain --untracked-files=no)
+    @{ commit = $commit; dirty = $dirty } |
+        ConvertTo-Json |
+        Set-Content -Encoding utf8 (Join-Path $PSScriptRoot "build_provenance.json")
     & $python -m PyInstaller --noconfirm --clean $spec
     if ($LASTEXITCODE -ne 0) {
         throw "PyInstaller failed with exit code $LASTEXITCODE"
     }
 } finally {
+    Remove-Item -Force -ErrorAction SilentlyContinue (Join-Path $PSScriptRoot "build_provenance.json")
     Pop-Location
 }
 

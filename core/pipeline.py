@@ -12,6 +12,7 @@ from core.gpu_session import GpuExecutionSession
 from core.logging_system import LogMixin
 from core.performance import PipelineProfiler
 from core.preprocess_cache import TilePreprocessCache
+from core.provenance import inspection_provenance
 from core.recipe_manager import RecipeManager
 from core.recipe_builder import RecipeTemplatePathSync
 from core.reporter import Reporter
@@ -64,6 +65,7 @@ class AOIPipeline(LogMixin):
             if self.output_overrides:
                 recipe["output"] = {**recipe.get("output", {}), **self.output_overrides}
             recipe = RecipeTemplatePathSync.from_recipe(recipe).apply(recipe)
+            provenance = inspection_provenance(self.recipe_path, recipe)
             gpu_config = recipe.get("gpu", {}) or {}
             detector_configs = self.recipe_manager.enabled_detectors(recipe)
             gpu_mode = self.recipe_manager.gpu_mode(gpu_config)
@@ -214,6 +216,7 @@ class AOIPipeline(LogMixin):
             "machine_id": recipe["machine_id"],
             "product_id": recipe["product_id"],
             "recipe_version": recipe["version"],
+            "provenance": provenance,
             "final_result": aggregate["final_result"],
             "summary": aggregate["summary"],
             "tiles": tile_results,

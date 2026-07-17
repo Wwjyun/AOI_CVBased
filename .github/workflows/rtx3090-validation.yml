@@ -19,13 +19,13 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.12"
+          python-version: "3.13"
           cache: pip
       - name: Prepare isolated environment
         shell: pwsh
         run: |
           python -m venv env
-          .\env\Scripts\python.exe -m pip install -r requirements.txt
+          .\env\Scripts\python.exe -m pip install -r requirements.lock.txt
       - name: Record GPU toolchain
         shell: pwsh
         run: |
@@ -42,6 +42,12 @@ jobs:
       - name: Native ABI smoke
         shell: pwsh
         run: .\gpu\test_cuda_api.exe
+      - name: Restore accepted RTX benchmark baseline
+        id: baseline
+        uses: actions/cache/restore@v4
+        with:
+          path: outputs_validation/baseline
+          key: rtx3090-benchmark-baseline-v1
       - name: Equivalence and benchmark
         shell: pwsh
         run: |
@@ -60,6 +66,26 @@ jobs:
           }
           & .\env\Scripts\python.exe @arguments
           if ($LASTEXITCODE -ne 0) { throw "CUDA validator failed with exit code $LASTEXITCODE" }
+      - name: Gate benchmark P95 regression
+        shell: pwsh
+        run: |
+          $baseline = "outputs_validation\baseline\rtx3090_benchmark.json"
+          if (-not (Test-Path $baseline)) {
+            New-Item -ItemType Directory -Force (Split-Path $baseline) | Out-Null
+            Copy-Item outputs_validation\rtx3090_benchmark.json $baseline
+            "Baseline initialized from this successful validation run."
+            exit 0
+          }
+          .\env\Scripts\python.exe gpu\benchmark_gate.py `
+            --current outputs_validation\rtx3090_benchmark.json `
+            --baseline $baseline --max-regression 0.15
+          if ($LASTEXITCODE -ne 0) { throw "RTX benchmark P95 regression exceeded 15%" }
+      - name: Save initial RTX benchmark baseline
+        if: steps.baseline.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: outputs_validation/baseline
+          key: rtx3090-benchmark-baseline-v1
       - name: Capture Nsight Systems smoke profile
         shell: pwsh
         run: |

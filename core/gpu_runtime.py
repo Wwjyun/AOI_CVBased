@@ -8,80 +8,12 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-
-
-class _VfPlanOperatorV1(ctypes.Structure):
-    _fields_ = [
-        ("struct_size", ctypes.c_uint32),
-        ("kind", ctypes.c_int32),
-        ("input_node", ctypes.c_int32),
-        ("output_node", ctypes.c_int32),
-        ("int_params", ctypes.c_int32 * 4),
-        ("float_params", ctypes.c_float * 2),
-    ]
-
-
-class _VfPlanDescV1(ctypes.Structure):
-    _fields_ = [
-        ("struct_size", ctypes.c_uint32),
-        ("version", ctypes.c_uint32),
-        ("input_channels", ctypes.c_int32),
-        ("operator_count", ctypes.c_int32),
-        ("operators", ctypes.POINTER(_VfPlanOperatorV1)),
-        ("output_node", ctypes.c_int32),
-    ]
-
-
-class _VfDagPlanDescV1(ctypes.Structure):
-    _fields_ = [
-        ("struct_size", ctypes.c_uint32),
-        ("version", ctypes.c_uint32),
-        ("input_channels", ctypes.c_int32),
-        ("operator_count", ctypes.c_int32),
-        ("operators", ctypes.POINTER(_VfPlanOperatorV1)),
-        ("output_count", ctypes.c_int32),
-        ("output_nodes", ctypes.POINTER(ctypes.c_int32)),
-    ]
-
-
-class _VfDagOutputV1(ctypes.Structure):
-    _fields_ = [
-        ("struct_size", ctypes.c_uint32),
-        ("node", ctypes.c_int32),
-        ("data", ctypes.POINTER(ctypes.c_uint8)),
-        ("stride", ctypes.c_int32),
-        ("channels", ctypes.c_int32),
-    ]
-
-
-class _VfRoiV1(ctypes.Structure):
-    _fields_ = [
-        ("struct_size", ctypes.c_uint32),
-        ("x", ctypes.c_int32),
-        ("y", ctypes.c_int32),
-        ("width", ctypes.c_int32),
-        ("height", ctypes.c_int32),
-    ]
-
-
-class _VfCudaTimingsV1(ctypes.Structure):
-    _fields_ = [
-        ("struct_size", ctypes.c_uint32),
-        ("version", ctypes.c_uint32),
-        ("context_create_ms", ctypes.c_float),
-        ("allocation_ms", ctypes.c_float),
-        ("h2d_ms", ctypes.c_float),
-        ("device_copy_ms", ctypes.c_float),
-        ("kernel_ms", ctypes.c_float),
-        ("d2h_ms", ctypes.c_float),
-        ("synchronize_ms", ctypes.c_float),
-        ("free_ms", ctypes.c_float),
-        ("gaussian_ms", ctypes.c_float),
-        ("adaptive_integral_ms", ctypes.c_float),
-        ("threshold_ms", ctypes.c_float),
-        ("morphology_ms", ctypes.c_float),
-        ("total_device_ms", ctypes.c_float),
-    ]
+from core.gpu_abi import (
+    VfCudaTimingsV1 as _VfCudaTimingsV1, VfDagOutputV1 as _VfDagOutputV1,
+    VfDagPlanDescV1 as _VfDagPlanDescV1, VfPlanDescV1 as _VfPlanDescV1,
+    VfPlanOperatorV1 as _VfPlanOperatorV1, VfRoiV1 as _VfRoiV1,
+)
+from core.gpu_metrics import GpuPerformanceRecorder
 
 
 class GpuRuntimeError(RuntimeError):
@@ -190,16 +122,8 @@ class GpuRuntime:
         self.fused_unavailable_reason = ""
         self.native_plan_unavailable_reason = ""
         self.native_dag_plan_unavailable_reason = ""
-        self._performance = {
-            "load_sec": 0.0,
-            "call_count": 0,
-            "estimated_round_trips": 0,
-            "host_to_device_bytes": 0,
-            "device_to_host_bytes": 0,
-            "wall_sec": 0.0,
-            "lock_wait_sec": 0.0,
-            "functions": {},
-        }
+        self._performance_recorder = GpuPerformanceRecorder()
+        self._performance = self._performance_recorder.values
         if enabled:
             self._load()
             self._performance["load_sec"] = time.perf_counter() - load_started
@@ -289,29 +213,14 @@ class GpuRuntime:
         with self._lock:
             context_stats = self._context_stats_unlocked()
             native_timings = self._native_timings_unlocked()
-            functions = {
-                name: {
-                    "calls": int(values["calls"]),
-                    "host_to_device_bytes": int(values["host_to_device_bytes"]),
-                    "device_to_host_bytes": int(values["device_to_host_bytes"]),
-                    "wall_sec": round(float(values["wall_sec"]), 6),
-                    "lock_wait_sec": round(float(values["lock_wait_sec"]), 6),
-                }
-                for name, values in sorted(self._performance["functions"].items())
-            }
+            metrics = self._performance_recorder.snapshot()
             return {
                 "measurement_scope": "host_wrapper_and_optional_cuda_events",
                 "note": "Native timings describe the most recent persistent-context operation when the DLL exports them.",
-                "load_sec": round(float(self._performance["load_sec"]), 6),
-                "call_count": int(self._performance["call_count"]),
-                "estimated_round_trips": int(self._performance["estimated_round_trips"]),
-                "host_to_device_bytes": int(self._performance["host_to_device_bytes"]),
-                "device_to_host_bytes": int(self._performance["device_to_host_bytes"]),
-                "wall_sec": round(float(self._performance["wall_sec"]), 6),
-                "lock_wait_sec": round(float(self._performance["lock_wait_sec"]), 6),
+                **{key: value for key, value in metrics.items() if key != "functions"},
                 "persistent_context": context_stats,
                 "native_timings_ms": native_timings,
-                "functions": functions,
+                "functions": metrics["functions"],
             }
 
     def crop(self, image: np.ndarray, x: int, y: int, width: int, height: int) -> np.ndarray:
@@ -1239,28 +1148,9 @@ class GpuRuntime:
         wall_sec: float,
         lock_wait_sec: float,
     ) -> None:
-        functions = self._performance["functions"]
-        values = functions.setdefault(
-            function_name,
-            {
-                "calls": 0,
-                "host_to_device_bytes": 0,
-                "device_to_host_bytes": 0,
-                "wall_sec": 0.0,
-                "lock_wait_sec": 0.0,
-            },
+        self._performance_recorder.record(
+            function_name, host_to_device_bytes, device_to_host_bytes, wall_sec, lock_wait_sec
         )
-        values["calls"] += 1
-        values["host_to_device_bytes"] += host_to_device_bytes
-        values["device_to_host_bytes"] += device_to_host_bytes
-        values["wall_sec"] += wall_sec
-        values["lock_wait_sec"] += lock_wait_sec
-        self._performance["call_count"] += 1
-        self._performance["estimated_round_trips"] += 1
-        self._performance["host_to_device_bytes"] += host_to_device_bytes
-        self._performance["device_to_host_bytes"] += device_to_host_bytes
-        self._performance["wall_sec"] += wall_sec
-        self._performance["lock_wait_sec"] += lock_wait_sec
 
     def _error_message(self, error_code: int) -> str:
         function = getattr(self._dll, "vf_gpu_error_message", None)

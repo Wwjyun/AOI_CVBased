@@ -559,11 +559,12 @@ class DesignerScreen(QWidget):
             self._gpu_enabled[detector_id] = bool(config.get("use_gpu", False))
             values = deepcopy(self.detector_definitions[detector_id]["default_params"])
             values.update(config.get("params", {}) or {})
+            param_spec = self.detector_definitions[detector_id].get("param_spec", {})
             widgets = self._param_widgets.setdefault(detector_id, {})
             for key, value in values.items():
                 widget = widgets.get(key)
                 if widget is None:
-                    widget = make_param_widget(value)
+                    widget = make_param_widget(value, spec=param_spec.get(key))
                     widgets[key] = widget
                 else:
                     _set_widget_value(widget, value)
@@ -753,12 +754,14 @@ class DesignerScreen(QWidget):
 
         self._clear_param_form()
         widgets = self._param_widgets.setdefault(detector_id, {})
+        param_spec = definition.get("param_spec", {})
         for key, default_value in self._param_values_for_detector(detector_id).items():
-            if self.mode == "eng" and not _is_engineer_visible_param(key):
+            visible = param_spec.get(key, {}).get("engineer_visible", _is_engineer_visible_param(key))
+            if self.mode == "eng" and not visible:
                 continue
             widget = widgets.get(key)
             if widget is None:
-                widget = make_param_widget(default_value)
+                widget = make_param_widget(default_value, spec=param_spec.get(key))
                 widgets[key] = widget
             self.param_form.addRow(_label(key, mono=True), widget)
 

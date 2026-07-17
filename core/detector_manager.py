@@ -50,6 +50,15 @@ class DetectorManager:
                 "display_name": detector_cls.display_name,
                 "detector_name": detector_cls.detector_name,
                 "default_params": deepcopy(detector_cls.default_params),
+                "param_spec": {
+                    key: spec.to_dict() for key, spec in detector_cls.PARAM_SPEC.items()
+                },
             }
             for detector_id, detector_cls in self._registry.items()
         }
+
+    def parameter_specs(self, detector_id: str):
+        detector_cls = self._registry.get(str(detector_id))
+        if detector_cls is None:
+            raise KeyError(f"Detector is not registered: {detector_id}")
+        return detector_cls.PARAM_SPEC
