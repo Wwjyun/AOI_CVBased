@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from collections.abc import Callable, Hashable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 from typing import TypeAlias
 
@@ -205,6 +205,52 @@ class PreprocessPlan:
         return output
 
 
+@dataclass(frozen=True, slots=True)
+class PreprocessDagNode:
+    name: str
+    input_name: str
+    operator: PreprocessOperator
+
+
+@dataclass(frozen=True, slots=True)
+class PreprocessDagPlan:
+    nodes: tuple[PreprocessDagNode, ...]
+    outputs: tuple[str, ...]
+    name: str = ""
+    _node_plans: tuple[PreprocessPlan, ...] = field(init=False, repr=False, compare=False)
+
+    SCHEMA_VERSION = 1
+
+    def __post_init__(self) -> None:
+        available = {"root"}
+        for node in self.nodes:
+            if not node.name or node.name in available:
+                raise InvalidPreprocessPlan(f"Duplicate or empty DAG node name: {node.name}")
+            if node.input_name not in available:
+                raise InvalidPreprocessPlan(f"DAG input is not available before node {node.name}: {node.input_name}")
+            _validate_operator(node.operator)
+            available.add(node.name)
+        if not self.outputs or any(output not in available for output in self.outputs):
+            raise InvalidPreprocessPlan("DAG outputs must reference existing nodes")
+        object.__setattr__(
+            self,
+            "_node_plans",
+            tuple(PreprocessPlan((node.operator,), name=node.name) for node in self.nodes),
+        )
+
+    @property
+    def signature(self) -> tuple:
+        return (
+            self.SCHEMA_VERSION,
+            tuple((node.name, node.input_name, operator_signature(node.operator)) for node in self.nodes),
+            self.outputs,
+        )
+
+    @property
+    def node_plans(self) -> tuple[PreprocessPlan, ...]:
+        return self._node_plans
+
+
 class PreprocessPlanCache:
     """Small per-detector LRU cache for immutable, shape-aware preprocessing plans."""
 
@@ -212,14 +258,14 @@ class PreprocessPlanCache:
         if max_entries <= 0:
             raise ValueError("Preprocess plan cache size must be positive")
         self.max_entries = int(max_entries)
-        self._plans: OrderedDict[tuple, PreprocessPlan] = OrderedDict()
+        self._plans: OrderedDict[tuple, PreprocessPlan | PreprocessDagPlan] = OrderedDict()
 
     def get_or_create(
         self,
         image: np.ndarray,
         signature: Hashable,
-        factory: Callable[[], PreprocessPlan],
-    ) -> PreprocessPlan:
+        factory: Callable[[], PreprocessPlan | PreprocessDagPlan],
+    ) -> PreprocessPlan | PreprocessDagPlan:
         source = np.asarray(image)
         key = (tuple(int(value) for value in source.shape), source.dtype.str, signature)
         cached = self._plans.get(key)
@@ -228,8 +274,8 @@ class PreprocessPlanCache:
             return cached
 
         plan = factory()
-        if not isinstance(plan, PreprocessPlan):
-            raise TypeError("Preprocess plan cache factory must return PreprocessPlan")
+        if not isinstance(plan, (PreprocessPlan, PreprocessDagPlan)):
+            raise TypeError("Preprocess plan cache factory must return a supported preprocess plan")
         self._plans[key] = plan
         if len(self._plans) > self.max_entries:
             self._plans.popitem(last=False)
@@ -316,6 +362,31 @@ class CpuPreprocessExecutor:
         if cv_operation == cv2.MORPH_ERODE:
             return cv2.erode(image, kernel, iterations=operator.iterations)
         return cv2.morphologyEx(image, cv_operation, kernel, iterations=operator.iterations)
+
+
+class CpuPreprocessDagExecutor:
+    """Reference executor for topologically ordered single-input, multi-output DAG plans."""
+
+    def __init__(self) -> None:
+        self._linear_executor = CpuPreprocessExecutor()
+
+    def execute(self, image: np.ndarray, plan: PreprocessDagPlan) -> dict[str, np.ndarray]:
+        values = {"root": image}
+        for node, node_plan in zip(plan.nodes, plan.node_plans):
+            values[node.name] = self._linear_executor.execute(
+                values[node.input_name], node_plan
+            )
+        return {name: values[name] for name in plan.outputs}
+
+    @staticmethod
+    def capability_report(plan: PreprocessDagPlan) -> PreprocessCapabilityReport:
+        return PreprocessCapabilityReport(
+            requested_backend="cpu",
+            selected_backend="cpu",
+            route="cpu",
+            reason="CPU OpenCV DAG reference executor selected",
+            plan_signature=plan.signature,
+        )
 
 
 class CudaPreprocessExecutor:

@@ -15,12 +15,15 @@ from core.pipeline import AOIPipeline
 from core.preprocess_plan import (
     AdaptiveMean,
     CpuPreprocessExecutor,
+    CpuPreprocessDagExecutor,
     CudaPreprocessExecutor,
     Gaussian,
     Gray,
     InvalidPreprocessPlan,
     Morphology,
     PreprocessPlan,
+    PreprocessDagNode,
+    PreprocessDagPlan,
     PreprocessPlanCache,
     Resize,
     Threshold,
@@ -402,6 +405,28 @@ class PreprocessPlanTests(unittest.TestCase):
         with self.assertRaisesRegex(InvalidPreprocessPlan, "output shape"):
             CudaPreprocessExecutor(BadShapeRuntime()).execute(
                 np.zeros((4, 5, 3), dtype=np.uint8), PreprocessPlan((Gray(),))
+            )
+
+    def test_cpu_dag_validates_topology_and_returns_named_outputs(self):
+        plan = PreprocessDagPlan(
+            nodes=(
+                PreprocessDagNode("gray", "root", Gray()),
+                PreprocessDagNode("dark", "gray", Threshold(127, invert=True)),
+                PreprocessDagNode("light", "gray", Threshold(127, invert=False)),
+            ),
+            outputs=("dark", "light"),
+        )
+        image = np.zeros((4, 5, 3), dtype=np.uint8)
+
+        outputs = CpuPreprocessDagExecutor().execute(image, plan)
+
+        self.assertEqual(tuple(outputs), ("dark", "light"))
+        self.assertTrue(np.all(outputs["dark"] == 255))
+        self.assertTrue(np.all(outputs["light"] == 0))
+        with self.assertRaisesRegex(InvalidPreprocessPlan, "not available"):
+            PreprocessDagPlan(
+                nodes=(PreprocessDagNode("late", "missing", Gray()),),
+                outputs=("late",),
             )
 
 

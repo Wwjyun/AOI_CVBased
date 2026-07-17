@@ -71,7 +71,8 @@
 - [ ] 通用 native plan 達成一次 H2D、連續 kernels、最後一次必要 D2H。
 - [ ] 加入 plan capability query；任一 operator 不支援時整份 plan CPU fallback，避免反覆 CPU/GPU 傳輸。
 - [ ] 實作與 OpenCV 等價的 `INTER_AREA` resize 後，才開放 CUDA Resize(area)。
-- [ ] 線性 plan 穩定後擴充 DAG/multi-output，支援一份 gray 產生多張 masks。
+- [x] Python/CPU plan 擴充 topologically ordered DAG/multi-output，支援一份 gray 產生多張 masks。
+- [ ] CUDA/native plan 擴充 DAG/multi-output，讓 device gray 直接產生多張 masks。
 
 ## P2：CUDA kernels 與資源生命週期
 
@@ -109,7 +110,8 @@
 - [x] 401-1 遷移到 cached 共用 plan：Gray → Resize(area) → Gaussian → AdaptiveMean → Morphology；CUDA 無法保持 area 語意時整個 detector CPU fallback。
 - [x] 401 遷移到 cached 共用 plan，保留 BGR Gaussian → Morphology → Gray → AdaptiveMean、threshold 與 contour 語意。
 - [x] 401-2 preprocessing 已遷移到共用 plan，並保留 fused/legacy/CPU 路徑。
-- [ ] 900 遷移成 DAG plan，共用 device gray 產生 outer global 與 inner adaptive masks。
+- [x] 900 遷移成 cached CPU DAG plan，共用一次 gray 產生 outer global 與 inner adaptive masks。
+- [ ] 900 DAG 接上 CUDA/native executor，共用 device gray 並只下載必要 masks。
 - [ ] 401/401-1/401-2 的 `findContours` 與少量幾何分析暫留 CPU，只下載 binary mask。
 - [ ] 401-2 contour mask 改為局部 bbox mask，避免每個 contour 配置整張 ROI mask。
 - [ ] 評估 401-2 white-pixel reduction 移至 GPU，只下載統計值與必要 mask。
@@ -235,3 +237,4 @@
 - [x] 2026-07-17：加入 preprocess capability report，記錄 requested/selected backend、fused/primitive/CPU/fallback route、原因、plan signature 與不支援項目，並帶入 detector execution metadata。
 - [x] 2026-07-17：將 401-1 遷移到 cached shared plan（Gray/Resize area/Gaussian/AdaptiveMean/Morphology），保留 process scale、ROI、contour 與 metadata 語意，area 不支援時維持 full-detector CPU fallback。
 - [x] 2026-07-17：將 401 遷移到 cached shared plan，保留 BGR Gaussian/Morphology 後轉 Gray/AdaptiveMean 的既有逐像素順序，以及 ROI、contour、座標、排序與 metadata 語意。
+- [x] 2026-07-17：新增 CPU DAG/multi-output plan/executor，900 改以 cached DAG 共用一次 Gray 產生 outer Threshold 與 inner AdaptiveMean masks；CUDA DAG/device gray 另列待辦。

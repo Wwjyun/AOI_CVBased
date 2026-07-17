@@ -3,6 +3,13 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+from core.preprocess_plan import (
+    AdaptiveMean,
+    Gray,
+    PreprocessDagNode,
+    PreprocessDagPlan,
+    Threshold,
+)
 from detectors.base_detector import BaseDetector
 
 
@@ -32,14 +39,13 @@ class Detector900(BaseDetector):
     }
 
     def preprocess(self, image):
-        if self.gpu_active and image.ndim == 3:
-            return self.gpu_runtime.bgr_to_gray(image)
-        return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image.copy()
+        return image.copy()
 
     def detect(self, image) -> list[dict]:
         roi, offset_x, offset_y = self._roi_image(image)
-        outer_mask = self._make_outer_binary(roi)
-        inner_mask = self._make_inner_binary(roi)
+        masks = self._make_masks(roi)
+        outer_mask = masks["outer_mask"]
+        inner_mask = masks["inner_mask"]
 
         outer_all_candidates = self._collect_candidates(
             outer_mask,
@@ -137,53 +143,60 @@ class Detector900(BaseDetector):
             }
         ]
 
-    def _roi_image(self, gray):
+    def _roi_image(self, image):
         inset = max(0, int(self.params.get("roi_inset_px", 0)))
         if inset <= 0:
-            return gray, 0, 0
+            return image, 0, 0
 
-        height, width = gray.shape[:2]
+        height, width = image.shape[:2]
         if width <= inset * 2 or height <= inset * 2:
-            return gray, 0, 0
+            return image, 0, 0
 
-        return gray[inset : height - inset, inset : width - inset], inset, inset
+        return image[inset : height - inset, inset : width - inset], inset, inset
 
-    def _make_outer_binary(self, gray):
-        if self.gpu_active:
-            return self.gpu_runtime.threshold(
-                gray,
-                int(self.params.get("outer_threshold", 160)),
-                int(self.params.get("max_value", 255)),
-                bool(self.params.get("outer_invert", False)),
-            )
-        threshold_type = cv2.THRESH_BINARY_INV if self.params.get("outer_invert", False) else cv2.THRESH_BINARY
-        _, binary = cv2.threshold(
-            gray,
-            int(self.params.get("outer_threshold", 160)),
-            int(self.params.get("max_value", 255)),
-            threshold_type,
-        )
-        return binary
-
-    def _make_inner_binary(self, gray):
+    def _make_masks(self, image) -> dict[str, np.ndarray]:
         block_size = self._odd_at_least(int(self.params.get("inner_adaptive_block_size", 11)), 3)
-        if self.gpu_active:
-            return self.gpu_runtime.adaptive_threshold(
-                gray,
-                block_size,
-                float(self.params.get("inner_adaptive_c", 0.0)),
-                int(self.params.get("max_value", 255)),
-                bool(self.params.get("inner_invert", False)),
-            )
-        threshold_type = cv2.THRESH_BINARY_INV if self.params.get("inner_invert", False) else cv2.THRESH_BINARY
-        return cv2.adaptiveThreshold(
-            gray,
-            int(self.params.get("max_value", 255)),
-            cv2.ADAPTIVE_THRESH_MEAN_C,
-            threshold_type,
+        max_value = int(self.params.get("max_value", 255))
+        signature = (
+            "900_dual_masks",
+            int(self.params.get("outer_threshold", 160)),
+            bool(self.params.get("outer_invert", False)),
             block_size,
             float(self.params.get("inner_adaptive_c", 0.0)),
+            bool(self.params.get("inner_invert", False)),
+            max_value,
         )
+        plan = self.cached_preprocess_plan(
+            image,
+            signature,
+            lambda: PreprocessDagPlan(
+                name="900_shared_gray_dual_masks",
+                nodes=(
+                    PreprocessDagNode("gray", "root", Gray()),
+                    PreprocessDagNode(
+                        "outer_mask",
+                        "gray",
+                        Threshold(
+                            int(self.params.get("outer_threshold", 160)),
+                            max_value,
+                            bool(self.params.get("outer_invert", False)),
+                        ),
+                    ),
+                    PreprocessDagNode(
+                        "inner_mask",
+                        "gray",
+                        AdaptiveMean(
+                            block_size,
+                            float(self.params.get("inner_adaptive_c", 0.0)),
+                            max_value,
+                            bool(self.params.get("inner_invert", False)),
+                        ),
+                    ),
+                ),
+                outputs=("outer_mask", "inner_mask"),
+            ),
+        )
+        return self.execute_preprocess_dag(image, plan)
 
     def _collect_candidates(
         self,

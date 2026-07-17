@@ -4,8 +4,10 @@ from copy import deepcopy
 
 from core.preprocess_plan import (
     CpuPreprocessExecutor,
+    CpuPreprocessDagExecutor,
     CudaPreprocessExecutor,
     PreprocessPlan,
+    PreprocessDagPlan,
     PreprocessPlanCache,
 )
 
@@ -26,6 +28,7 @@ class BaseDetector:
         if self.use_gpu and (gpu_runtime is None or not gpu_runtime.available):
             self.gpu_fallback_reason = getattr(gpu_runtime, "unavailable_reason", "CUDA runtime was not created")
         self._cpu_preprocess_executor = CpuPreprocessExecutor()
+        self._cpu_preprocess_dag_executor = CpuPreprocessDagExecutor()
         self._cuda_preprocess_executor = CudaPreprocessExecutor(gpu_runtime) if gpu_runtime is not None else None
         self._preprocess_plan_cache = PreprocessPlanCache()
         self.last_preprocess_capability: dict = {}
@@ -57,8 +60,22 @@ class BaseDetector:
         self.last_preprocess_capability = report
         return self._cpu_preprocess_executor.execute(image, plan)
 
-    def cached_preprocess_plan(self, image, signature, factory) -> PreprocessPlan:
+    def cached_preprocess_plan(self, image, signature, factory) -> PreprocessPlan | PreprocessDagPlan:
         return self._preprocess_plan_cache.get_or_create(image, signature, factory)
+
+    def execute_preprocess_dag(self, image, plan: PreprocessDagPlan) -> dict:
+        if self.gpu_active:
+            raise RuntimeError("CUDA DAG executor is not available; full detector CPU fallback required")
+        report = self._cpu_preprocess_dag_executor.capability_report(plan).to_dict()
+        if self.use_gpu and self.gpu_fallback_reason:
+            report.update(
+                requested_backend="cuda",
+                selected_backend="cpu",
+                route="fallback",
+                reason=self.gpu_fallback_reason,
+            )
+        self.last_preprocess_capability = report
+        return self._cpu_preprocess_dag_executor.execute(image, plan)
 
     @property
     def preprocess_plan_cache_size(self) -> int:

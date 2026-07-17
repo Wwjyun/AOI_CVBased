@@ -7,6 +7,7 @@ import numpy as np
 
 from detectors.detector_401 import Detector401
 from detectors.detector_401_1 import Detector401_1
+from detectors.detector_900 import Detector900
 
 
 class _AreaUnsupportedRuntime:
@@ -45,6 +46,12 @@ class _Failing401Runtime:
         return cv2.adaptiveThreshold(
             image, max_value, cv2.ADAPTIVE_THRESH_MEAN_C, threshold_type, block_size, c
         )
+
+
+class _AvailableRuntimeWithoutDag:
+    available = True
+    unavailable_reason = ""
+    supports_fused_401_2 = False
 
 
 class Detector4011PlanMigrationTests(unittest.TestCase):
@@ -194,6 +201,67 @@ class Detector401PlanMigrationTests(unittest.TestCase):
         self.assertEqual(execution["backend"], "cpu")
         self.assertEqual(execution["preprocess_capability"]["route"], "fallback")
         self.assertIn("injected 401 morphology failure", execution["fallback_reason"])
+
+
+class Detector900DagMigrationTests(unittest.TestCase):
+    @staticmethod
+    def _params() -> dict:
+        return {
+            "max_value": 255,
+            "outer_threshold": 123,
+            "outer_invert": True,
+            "inner_adaptive_block_size": 6,
+            "inner_adaptive_c": -1.25,
+            "inner_invert": False,
+            "roi_inset_px": 2,
+            "outer_target_width": 40,
+            "outer_width_tolerance": 40,
+            "outer_target_height": 40,
+            "outer_height_tolerance": 40,
+            "inner_target_width": 30,
+            "inner_width_tolerance": 30,
+            "inner_target_height": 30,
+            "inner_height_tolerance": 30,
+        }
+
+    def test_cpu_dag_shares_gray_and_matches_legacy_masks(self):
+        image = np.random.default_rng(900).integers(0, 256, size=(71, 83, 3), dtype=np.uint8)
+        detector = Detector900(params=self._params())
+
+        masks = detector._make_masks(image)
+        gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+        expected_outer = cv2.threshold(gray, 123, 255, cv2.THRESH_BINARY_INV)[1]
+        expected_inner = cv2.adaptiveThreshold(
+            gray, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY, 7, -1.25
+        )
+
+        np.testing.assert_array_equal(masks["outer_mask"], expected_outer)
+        np.testing.assert_array_equal(masks["inner_mask"], expected_inner)
+        self.assertEqual(detector.last_preprocess_capability["route"], "cpu")
+        self.assertEqual(detector.preprocess_plan_cache_size, 1)
+        detector._make_masks(image.copy())
+        self.assertEqual(detector.preprocess_plan_cache_size, 1)
+        detector.params["outer_threshold"] = 124
+        detector._make_masks(image)
+        self.assertEqual(detector.preprocess_plan_cache_size, 2)
+
+    def test_missing_cuda_dag_restarts_full_detector_on_cpu(self):
+        image = np.random.default_rng(901).integers(0, 256, size=(72, 84, 3), dtype=np.uint8)
+        params = self._params()
+        cpu_result = Detector900(params=params).run(image)
+
+        fallback_result = Detector900(
+            params=params,
+            use_gpu=True,
+            gpu_runtime=_AvailableRuntimeWithoutDag(),
+        ).run(image)
+
+        self.assertEqual(fallback_result["defects"], cpu_result["defects"])
+        self.assertEqual(fallback_result["pass"], cpu_result["pass"])
+        execution = fallback_result["execution"]
+        self.assertEqual(execution["backend"], "cpu")
+        self.assertEqual(execution["preprocess_capability"]["route"], "fallback")
+        self.assertIn("CUDA DAG executor is not available", execution["fallback_reason"])
 
 
 if __name__ == "__main__":
