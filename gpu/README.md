@@ -2,7 +2,9 @@
 
 ## Preprocessing architecture
 
-Detectors must describe preprocessing with the backend-neutral operators in `core/preprocess_plan.py`. The CPU executor defines OpenCV fallback semantics; the CUDA executor may use reusable primitives or a compatible fused adapter. New detectors should compose existing operators instead of adding detector-named DLL exports. The planned native direction is a versioned generic plan ABI with persistent context buffers and one upload/download per supported plan.
+Detectors must describe preprocessing with the backend-neutral operators in `core/preprocess_plan.py`. The CPU executor defines OpenCV fallback semantics; the CUDA executor may use the generic native plan, reusable primitives, or a compatible fused adapter. New detectors should compose existing operators instead of adding detector-named DLL exports.
+
+The optional versioned `VfPlanDescV1` ABI supports detector-neutral linear Gray, Gaussian, Threshold, AdaptiveMean and Morphology graphs. `vf_plan_query/create/execute/destroy` validate and compile a complete graph before execution. A supported plan uses persistent context buffers, one host-to-device upload, continuous kernels, and one necessary device-to-host download. An unsupported operator rejects the whole plan before any CUDA primitive executes.
 
 `vf_preprocess_401_2_u8` remains an additive ABI v1 compatibility adapter. It is not the template for future detector APIs.
 
@@ -10,7 +12,7 @@ Detectors must describe preprocessing with the backend-neutral operators in `cor
 
 目前 Gaussian blur 使用 horizontal/vertical separable kernels 與 constant weights；Adaptive Mean Threshold 使用 replicate-border 64-bit integral image。公開 C ABI 維持 v1，因此 Python bridge 與既有打包版介面不需修改，但更新原始碼後必須重新編譯 DLL。
 
-新版 DLL 另外提供可選的 persistent context exports。Detector 401-2 會在 capability 可用時，以一次同步呼叫完成 BGR/gray、Gaussian 與 Integral Adaptive Threshold；context buffers 只在容量不足時成長。Python bridge 若載入舊 DLL，會自動保留原本 stateless primitive 路徑。
+新版 DLL 另外提供可選的 persistent context 與 generic plan exports。支援的 linear plan 會重用 grow-only buffers，並把中間影像保留在 GPU。Detector 401-2 的 fused export 繼續作為舊 DLL compatibility adapter；Python bridge 若載入舊 DLL，會自動保留 fused、stateless primitive 或 CPU fallback 路徑。
 
 ## 檔案
 

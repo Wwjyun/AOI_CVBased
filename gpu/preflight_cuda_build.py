@@ -39,6 +39,12 @@ REQUIRED_SMOKE_EXPORTS = {
     "vf_gpu_error_message",
     "vf_preprocess_401_2_u8",
 }
+OPTIONAL_GENERIC_PLAN_EXPORTS = {
+    "vf_plan_query",
+    "vf_plan_create",
+    "vf_plan_execute",
+    "vf_plan_destroy",
+}
 CONTRACT_FILES = {
     "header": Path("gpu/include/visionflow_cuda.h"),
     "source": Path("gpu/visionflow_cuda.cu"),
@@ -89,6 +95,16 @@ def inspect_contract(root: Path = ROOT) -> dict:
     missing_runtime = {name for name in REQUIRED_ABI_V1_EXPORTS if name not in texts["runtime"]}
     if missing_runtime:
         errors.append(f"Python runtime does not reference exports: {sorted(missing_runtime)}")
+    declared_plan_exports = OPTIONAL_GENERIC_PLAN_EXPORTS & header_exports
+    if declared_plan_exports and declared_plan_exports != OPTIONAL_GENERIC_PLAN_EXPORTS:
+        errors.append("generic plan ABI exports must be declared as one complete optional set")
+    if declared_plan_exports:
+        missing_plan_smoke = {name for name in OPTIONAL_GENERIC_PLAN_EXPORTS if name not in texts["smoke"]}
+        missing_plan_runtime = {name for name in OPTIONAL_GENERIC_PLAN_EXPORTS if name not in texts["runtime"]}
+        if missing_plan_smoke:
+            errors.append(f"native smoke does not call generic plan exports: {sorted(missing_plan_smoke)}")
+        if missing_plan_runtime:
+            errors.append(f"Python runtime does not reference generic plan exports: {sorted(missing_plan_runtime)}")
     if "visionflow_cuda.cu" not in texts["build"] or "test_cuda_api.cu" not in texts["build"]:
         errors.append("build script is missing an explicit DLL or smoke source manifest")
     if re.search(r"(?:\*\.cu|Get-ChildItem[^\n]*\.cu)", texts["build"], re.IGNORECASE):
@@ -100,6 +116,7 @@ def inspect_contract(root: Path = ROOT) -> dict:
         "schema_version": 1,
         "abi_version": int(abi_match.group(1)),
         "exports": sorted(header_exports),
+        "optional_generic_plan_exports": sorted(declared_plan_exports),
         "dll_sources": ["gpu/visionflow_cuda.cu"],
         "smoke_sources": ["gpu/test_cuda_api.cu"],
         "sha256": {

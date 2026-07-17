@@ -65,12 +65,12 @@
 
 ### Generic native plan ABI
 
-- [ ] 定義 versioned C structs：operator kind、input node、參數、output node；不得包含 detector ID/name。
-- [ ] 新增 optional `vf_plan_create/execute/destroy` exports；ABI v1 primitives 與 401-2 adapter 保持相容。
-- [ ] plan create 階段驗證 operators、channel、shape、參數與輸出；execute 階段只處理資料。
-- [ ] 將 Gray、Gaussian、AdaptiveMean、Threshold、Morphology 接入通用 native executor。
-- [ ] 通用 native plan 達成一次 H2D、連續 kernels、最後一次必要 D2H。
-- [ ] 加入 plan capability query；任一 operator 不支援時整份 plan CPU fallback，避免反覆 CPU/GPU 傳輸。
+- [x] 定義 versioned C structs：operator kind、input node、參數、output node；不得包含 detector ID/name。
+- [x] 新增 optional `vf_plan_create/execute/destroy` exports；ABI v1 primitives 與 401-2 adapter 保持相容。
+- [x] plan create 階段驗證 operators、channel、shape、參數與輸出；execute 階段只處理資料。
+- [x] 將 Gray、Gaussian、AdaptiveMean、Threshold、Morphology 接入通用 native executor。
+- [x] 通用 native plan 達成一次 H2D、連續 kernels、最後一次必要 D2H。
+- [x] 加入 plan capability query；任一 operator 不支援時整份 plan CPU fallback，避免反覆 CPU/GPU 傳輸。
 - [ ] 實作與 OpenCV 等價的 `INTER_AREA` resize 後，才開放 CUDA Resize(area)。
 - [x] Python/CPU plan 擴充 topologically ordered DAG/multi-output，支援一份 gray 產生多張 masks。
 - [ ] CUDA/native plan 擴充 DAG/multi-output，讓 device gray 直接產生多張 masks。
@@ -243,3 +243,4 @@
 - [x] 2026-07-17：完成 connected components CPU 評估；合成測試證明 pixel area 與孔洞/list contour 語意不等價，固定 seed 4K/350 blobs benchmark 的 findContours LIST median 3.562 ms、connectedComponentsWithStats 8.063 ms，因此 401/401-1/401-2 維持 CPU contours。
 - [x] 2026-07-17：加入 CUDA build preflight 與 SHA-256 manifest，靜態核對 17 個 ABI v1 header/source/runtime/smoke exports；DLL、LIB、test EXE 改在 staging 成功編譯並通過 dumpbin exports/dependencies 後才發布，避免 stale artifacts。
 - [x] 2026-07-17：修正 CUDA capability preflight routing；unsupported linear/DAG plan 不再先執行部分 GPU primitive，並讓 `fallback_to_cpu: false` 對 runtime/semantic failure 維持嚴格失敗。
+- [x] 2026-07-17：完成 generic native linear plan 原始碼與 OOP routing：versioned detector-neutral structs、optional query/create/execute/destroy、compiled-plan cache、persistent buffers、Gray/Gaussian/Threshold/AdaptiveMean/Morphology 單次 H2D/D2H execution，並同步 Python bridge、fake-DLL lifecycle、C++ smoke、validator、preflight 與文件；RTX 3090 編譯/實測仍保留待辦。

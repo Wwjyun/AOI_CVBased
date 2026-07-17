@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ctypes
 import tempfile
 import unittest
 from copy import deepcopy
@@ -30,6 +31,7 @@ from core.preprocess_plan import (
     UnsupportedPreprocessPlan,
 )
 from detectors.detector_401_2 import Detector401_2
+from detectors.detector_401 import Detector401
 from gpu.validate_cuda_dll import compare
 
 
@@ -69,6 +71,44 @@ class _FusedDll:
         reserved_bytes._obj.value = 4096
         allocation_count._obj.value = 7
         return 0
+
+
+class _NativePlanDll(_FusedDll):
+    def __init__(self):
+        super().__init__()
+        self.events = []
+        self.plan_create_calls = 0
+        self.plan_execute_calls = 0
+        self.vf_plan_query = _Function(self._query)
+        self.vf_plan_create = _Function(self._plan_create)
+        self.vf_plan_execute = _Function(self._plan_execute)
+        self.vf_plan_destroy = _Function(self._plan_destroy)
+
+    @staticmethod
+    def _query(_descriptor, _width, _height, reason, _capacity):
+        reason.value = b"supported fake native plan"
+        return 0
+
+    def _plan_create(self, _context, _descriptor, _width, _height, output):
+        self.plan_create_calls += 1
+        output._obj.value = 5678
+        return 0
+
+    def _plan_execute(
+        self, _plan, _src, _width, height, _src_stride, _src_channels,
+        dst, dst_stride, _dst_channels,
+    ):
+        self.plan_execute_calls += 1
+        ctypes.memset(dst, 0, int(height) * int(dst_stride))
+        return 0
+
+    def _plan_destroy(self, plan):
+        self.events.append(("plan", plan.value if hasattr(plan, "value") else int(plan)))
+        return 0
+
+    def _destroy(self, context):
+        self.events.append(("context", context.value if hasattr(context, "value") else int(context)))
+        return super()._destroy(context)
 
 
 class _FusedRuntimeStub:
@@ -112,6 +152,33 @@ class _PrimitiveRuntimeStub:
         return cv2.adaptiveThreshold(
             image, max_value, cv2.ADAPTIVE_THRESH_MEAN_C, threshold_type, block_size, c
         )
+
+
+class _NativePlanRuntimeStub:
+    available = True
+    unavailable_reason = ""
+    fallback_to_cpu = True
+    supports_native_plan = True
+    supports_fused_401_2 = True
+
+    def __init__(self):
+        self.calls = 0
+
+    @staticmethod
+    def native_plan_capability(plan, _image):
+        if any(isinstance(operator, Resize) for operator in plan.operations):
+            return False, "Resize(area) is unsupported by fake native plan"
+        return True, "supported fake native plan"
+
+    def execute_plan(self, image, plan):
+        self.calls += 1
+        return CpuPreprocessExecutor().execute(image, plan)
+
+
+class _FailingNativePlanRuntimeStub(_NativePlanRuntimeStub):
+    def execute_plan(self, _image, _plan):
+        self.calls += 1
+        raise RuntimeError("injected native plan failure")
 
 
 class PipelineProfilerTests(unittest.TestCase):
@@ -177,6 +244,106 @@ class GpuRuntimeMetricsTests(unittest.TestCase):
         runtime.close()
         self.assertFalse(runtime.supports_fused_401_2)
         self.assertEqual(dll.destroyed, [1234])
+
+    def test_generic_native_plan_is_cached_and_destroyed_before_context(self):
+        runtime = GpuRuntime(enabled=False)
+        dll = _NativePlanDll()
+        runtime._dll = dll
+        runtime.device_count = 1
+        runtime._load_optional_context()
+        plan = PreprocessPlan((Gray(),), name="fake_native_gray")
+        image = np.zeros((4, 5, 3), dtype=np.uint8)
+
+        self.assertTrue(runtime.supports_native_plan)
+        first = runtime.execute_plan(image, plan)
+        second = runtime.execute_plan(image.copy(), plan)
+
+        self.assertEqual(first.shape, (4, 5))
+        np.testing.assert_array_equal(first, second)
+        self.assertEqual(dll.plan_create_calls, 1)
+        self.assertEqual(dll.plan_execute_calls, 2)
+        metrics = runtime.performance_stats()
+        self.assertEqual(metrics["functions"]["vf_plan_execute"]["calls"], 2)
+        self.assertEqual(metrics["estimated_round_trips"], 2)
+
+        runtime.close()
+        self.assertEqual(dll.events, [("plan", 5678), ("context", 1234)])
+
+    def test_native_descriptor_encodes_detector_neutral_nodes_and_parameters(self):
+        image = np.zeros((12, 16, 3), dtype=np.uint8)
+        plan = PreprocessPlan((
+            Gaussian(5),
+            Morphology("close", 7, 2),
+            Gray(),
+            AdaptiveMean(11, -2.5, 255, True),
+        ))
+
+        descriptor, operators = GpuRuntime._native_plan_descriptor(plan, image)
+
+        self.assertEqual(descriptor.version, 1)
+        self.assertEqual(descriptor.input_channels, 3)
+        self.assertEqual(descriptor.operator_count, 4)
+        self.assertEqual([operators[index].kind for index in range(4)], [2, 5, 1, 4])
+        self.assertEqual([operators[index].input_node for index in range(4)], [-1, 0, 1, 2])
+        self.assertEqual(operators[0].int_params[0], 5)
+        self.assertEqual(list(operators[1].int_params)[:3], [1, 7, 2])
+        self.assertEqual(list(operators[3].int_params)[:3], [11, 255, 1])
+        self.assertAlmostEqual(operators[3].float_params[0], -2.5)
+
+    def test_native_compiled_plan_cache_is_bounded(self):
+        runtime = GpuRuntime(enabled=False)
+        dll = _NativePlanDll()
+        runtime._dll = dll
+        runtime.device_count = 1
+        runtime._max_native_plans = 1
+        runtime._load_optional_context()
+        image = np.zeros((4, 5, 3), dtype=np.uint8)
+
+        runtime.execute_plan(image, PreprocessPlan((Gray(),)))
+        runtime.execute_plan(image, PreprocessPlan((Gray(), Threshold(1))))
+
+        self.assertEqual(len(runtime._native_plans), 1)
+        self.assertEqual(dll.plan_create_calls, 2)
+        self.assertEqual(dll.events, [("plan", 5678)])
+        runtime.close()
+        self.assertEqual(dll.events[-2:], [("plan", 5678), ("context", 1234)])
+
+
+class DetectorNativeRoutingTests(unittest.TestCase):
+    @staticmethod
+    def _params():
+        return {
+            "roi_inset_px": 0,
+            "blur_size": 3,
+            "morph_operation": "open",
+            "morph_kernel": 3,
+            "morph_iterations": 1,
+            "adaptive_block_size": 3,
+            "adaptive_c": 2.0,
+            "min_area": 0,
+            "max_area": 0,
+        }
+
+    def test_detector_401_uses_one_generic_native_plan_call(self):
+        runtime = _NativePlanRuntimeStub()
+        detector = Detector401(params=self._params(), use_gpu=True, gpu_runtime=runtime)
+
+        result = detector.run(np.zeros((32, 40, 3), dtype=np.uint8))
+
+        self.assertEqual(runtime.calls, 1)
+        self.assertTrue(result["execution"]["gpu_active"])
+        self.assertEqual(result["execution"]["preprocess_capability"]["route"], "native_plan")
+
+    def test_native_plan_failure_restarts_detector_on_cpu(self):
+        runtime = _FailingNativePlanRuntimeStub()
+        detector = Detector401(params=self._params(), use_gpu=True, gpu_runtime=runtime)
+
+        result = detector.run(np.zeros((32, 40, 3), dtype=np.uint8))
+
+        self.assertEqual(runtime.calls, 1)
+        self.assertFalse(result["execution"]["gpu_active"])
+        self.assertEqual(result["execution"]["preprocess_capability"]["route"], "fallback")
+        self.assertIn("injected native plan failure", result["execution"]["fallback_reason"])
 
 
 class DetectorFusedRoutingTests(unittest.TestCase):
@@ -253,6 +420,30 @@ class PreprocessPlanTests(unittest.TestCase):
         report = CudaPreprocessExecutor(runtime).capability_report(self._plan(), image).to_dict()
         self.assertEqual(report["route"], "primitive")
         self.assertEqual(report["selected_backend"], "cuda")
+
+    def test_cuda_executor_prefers_one_round_trip_native_plan(self):
+        image = np.random.default_rng(19).integers(0, 256, size=(21, 25, 3), dtype=np.uint8)
+        runtime = _NativePlanRuntimeStub()
+
+        actual = CudaPreprocessExecutor(runtime).execute(image, self._plan())
+        expected = CpuPreprocessExecutor().execute(image, self._plan())
+        report = CudaPreprocessExecutor(runtime).capability_report(self._plan(), image).to_dict()
+
+        np.testing.assert_array_equal(actual, expected)
+        self.assertEqual(runtime.calls, 1)
+        self.assertEqual(report["route"], "native_plan")
+        self.assertEqual(report["selected_backend"], "cuda")
+
+    def test_native_plan_rejects_whole_unsupported_graph_before_execution(self):
+        image = np.zeros((20, 20, 3), dtype=np.uint8)
+        runtime = _NativePlanRuntimeStub()
+        plan = PreprocessPlan((Gray(), Resize(10, 10, "area")))
+
+        report = CudaPreprocessExecutor(runtime).capability_report(plan, image).to_dict()
+
+        self.assertEqual(report["route"], "fallback")
+        self.assertEqual(report["selected_backend"], "cpu")
+        self.assertEqual(runtime.calls, 0)
 
     def test_cuda_executor_rejects_non_equivalent_area_resize(self):
         plan = PreprocessPlan(operations=(Gray(), Resize(10, 10, "area")))

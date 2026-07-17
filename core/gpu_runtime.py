@@ -9,6 +9,28 @@ from pathlib import Path
 import numpy as np
 
 
+class _VfPlanOperatorV1(ctypes.Structure):
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32),
+        ("kind", ctypes.c_int32),
+        ("input_node", ctypes.c_int32),
+        ("output_node", ctypes.c_int32),
+        ("int_params", ctypes.c_int32 * 4),
+        ("float_params", ctypes.c_float * 2),
+    ]
+
+
+class _VfPlanDescV1(ctypes.Structure):
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32),
+        ("version", ctypes.c_uint32),
+        ("input_channels", ctypes.c_int32),
+        ("operator_count", ctypes.c_int32),
+        ("operators", ctypes.POINTER(_VfPlanOperatorV1)),
+        ("output_node", ctypes.c_int32),
+    ]
+
+
 class GpuRuntimeError(RuntimeError):
     pass
 
@@ -18,6 +40,7 @@ class GpuRuntime:
 
     DEFAULT_DLL = "gpu/visionflow_cuda.dll"
     ABI_VERSION = 1
+    PLAN_VERSION = 1
 
     def __init__(self, dll_path: str | Path = DEFAULT_DLL, fallback_to_cpu: bool = True, enabled: bool = True):
         load_started = time.perf_counter()
@@ -27,12 +50,15 @@ class GpuRuntime:
         self._lock = threading.RLock()
         self._dll = None
         self._context = None
+        self._native_plans: dict[tuple, ctypes.c_void_p] = {}
+        self._max_native_plans = 64
         self.device_count = 0
         self.device_name = ""
         self.compute_capability = ""
         self.unavailable_reason = ""
         self.last_error = ""
         self.fused_unavailable_reason = ""
+        self.native_plan_unavailable_reason = ""
         self._performance = {
             "load_sec": 0.0,
             "call_count": 0,
@@ -63,6 +89,15 @@ class GpuRuntime:
             and getattr(self._dll, "vf_preprocess_401_2_u8", None) is not None
         )
 
+    @property
+    def supports_native_plan(self) -> bool:
+        required = ("vf_plan_query", "vf_plan_create", "vf_plan_execute", "vf_plan_destroy")
+        return bool(
+            self.available
+            and self._context is not None
+            and all(getattr(self._dll, name, None) is not None for name in required)
+        )
+
     def status(self, requested: bool = False) -> dict:
         active = bool(requested and self.available and not self.last_error)
         return {
@@ -73,7 +108,11 @@ class GpuRuntime:
             "device_count": self.device_count,
             "device_name": self.device_name,
             "compute_capability": self.compute_capability,
-            "capabilities": {"persistent_context": self._context is not None, "fused_401_2": self.supports_fused_401_2},
+            "capabilities": {
+                "persistent_context": self._context is not None,
+                "native_plan": self.supports_native_plan,
+                "fused_401_2": self.supports_fused_401_2,
+            },
             "fallback_reason": (self.unavailable_reason if not self.available else self.last_error) if requested else "",
         }
 
@@ -232,8 +271,102 @@ class GpuRuntime:
             )
         return output
 
+    def native_plan_capability(self, plan, image: np.ndarray) -> tuple[bool, str]:
+        if not self.supports_native_plan:
+            return False, self.native_plan_unavailable_reason or "CUDA DLL has no generic native plan ABI"
+        source = self._u8_image(image, channels=(1, 3))
+        try:
+            descriptor, operators = self._native_plan_descriptor(plan, source)
+        except GpuRuntimeError as exc:
+            return False, str(exc)
+        reason = ctypes.create_string_buffer(256)
+        query = self._dll.vf_plan_query
+        result = int(query(
+            ctypes.byref(descriptor),
+            int(source.shape[1]),
+            int(source.shape[0]),
+            reason,
+            len(reason),
+        ))
+        message = reason.value.decode("utf-8", errors="replace")
+        return result == 0, message or self._error_message(result)
+
+    def execute_plan(self, image: np.ndarray, plan) -> np.ndarray:
+        source = self._u8_image(image, channels=(1, 3))
+        expected = plan.validate_input(source)
+        supported, reason = self.native_plan_capability(plan, source)
+        if not supported:
+            raise GpuRuntimeError(reason)
+        key = (plan.signature, source.shape, source.dtype.str)
+        output = np.empty(expected.shape, dtype=np.uint8)
+        queued = time.perf_counter()
+        with self._lock:
+            lock_acquired = time.perf_counter()
+            handle = self._native_plans.get(key)
+            if handle is None:
+                descriptor, operators = self._native_plan_descriptor(plan, source)
+                created = ctypes.c_void_p()
+                result = int(self._dll.vf_plan_create(
+                    self._context,
+                    ctypes.byref(descriptor),
+                    int(source.shape[1]),
+                    int(source.shape[0]),
+                    ctypes.byref(created),
+                ))
+                if result != 0 or not created.value:
+                    raise GpuRuntimeError(
+                        f"vf_plan_create failed with CUDA DLL error {result}: {self._error_message(result)}"
+                    )
+                if len(self._native_plans) >= self._max_native_plans:
+                    expired_key, expired = next(iter(self._native_plans.items()))
+                    destroy_result = int(self._dll.vf_plan_destroy(expired))
+                    if destroy_result != 0:
+                        int(self._dll.vf_plan_destroy(created))
+                        raise GpuRuntimeError(
+                            f"vf_plan_destroy failed with CUDA DLL error {destroy_result}: "
+                            f"{self._error_message(destroy_result)}"
+                        )
+                    del self._native_plans[expired_key]
+                handle = created
+                self._native_plans[key] = handle
+            src_channels = 1 if source.ndim == 2 else source.shape[2]
+            result = int(self._dll.vf_plan_execute(
+                handle,
+                source.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
+                int(source.shape[1]),
+                int(source.shape[0]),
+                int(source.strides[0]),
+                int(src_channels),
+                output.ctypes.data_as(ctypes.POINTER(ctypes.c_uint8)),
+                int(output.strides[0]),
+                int(expected.channels),
+            ))
+            completed = time.perf_counter()
+            self._record_performance(
+                "vf_plan_execute",
+                int(source.nbytes),
+                int(output.nbytes),
+                completed - lock_acquired,
+                lock_acquired - queued,
+            )
+        if result != 0:
+            raise GpuRuntimeError(
+                f"vf_plan_execute failed with CUDA DLL error {result}: {self._error_message(result)}"
+            )
+        return plan.validate_output(output, expected)
+
     def close(self) -> None:
         with self._lock:
+            destroy_plan = getattr(self._dll, "vf_plan_destroy", None) if self._dll is not None else None
+            if destroy_plan is not None:
+                for handle in self._native_plans.values():
+                    result = int(destroy_plan(handle))
+                    if result != 0:
+                        self.last_error = (
+                            f"vf_plan_destroy failed with CUDA DLL error {result}: "
+                            f"{self._error_message(result)}"
+                        )
+            self._native_plans.clear()
             context = self._context
             self._context = None
             if context is None or self._dll is None:
@@ -296,8 +429,9 @@ class GpuRuntime:
         create = getattr(self._dll, "vf_context_create", None)
         destroy = getattr(self._dll, "vf_context_destroy", None)
         fused = getattr(self._dll, "vf_preprocess_401_2_u8", None)
-        if create is None or destroy is None or fused is None:
-            self.fused_unavailable_reason = "CUDA DLL uses legacy stateless ABI without fused 401-2 exports"
+        if create is None or destroy is None:
+            self.fused_unavailable_reason = "CUDA DLL uses legacy stateless ABI without persistent context exports"
+            self.native_plan_unavailable_reason = self.fused_unavailable_reason
             return
         create.argtypes = [ctypes.POINTER(ctypes.c_void_p)]
         create.restype = ctypes.c_int
@@ -319,6 +453,92 @@ class GpuRuntime:
             )
             return
         self._context = context
+        if fused is None:
+            self.fused_unavailable_reason = "CUDA DLL has no fused 401-2 export"
+        self._load_optional_native_plan()
+
+    def _load_optional_native_plan(self) -> None:
+        query = getattr(self._dll, "vf_plan_query", None)
+        create = getattr(self._dll, "vf_plan_create", None)
+        execute = getattr(self._dll, "vf_plan_execute", None)
+        destroy = getattr(self._dll, "vf_plan_destroy", None)
+        if any(function is None for function in (query, create, execute, destroy)):
+            self.native_plan_unavailable_reason = "CUDA DLL has no generic native plan exports"
+            return
+        query.argtypes = [
+            ctypes.POINTER(_VfPlanDescV1), ctypes.c_int, ctypes.c_int,
+            ctypes.c_char_p, ctypes.c_int,
+        ]
+        query.restype = ctypes.c_int
+        create.argtypes = [
+            ctypes.c_void_p, ctypes.POINTER(_VfPlanDescV1), ctypes.c_int, ctypes.c_int,
+            ctypes.POINTER(ctypes.c_void_p),
+        ]
+        create.restype = ctypes.c_int
+        execute.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(ctypes.c_uint8), ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+            ctypes.POINTER(ctypes.c_uint8), ctypes.c_int, ctypes.c_int,
+        ]
+        execute.restype = ctypes.c_int
+        destroy.argtypes = [ctypes.c_void_p]
+        destroy.restype = ctypes.c_int
+
+    @staticmethod
+    def _native_plan_descriptor(plan, image: np.ndarray) -> tuple[_VfPlanDescV1, object]:
+        kinds = {
+            "Gray": 1,
+            "Gaussian": 2,
+            "Threshold": 3,
+            "AdaptiveMean": 4,
+            "Morphology": 5,
+        }
+        morphology_operations = {"open": 0, "close": 1, "dilate": 2, "erode": 3}
+        encoded = []
+        previous_node = -1
+        for index, operator in enumerate(plan.operations):
+            name = type(operator).__name__
+            if name not in kinds:
+                raise GpuRuntimeError(f"Generic native plan does not support {name}")
+            int_params = [0, 0, 0, 0]
+            float_params = [0.0, 0.0]
+            if name == "Gaussian":
+                int_params[0] = int(operator.kernel_size)
+            elif name == "Threshold":
+                int_params[:3] = [int(operator.threshold), int(operator.max_value), int(operator.invert)]
+            elif name == "AdaptiveMean":
+                int_params[:3] = [int(operator.block_size), int(operator.max_value), int(operator.invert)]
+                float_params[0] = float(operator.c)
+            elif name == "Morphology":
+                operation = str(operator.operation).lower()
+                if operation not in morphology_operations:
+                    raise GpuRuntimeError(f"Generic native plan does not support morphology {operation}")
+                int_params[:3] = [
+                    morphology_operations[operation],
+                    int(operator.kernel_size),
+                    int(operator.iterations),
+                ]
+            encoded.append(_VfPlanOperatorV1(
+                ctypes.sizeof(_VfPlanOperatorV1),
+                kinds[name],
+                previous_node,
+                index,
+                (ctypes.c_int32 * 4)(*int_params),
+                (ctypes.c_float * 2)(*float_params),
+            ))
+            previous_node = index
+        array_type = _VfPlanOperatorV1 * len(encoded)
+        operators = array_type(*encoded)
+        input_channels = 1 if image.ndim == 2 else int(image.shape[2])
+        descriptor = _VfPlanDescV1(
+            ctypes.sizeof(_VfPlanDescV1),
+            GpuRuntime.PLAN_VERSION,
+            input_channels,
+            len(encoded),
+            operators,
+            previous_node,
+        )
+        return descriptor, operators
 
     def _context_stats_unlocked(self) -> dict:
         if self._context is None or self._dll is None:

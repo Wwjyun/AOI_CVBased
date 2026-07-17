@@ -19,8 +19,8 @@ constexpr int MAX_GAUSSIAN_KERNEL = 127;
 __constant__ float gaussian_weights[MAX_GAUSSIAN_KERNEL];
 
 struct PersistentContext {
-    uint8_t* u8[4]{};
-    size_t u8_capacity[4]{};
+    uint8_t* u8[5]{};
+    size_t u8_capacity[5]{};
     float* float_buffer = nullptr;
     size_t float_capacity = 0;
     unsigned long long* u64[2]{};
@@ -32,6 +32,15 @@ struct PersistentContext {
         visionflow_cuda::free_device(float_buffer);
         for (void* pointer : u64) visionflow_cuda::free_device(pointer);
     }
+};
+
+struct NativePlan {
+    PersistentContext* context = nullptr;
+    int width = 0;
+    int height = 0;
+    int input_channels = 0;
+    int output_channels = 0;
+    std::vector<VfPlanOperatorV1> operators;
 };
 
 template <typename T>
@@ -102,6 +111,145 @@ int adaptive_layout(
     *padded_height_out = padded_height;
     *padded_count_out = padded_count;
     return VF_CUDA_OK;
+}
+
+void write_reason(char* reason, int capacity, const char* message) {
+    if (reason != nullptr && capacity > 0) strncpy_s(reason, capacity, message, _TRUNCATE);
+}
+
+int validate_plan_desc(
+    const VfPlanDescV1* desc,
+    int width,
+    int height,
+    int* output_channels,
+    char* reason,
+    int reason_capacity) {
+    if (desc == nullptr || desc->struct_size != sizeof(VfPlanDescV1) ||
+        desc->version != VF_CUDA_PLAN_VERSION || width <= 0 || height <= 0 ||
+        (desc->input_channels != 1 && desc->input_channels != 3) ||
+        desc->operator_count <= 0 || desc->operator_count > 64 || desc->operators == nullptr) {
+        write_reason(reason, reason_capacity, "Invalid plan descriptor, version, shape or input channels");
+        return VF_CUDA_INVALID_ARGUMENT;
+    }
+    if (static_cast<size_t>(width) > SIZE_MAX / static_cast<size_t>(height) ||
+        static_cast<size_t>(width) * static_cast<size_t>(height) >
+            SIZE_MAX / static_cast<size_t>(desc->input_channels)) {
+        write_reason(reason, reason_capacity, "Plan image shape overflows addressable memory");
+        return VF_CUDA_INVALID_ARGUMENT;
+    }
+    if (static_cast<size_t>(width) * static_cast<size_t>(height) > INT_MAX) {
+        write_reason(reason, reason_capacity, "Plan image contains too many pixels for ABI v1 indexing");
+        return VF_CUDA_UNSUPPORTED;
+    }
+
+    int channels = desc->input_channels;
+    int previous_node = VF_PLAN_INPUT_NODE;
+    for (int index = 0; index < desc->operator_count; ++index) {
+        const VfPlanOperatorV1& op = desc->operators[index];
+        if (op.struct_size != sizeof(VfPlanOperatorV1) || op.input_node != previous_node ||
+            op.output_node <= previous_node) {
+            write_reason(reason, reason_capacity, "Plan nodes must form one validated linear chain");
+            return VF_CUDA_INVALID_ARGUMENT;
+        }
+        switch (op.kind) {
+            case VF_PLAN_GRAY:
+                channels = 1;
+                break;
+            case VF_PLAN_GAUSSIAN:
+                if (op.int_params[0] < 3 || op.int_params[0] % 2 == 0 ||
+                    op.int_params[0] > MAX_GAUSSIAN_KERNEL) {
+                    write_reason(reason, reason_capacity, "Gaussian kernel is unsupported");
+                    return VF_CUDA_UNSUPPORTED;
+                }
+                break;
+            case VF_PLAN_THRESHOLD:
+                if (channels != 1 || op.int_params[0] < 0 || op.int_params[0] > 255 ||
+                    op.int_params[1] < 0 || op.int_params[1] > 255 ||
+                    (op.int_params[2] != 0 && op.int_params[2] != 1)) {
+                    write_reason(reason, reason_capacity, "Threshold requires one channel and valid uint8 parameters");
+                    return VF_CUDA_UNSUPPORTED;
+                }
+                break;
+            case VF_PLAN_ADAPTIVE_MEAN: {
+                int radius = 0, padded_width = 0, padded_height = 0;
+                size_t padded_count = 0;
+                if (channels != 1 || op.int_params[1] < 0 || op.int_params[1] > 255 ||
+                    (op.int_params[2] != 0 && op.int_params[2] != 1) ||
+                    !std::isfinite(op.float_params[0]) ||
+                    adaptive_layout(width, height, op.int_params[0], &radius, &padded_width,
+                                    &padded_height, &padded_count) != VF_CUDA_OK) {
+                    write_reason(reason, reason_capacity, "AdaptiveMean shape or parameters are unsupported");
+                    return VF_CUDA_UNSUPPORTED;
+                }
+                break;
+            }
+            case VF_PLAN_MORPHOLOGY:
+                if (op.int_params[0] < VF_MORPH_OPEN || op.int_params[0] > VF_MORPH_ERODE ||
+                    op.int_params[1] < 3 || op.int_params[1] % 2 == 0 ||
+                    op.int_params[2] < 1 || op.int_params[2] > INT_MAX / 2) {
+                    write_reason(reason, reason_capacity, "Morphology parameters are unsupported");
+                    return VF_CUDA_UNSUPPORTED;
+                }
+                break;
+            default:
+                write_reason(reason, reason_capacity, "Plan contains an unsupported operator kind");
+                return VF_CUDA_UNSUPPORTED;
+        }
+        previous_node = op.output_node;
+    }
+    if (desc->output_node != previous_node) {
+        write_reason(reason, reason_capacity, "Plan output node does not match the final operator");
+        return VF_CUDA_INVALID_ARGUMENT;
+    }
+    if (output_channels != nullptr) *output_channels = channels;
+    write_reason(reason, reason_capacity, "Supported generic native linear plan");
+    return VF_CUDA_OK;
+}
+
+int reserve_plan_buffers(PersistentContext* context, const NativePlan& plan) {
+    if (context == nullptr) return VF_CUDA_INVALID_ARGUMENT;
+    const size_t pixels = static_cast<size_t>(plan.width) * plan.height;
+    int maximum_channels = plan.input_channels;
+    bool needs_float = false;
+    bool needs_morph_scratch = false;
+    size_t maximum_padded_count = 0;
+    int channels = plan.input_channels;
+    for (const VfPlanOperatorV1& op : plan.operators) {
+        if (op.kind == VF_PLAN_GRAY) channels = 1;
+        maximum_channels = std::max(maximum_channels, channels);
+        needs_float = needs_float || op.kind == VF_PLAN_GAUSSIAN;
+        needs_morph_scratch = needs_morph_scratch || op.kind == VF_PLAN_MORPHOLOGY;
+        if (op.kind == VF_PLAN_ADAPTIVE_MEAN) {
+            int radius = 0, padded_width = 0, padded_height = 0;
+            size_t padded_count = 0;
+            int result = adaptive_layout(plan.width, plan.height, op.int_params[0], &radius,
+                                         &padded_width, &padded_height, &padded_count);
+            if (result != VF_CUDA_OK) return result;
+            maximum_padded_count = std::max(maximum_padded_count, padded_count);
+        }
+    }
+    const size_t image_bytes = pixels * static_cast<size_t>(maximum_channels);
+    int result = reserve_device(&context->u8[0], &context->u8_capacity[0], image_bytes,
+                                &context->allocation_count);
+    if (result == VF_CUDA_OK) result = reserve_device(
+        &context->u8[1], &context->u8_capacity[1], image_bytes, &context->allocation_count);
+    if (result == VF_CUDA_OK) result = reserve_device(
+        &context->u8[2], &context->u8_capacity[2], image_bytes, &context->allocation_count);
+    if (result == VF_CUDA_OK && needs_morph_scratch) result = reserve_device(
+        &context->u8[4], &context->u8_capacity[4], image_bytes, &context->allocation_count);
+    if (result == VF_CUDA_OK && needs_float) result = reserve_device(
+        &context->float_buffer, &context->float_capacity,
+        pixels * static_cast<size_t>(maximum_channels), &context->allocation_count);
+    if (result == VF_CUDA_OK && maximum_padded_count > 0) result = reserve_device(
+        &context->u8[3], &context->u8_capacity[3], maximum_padded_count,
+        &context->allocation_count);
+    if (result == VF_CUDA_OK && maximum_padded_count > 0) result = reserve_device(
+        &context->u64[0], &context->u64_capacity[0], maximum_padded_count,
+        &context->allocation_count);
+    if (result == VF_CUDA_OK && maximum_padded_count > 0) result = reserve_device(
+        &context->u64[1], &context->u64_capacity[1], maximum_padded_count,
+        &context->allocation_count);
+    return result;
 }
 
 int cuda_result(cudaError_t error) { return visionflow_cuda::runtime_error(error); }
@@ -427,6 +575,7 @@ VF_CUDA_API int vf_gpu_error_message(int error_code, char* output, int capacity)
         case VF_CUDA_DEVICE_UNAVAILABLE: message = "CUDA device unavailable"; break;
         case VF_CUDA_ABI_MISMATCH: message = "CUDA DLL ABI mismatch"; break;
         case VF_CUDA_INTERNAL_ERROR: message = "Internal CUDA DLL error"; break;
+        case VF_CUDA_UNSUPPORTED: message = "Requested CUDA operation is unsupported"; break;
         default:
             if (error_code >= VF_CUDA_RUNTIME_ERROR_BASE) {
                 message = cudaGetErrorString(static_cast<cudaError_t>(error_code - VF_CUDA_RUNTIME_ERROR_BASE));
@@ -467,6 +616,168 @@ VF_CUDA_API int vf_context_stats(
     }
     *reserved_bytes = bytes;
     *allocation_count = persistent->allocation_count;
+    return VF_CUDA_OK;
+}
+
+VF_CUDA_API int vf_plan_query(
+    const VfPlanDescV1* desc,
+    int width,
+    int height,
+    char* reason,
+    int reason_capacity) {
+    return validate_plan_desc(desc, width, height, nullptr, reason, reason_capacity);
+}
+
+VF_CUDA_API int vf_plan_create(
+    void* context,
+    const VfPlanDescV1* desc,
+    int width,
+    int height,
+    void** plan) {
+    if (context == nullptr || plan == nullptr) return VF_CUDA_INVALID_ARGUMENT;
+    *plan = nullptr;
+    int output_channels = 0;
+    int result = validate_plan_desc(desc, width, height, &output_channels, nullptr, 0);
+    if (result != VF_CUDA_OK) return result;
+
+    NativePlan* created = new (std::nothrow) NativePlan();
+    if (created == nullptr) return VF_CUDA_ALLOCATION_FAILED;
+    created->context = static_cast<PersistentContext*>(context);
+    created->width = width;
+    created->height = height;
+    created->input_channels = desc->input_channels;
+    created->output_channels = output_channels;
+    try {
+        created->operators.assign(desc->operators, desc->operators + desc->operator_count);
+    } catch (const std::bad_alloc&) {
+        delete created;
+        return VF_CUDA_ALLOCATION_FAILED;
+    }
+    result = reserve_plan_buffers(created->context, *created);
+    if (result != VF_CUDA_OK) {
+        delete created;
+        return result;
+    }
+    *plan = created;
+    return VF_CUDA_OK;
+}
+
+VF_CUDA_API int vf_plan_execute(
+    void* plan,
+    const uint8_t* src,
+    int width,
+    int height,
+    int src_stride,
+    int src_channels,
+    uint8_t* dst,
+    int dst_stride,
+    int dst_channels) {
+    NativePlan* compiled = static_cast<NativePlan*>(plan);
+    if (compiled == nullptr || compiled->context == nullptr || width != compiled->width ||
+        height != compiled->height || src_channels != compiled->input_channels ||
+        dst_channels != compiled->output_channels ||
+        !visionflow_cuda::valid_image(src, width, height, src_stride, src_channels) ||
+        !visionflow_cuda::valid_image(dst, width, height, dst_stride, dst_channels)) {
+        return VF_CUDA_INVALID_ARGUMENT;
+    }
+    PersistentContext* context = compiled->context;
+    const size_t source_row_bytes = static_cast<size_t>(width) * src_channels;
+    cudaError_t error = cudaMemcpy2D(
+        context->u8[0], source_row_bytes, src, src_stride, source_row_bytes, height,
+        cudaMemcpyHostToDevice);
+    if (error != cudaSuccess) return cuda_result(error);
+
+    uint8_t* current = context->u8[0];
+    int channels = src_channels;
+    const size_t pixels = static_cast<size_t>(width) * height;
+    for (const VfPlanOperatorV1& op : compiled->operators) {
+        uint8_t* next = current == context->u8[1] ? context->u8[2] : context->u8[1];
+        switch (op.kind) {
+            case VF_PLAN_GRAY:
+                if (channels == 3) {
+                    bgr_gray_kernel<<<grid2d(width, height), dim3(BLOCK_X, BLOCK_Y)>>>(
+                        current, next, width, height);
+                    current = next;
+                    channels = 1;
+                }
+                break;
+            case VF_PLAN_GAUSSIAN: {
+                int radius = 0;
+                int result = prepare_gaussian_weights(op.int_params[0], &radius);
+                if (result != VF_CUDA_OK) return result;
+                gaussian_horizontal_kernel<<<grid2d(width, height), dim3(BLOCK_X, BLOCK_Y)>>>(
+                    current, context->float_buffer, width, height, channels, radius);
+                gaussian_vertical_kernel<<<grid2d(width, height), dim3(BLOCK_X, BLOCK_Y)>>>(
+                    context->float_buffer, next, width, height, channels, radius);
+                current = next;
+                break;
+            }
+            case VF_PLAN_THRESHOLD:
+                threshold_kernel<<<(static_cast<int>(pixels) + 255) / 256, 256>>>(
+                    current, next, static_cast<int>(pixels), op.int_params[0],
+                    op.int_params[1], op.int_params[2]);
+                current = next;
+                break;
+            case VF_PLAN_ADAPTIVE_MEAN: {
+                int radius = 0, padded_width = 0, padded_height = 0;
+                size_t padded_count = 0;
+                int result = adaptive_layout(width, height, op.int_params[0], &radius, &padded_width,
+                                             &padded_height, &padded_count);
+                if (result != VF_CUDA_OK) return result;
+                replicate_border_kernel<<<grid2d(padded_width, padded_height), dim3(BLOCK_X, BLOCK_Y)>>>(
+                    current, context->u8[3], width, height, padded_width, padded_height, radius);
+                row_prefix_u8_kernel<<<padded_height, SCAN_THREADS>>>(
+                    context->u8[3], context->u64[0], padded_width, padded_height);
+                dim3 transpose_block(TRANSPOSE_TILE, TRANSPOSE_ROWS);
+                dim3 transpose_grid(
+                    (padded_width + TRANSPOSE_TILE - 1) / TRANSPOSE_TILE,
+                    (padded_height + TRANSPOSE_TILE - 1) / TRANSPOSE_TILE);
+                transpose_u64_kernel<<<transpose_grid, transpose_block>>>(
+                    context->u64[0], context->u64[1], padded_width, padded_height);
+                row_prefix_u64_inplace_kernel<<<padded_width, SCAN_THREADS>>>(
+                    context->u64[1], padded_height, padded_width);
+                adaptive_integral_kernel<<<grid2d(width, height), dim3(BLOCK_X, BLOCK_Y)>>>(
+                    current, context->u64[1], next, width, height, padded_height,
+                    op.int_params[0], op.float_params[0], op.int_params[1], op.int_params[2]);
+                current = next;
+                break;
+            }
+            case VF_PLAN_MORPHOLOGY: {
+                const int operation = op.int_params[0];
+                const int kernel = op.int_params[1];
+                const int iterations = op.int_params[2];
+                const int passes = (operation == VF_MORPH_OPEN || operation == VF_MORPH_CLOSE)
+                    ? iterations * 2 : iterations;
+                uint8_t* source_buffer = current;
+                uint8_t* destination = passes % 2 == 1 ? next : context->u8[4];
+                for (int pass = 0; pass < passes; ++pass) {
+                    int dilate = operation == VF_MORPH_DILATE;
+                    if (operation == VF_MORPH_OPEN) dilate = pass >= iterations;
+                    if (operation == VF_MORPH_CLOSE) dilate = pass < iterations;
+                    morph_kernel<<<grid2d(width, height), dim3(BLOCK_X, BLOCK_Y)>>>(
+                        source_buffer, destination, width, height, channels, kernel / 2, dilate);
+                    source_buffer = destination;
+                    destination = destination == next ? context->u8[4] : next;
+                }
+                current = source_buffer;
+                break;
+            }
+            default:
+                return VF_CUDA_UNSUPPORTED;
+        }
+    }
+
+    int result = visionflow_cuda::kernel_result();
+    if (result != VF_CUDA_OK) return result;
+    const size_t output_row_bytes = static_cast<size_t>(width) * compiled->output_channels;
+    error = cudaMemcpy2D(
+        dst, dst_stride, current, output_row_bytes, output_row_bytes, height,
+        cudaMemcpyDeviceToHost);
+    return cuda_result(error);
+}
+
+VF_CUDA_API int vf_plan_destroy(void* plan) {
+    delete static_cast<NativePlan*>(plan);
     return VF_CUDA_OK;
 }
 

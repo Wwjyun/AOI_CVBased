@@ -396,6 +396,24 @@ class CudaPreprocessExecutor:
         self.runtime = runtime
 
     def capability_report(self, plan: PreprocessPlan, image: np.ndarray | None = None) -> PreprocessCapabilityReport:
+        if image is not None and bool(getattr(self.runtime, "supports_native_plan", False)):
+            supported, reason = self.runtime.native_plan_capability(plan, image)
+            if supported:
+                return PreprocessCapabilityReport(
+                    requested_backend="cuda",
+                    selected_backend="cuda",
+                    route="native_plan",
+                    reason=reason,
+                    plan_signature=plan.signature,
+                )
+            return PreprocessCapabilityReport(
+                requested_backend="cuda",
+                selected_backend="cpu",
+                route="fallback",
+                reason=reason,
+                plan_signature=plan.signature,
+                unsupported_operators=(reason,),
+            )
         if self._is_legacy_fused_plan(plan) and bool(getattr(self.runtime, "supports_fused_401_2", False)):
             return PreprocessCapabilityReport(
                 requested_backend="cuda",
@@ -451,6 +469,12 @@ class CudaPreprocessExecutor:
 
     def execute(self, image: np.ndarray, plan: PreprocessPlan) -> np.ndarray:
         expected = plan.validate_input(image)
+        if bool(getattr(self.runtime, "supports_native_plan", False)):
+            supported, reason = self.runtime.native_plan_capability(plan, image)
+            if not supported:
+                raise UnsupportedPreprocessPlan(reason)
+            output = self.runtime.execute_plan(image, plan)
+            return plan.validate_output(output, expected)
         fused = self._execute_legacy_fused(image, plan)
         if fused is not None:
             return plan.validate_output(fused, expected)

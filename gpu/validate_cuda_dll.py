@@ -18,6 +18,15 @@ if str(ROOT) not in sys.path:
 
 from core.gpu_runtime import GpuRuntime  # noqa: E402
 from core.pipeline import AOIPipeline  # noqa: E402
+from core.preprocess_plan import (  # noqa: E402
+    AdaptiveMean,
+    CpuPreprocessExecutor,
+    Gaussian,
+    Gray,
+    Morphology,
+    PreprocessPlan,
+    Threshold,
+)
 from core.recipe_manager import RecipeManager  # noqa: E402
 
 
@@ -197,6 +206,54 @@ def validate_primitives(runtime: GpuRuntime) -> list[dict]:
             else cv2.erode(binary, kernel, iterations=1)
         )
         metrics.append(compare(f"morphology_{operation}", runtime.morphology(binary, operation, 3, 1), expected))
+    if runtime.supports_native_plan:
+        native_plans = (
+            PreprocessPlan(
+                (Gray(), Threshold(128, 255, False)),
+                name="native_gray_threshold",
+            ),
+            PreprocessPlan(
+                (Gaussian(5), Morphology("open", 3, 2), Gray(), AdaptiveMean(11, -2.0, 255, True)),
+                name="native_401_style",
+            ),
+        )
+        cpu_executor = CpuPreprocessExecutor()
+        for plan in native_plans:
+            expected = cpu_executor.execute(bgr, plan)
+            before_calls = runtime.performance_stats()["call_count"]
+            actual = runtime.execute_plan(bgr, plan)
+            after_first = runtime.performance_stats()
+            metrics.append(
+                compare(
+                    plan.name,
+                    actual,
+                    expected,
+                    max_diff=0,
+                    mismatch_ratio=0.02 if "401" in plan.name else 0.001,
+                )
+            )
+            if after_first["call_count"] != before_calls + 1:
+                raise AssertionError(f"{plan.name} did not execute as one native CUDA round trip")
+            first_context_stats = after_first["persistent_context"]
+            repeated = runtime.execute_plan(bgr, plan)
+            metrics.append(
+                compare(
+                    f"{plan.name}_reused",
+                    repeated,
+                    expected,
+                    max_diff=0,
+                    mismatch_ratio=0.02 if "401" in plan.name else 0.001,
+                )
+            )
+            second_context_stats = runtime.performance_stats()["persistent_context"]
+            if first_context_stats.get("allocation_count") != second_context_stats.get("allocation_count"):
+                raise AssertionError(
+                    f"{plan.name} allocated again for an unchanged shape: "
+                    f"first={first_context_stats}, second={second_context_stats}"
+                )
+            print(f"PASS {plan.name} native plan reuse: {second_context_stats}")
+    else:
+        print(f"SKIP generic native plan: {runtime.native_plan_unavailable_reason}")
     return metrics
 
 
