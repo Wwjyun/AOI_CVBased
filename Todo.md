@@ -59,7 +59,7 @@
 - [x] 401-2 改為宣告 Gray → Gaussian → AdaptiveMean，不再直接呼叫 CUDA export。
 - [x] CUDA 尚不能保持 `INTER_AREA` 語意時拒絕執行 Resize(area)，不可靜默改用 nearest-neighbor。
 - [x] 將 plan 建立移出每次 tile 熱路徑，依 detector params、dtype 與 shape cache immutable plan，並以 bounded LRU 避免無限成長。
-- [ ] 加入 operator/plan signature、輸入輸出型別、channel 與 shape validation。
+- [x] 加入 versioned operator/plan signature、輸入輸出 uint8 型別、channel、shape、順序與 operator 參數 validation。
 - [ ] 加入 capability report，清楚列出 plan 為何走 fused、primitive、CPU 或 fallback。
 
 ### Generic native plan ABI
@@ -231,3 +231,4 @@
 - [x] 2026-07-17：加入 GUI 預覽影像載入、色彩轉換、QImage/QPixmap、scene 顯示與使用者實際等待時間量測，並輸出至日誌及 viewer backend tooltip。
 - [x] 2026-07-17：補齊固定 seed 合成影像、奇數/極小/4K、non-contiguous、1/3 channels、ROI 尺寸 CPU 測試，並驗證關閉 fallback 時缺少 CUDA DLL 會明確失敗；真實照片與 GPU 實機項目保留待辦。
 - [x] 2026-07-17：新增 per-detector bounded LRU `PreprocessPlanCache`，依 shape、dtype 與參數 signature 重用 immutable plan；401-2 已移出逐 tile plan 建立熱路徑並加入 cache/失效測試。
+- [x] 2026-07-17：加入 versioned operator/plan signature、tensor spec 推導及輸入輸出 dtype/channel/shape/order/參數驗證，CPU 與 CUDA executor 共用相同契約並以 fake runtime 覆蓋錯誤輸出。

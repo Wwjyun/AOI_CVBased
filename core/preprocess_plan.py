@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from collections.abc import Callable, Hashable
 from dataclasses import dataclass
+import math
 from typing import TypeAlias
 
 import cv2
@@ -11,6 +12,10 @@ import numpy as np
 
 class UnsupportedPreprocessPlan(RuntimeError):
     """Raised when an executor cannot preserve the requested plan semantics."""
+
+
+class InvalidPreprocessPlan(ValueError):
+    """Raised when a plan or its input violates the shared preprocessing contract."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,13 +61,125 @@ PreprocessOperator: TypeAlias = Gray | Resize | Gaussian | Threshold | AdaptiveM
 
 
 @dataclass(frozen=True, slots=True)
+class PreprocessTensorSpec:
+    shape: tuple[int, ...]
+    dtype: str
+    channels: int
+
+
+def operator_signature(operator: PreprocessOperator) -> tuple:
+    if isinstance(operator, Gray):
+        return ("gray",)
+    if isinstance(operator, Resize):
+        return ("resize", operator.width, operator.height, operator.interpolation.lower())
+    if isinstance(operator, Gaussian):
+        return ("gaussian", operator.kernel_size)
+    if isinstance(operator, Threshold):
+        return ("threshold", operator.threshold, operator.max_value, operator.invert)
+    if isinstance(operator, AdaptiveMean):
+        return ("adaptive_mean", operator.block_size, operator.c, operator.max_value, operator.invert)
+    if isinstance(operator, Morphology):
+        return ("morphology", operator.operation.lower(), operator.kernel_size, operator.iterations)
+    raise InvalidPreprocessPlan(f"Unsupported preprocessing operator: {type(operator).__name__}")
+
+
+def _validate_operator(operator: PreprocessOperator) -> None:
+    if isinstance(operator, Gray):
+        return
+    if isinstance(operator, Resize):
+        if operator.width <= 0 or operator.height <= 0:
+            raise InvalidPreprocessPlan("Resize width and height must be positive")
+        if operator.interpolation.lower() not in {"area", "linear", "nearest"}:
+            raise InvalidPreprocessPlan(f"Unsupported resize interpolation: {operator.interpolation}")
+        return
+    if isinstance(operator, Gaussian):
+        if operator.kernel_size <= 0 or operator.kernel_size % 2 == 0:
+            raise InvalidPreprocessPlan("Gaussian kernel_size must be a positive odd integer")
+        return
+    if isinstance(operator, Threshold):
+        if not 0 <= operator.threshold <= 255 or not 0 <= operator.max_value <= 255:
+            raise InvalidPreprocessPlan("Threshold values must be within uint8 range")
+        return
+    if isinstance(operator, AdaptiveMean):
+        if operator.block_size < 3 or operator.block_size % 2 == 0:
+            raise InvalidPreprocessPlan("AdaptiveMean block_size must be an odd integer at least 3")
+        if not math.isfinite(operator.c):
+            raise InvalidPreprocessPlan("AdaptiveMean c must be finite")
+        if not 0 <= operator.max_value <= 255:
+            raise InvalidPreprocessPlan("AdaptiveMean max_value must be within uint8 range")
+        return
+    if isinstance(operator, Morphology):
+        if operator.operation.lower() not in {"", "none", "open", "close", "dilate", "erode"}:
+            raise InvalidPreprocessPlan(f"Unsupported morphology operation: {operator.operation}")
+        if operator.kernel_size <= 0 or operator.iterations < 0:
+            raise InvalidPreprocessPlan("Morphology kernel_size must be positive and iterations non-negative")
+        return
+    raise InvalidPreprocessPlan(f"Unsupported preprocessing operator: {type(operator).__name__}")
+
+
+@dataclass(frozen=True, slots=True)
 class PreprocessPlan:
+    SCHEMA_VERSION = 1
+
     operations: tuple[PreprocessOperator, ...]
     name: str = ""
 
     def __post_init__(self) -> None:
         if not self.operations:
             raise ValueError("A preprocessing plan must contain at least one operator")
+        for operator in self.operations:
+            _validate_operator(operator)
+
+    @property
+    def signature(self) -> tuple:
+        return (self.SCHEMA_VERSION, tuple(operator_signature(operator) for operator in self.operations))
+
+    def validate_input(self, image: np.ndarray) -> PreprocessTensorSpec:
+        if not isinstance(image, np.ndarray):
+            raise InvalidPreprocessPlan("Preprocess input must be a numpy.ndarray")
+        if image.dtype != np.uint8:
+            raise InvalidPreprocessPlan(f"Preprocess input dtype must be uint8, got {image.dtype}")
+        if image.ndim not in {2, 3}:
+            raise InvalidPreprocessPlan(f"Preprocess input must have 2 or 3 dimensions, got {image.ndim}")
+        if image.shape[0] <= 0 or image.shape[1] <= 0:
+            raise InvalidPreprocessPlan("Preprocess input height and width must be positive")
+        channels = 1 if image.ndim == 2 else int(image.shape[2])
+        if channels not in {1, 3} or (image.ndim == 3 and channels == 1):
+            raise InvalidPreprocessPlan("Preprocess input must be 2D gray or 3-channel BGR")
+
+        shape = tuple(int(value) for value in image.shape)
+        for operator in self.operations:
+            if isinstance(operator, Gray):
+                channels = 1
+                shape = (shape[0], shape[1])
+            elif isinstance(operator, Resize):
+                shape = (
+                    (operator.height, operator.width)
+                    if channels == 1
+                    else (operator.height, operator.width, channels)
+                )
+            elif isinstance(operator, (Threshold, AdaptiveMean, Morphology)) and channels != 1:
+                raise InvalidPreprocessPlan(
+                    f"{type(operator).__name__} requires single-channel input; add Gray first"
+                )
+        return PreprocessTensorSpec(shape=shape, dtype="uint8", channels=channels)
+
+    @staticmethod
+    def validate_output(output: np.ndarray, expected: PreprocessTensorSpec) -> np.ndarray:
+        if not isinstance(output, np.ndarray):
+            raise InvalidPreprocessPlan("Preprocess output must be a numpy.ndarray")
+        if output.dtype != np.uint8:
+            raise InvalidPreprocessPlan(f"Preprocess output dtype must be uint8, got {output.dtype}")
+        if tuple(output.shape) != expected.shape:
+            raise InvalidPreprocessPlan(
+                f"Preprocess output shape mismatch: expected {expected.shape}, got {tuple(output.shape)}"
+            )
+        channels = 1 if output.ndim == 2 else int(output.shape[2])
+        if channels != expected.channels:
+            raise InvalidPreprocessPlan(
+                f"Preprocess output channel mismatch: expected {expected.channels}, got {channels}"
+            )
+        return output
 
 
 class PreprocessPlanCache:
@@ -113,10 +230,11 @@ class CpuPreprocessExecutor:
     }
 
     def execute(self, image: np.ndarray, plan: PreprocessPlan) -> np.ndarray:
+        expected = plan.validate_input(image)
         output = np.asarray(image)
         for operator in plan.operations:
             output = self._execute_operator(output, operator)
-        return output
+        return plan.validate_output(output, expected)
 
     def _execute_operator(self, image: np.ndarray, operator: PreprocessOperator) -> np.ndarray:
         if isinstance(operator, Gray):
@@ -174,13 +292,14 @@ class CudaPreprocessExecutor:
         self.runtime = runtime
 
     def execute(self, image: np.ndarray, plan: PreprocessPlan) -> np.ndarray:
+        expected = plan.validate_input(image)
         fused = self._execute_legacy_fused(image, plan)
         if fused is not None:
-            return fused
+            return plan.validate_output(fused, expected)
         output = np.asarray(image)
         for operator in plan.operations:
             output = self._execute_operator(output, operator)
-        return output
+        return plan.validate_output(output, expected)
 
     def _execute_legacy_fused(self, image: np.ndarray, plan: PreprocessPlan) -> np.ndarray | None:
         operations = plan.operations

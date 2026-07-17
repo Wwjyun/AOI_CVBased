@@ -18,9 +18,12 @@ from core.preprocess_plan import (
     CudaPreprocessExecutor,
     Gaussian,
     Gray,
+    InvalidPreprocessPlan,
+    Morphology,
     PreprocessPlan,
     PreprocessPlanCache,
     Resize,
+    Threshold,
     UnsupportedPreprocessPlan,
 )
 from detectors.detector_401_2 import Detector401_2
@@ -293,6 +296,85 @@ class PreprocessPlanTests(unittest.TestCase):
         self.assertEqual(executor.plans[0].operations[2].c, -2.0)
         self.assertEqual(executor.plans[3].operations[2].c, -3.0)
         self.assertEqual(detector.preprocess_plan_cache_size, 3)
+
+    def test_plan_signature_and_tensor_spec_are_deterministic(self):
+        operations = (
+            Gray(),
+            Resize(10, 8, "area"),
+            Gaussian(3),
+            Threshold(120, 255, True),
+            Morphology("open", 3, 1),
+        )
+        first = PreprocessPlan(operations, name="first")
+        second = PreprocessPlan(operations, name="display_name_does_not_change_semantics")
+        changed = PreprocessPlan(operations[:-2] + (Threshold(121, 255, True), operations[-1]))
+
+        self.assertEqual(first.signature, second.signature)
+        self.assertNotEqual(first.signature, changed.signature)
+        spec = first.validate_input(np.zeros((20, 30, 3), dtype=np.uint8))
+        self.assertEqual(spec.shape, (8, 10))
+        self.assertEqual(spec.dtype, "uint8")
+        self.assertEqual(spec.channels, 1)
+
+    def test_invalid_operator_parameters_are_rejected_at_plan_creation(self):
+        invalid_operators = (
+            Resize(0, 10),
+            Gaussian(4),
+            Threshold(-1),
+            AdaptiveMean(2, 0.0),
+            AdaptiveMean(3, float("inf")),
+            Morphology("unknown", 3, 1),
+            Morphology("open", 0, 1),
+            Morphology("open", 3, -1),
+        )
+        for operator in invalid_operators:
+            with self.subTest(operator=operator):
+                with self.assertRaises(InvalidPreprocessPlan):
+                    PreprocessPlan((operator,))
+
+    def test_invalid_input_dtype_channel_shape_and_order_are_rejected(self):
+        gray_plan = PreprocessPlan((Gray(),))
+        invalid_inputs = (
+            [1, 2, 3],
+            np.zeros((4, 5), dtype=np.float32),
+            np.zeros((4,), dtype=np.uint8),
+            np.zeros((0, 5), dtype=np.uint8),
+            np.zeros((4, 5, 1), dtype=np.uint8),
+            np.zeros((4, 5, 4), dtype=np.uint8),
+        )
+        for image in invalid_inputs:
+            with self.subTest(shape=getattr(image, "shape", None)):
+                with self.assertRaises(InvalidPreprocessPlan):
+                    gray_plan.validate_input(image)
+
+        with self.assertRaisesRegex(InvalidPreprocessPlan, "requires single-channel"):
+            PreprocessPlan((Threshold(127),)).validate_input(
+                np.zeros((4, 5, 3), dtype=np.uint8)
+            )
+
+    def test_executor_rejects_wrong_output_shape_or_dtype(self):
+        class BadDtypeRuntime:
+            supports_fused_401_2 = False
+
+            @staticmethod
+            def bgr_to_gray(image):
+                return np.zeros(image.shape[:2], dtype=np.float32)
+
+        class BadShapeRuntime:
+            supports_fused_401_2 = False
+
+            @staticmethod
+            def bgr_to_gray(image):
+                return np.zeros((image.shape[0], image.shape[1] + 1), dtype=np.uint8)
+
+        with self.assertRaisesRegex(InvalidPreprocessPlan, "output dtype"):
+            CudaPreprocessExecutor(BadDtypeRuntime()).execute(
+                np.zeros((4, 5, 3), dtype=np.uint8), PreprocessPlan((Gray(),))
+            )
+        with self.assertRaisesRegex(InvalidPreprocessPlan, "output shape"):
+            CudaPreprocessExecutor(BadShapeRuntime()).execute(
+                np.zeros((4, 5, 3), dtype=np.uint8), PreprocessPlan((Gray(),))
+            )
 
 
 class ComparisonToleranceTests(unittest.TestCase):
