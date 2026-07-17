@@ -51,7 +51,8 @@ enum VisionFlowPlanOperatorKind {
     VF_PLAN_GAUSSIAN = 2,
     VF_PLAN_THRESHOLD = 3,
     VF_PLAN_ADAPTIVE_MEAN = 4,
-    VF_PLAN_MORPHOLOGY = 5
+    VF_PLAN_MORPHOLOGY = 5,
+    VF_PLAN_RESIZE_AREA = 6
 };
 
 typedef struct VfPlanOperatorV1 {

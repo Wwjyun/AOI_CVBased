@@ -6,7 +6,7 @@ from unittest.mock import patch
 import cv2
 import numpy as np
 
-from core.preprocess_plan import CpuPreprocessDagExecutor
+from core.preprocess_plan import CpuPreprocessDagExecutor, CpuPreprocessExecutor
 from core.preprocess_cache import TilePreprocessCache
 from detectors.detector_401 import Detector401
 from detectors.detector_401_1 import Detector401_1
@@ -27,6 +27,25 @@ class _AreaUnsupportedRuntime:
     def bgr_to_gray(self, image):
         self.gray_calls += 1
         return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+
+
+class _NativeAreaRuntime:
+    available = True
+    unavailable_reason = ""
+    fallback_to_cpu = True
+    supports_native_plan = True
+    supports_fused_401_2 = False
+
+    def __init__(self):
+        self.calls = 0
+
+    @staticmethod
+    def native_plan_capability(_plan, _image):
+        return True, "native area resize supported"
+
+    def execute_plan(self, image, plan):
+        self.calls += 1
+        return CpuPreprocessExecutor().execute(image, plan)
 
 
 class _Failing401Runtime:
@@ -200,6 +219,20 @@ class Detector4011PlanMigrationTests(unittest.TestCase):
         self.assertEqual(execution["backend"], "cpu")
         self.assertEqual(execution["preprocess_capability"]["route"], "fallback")
         self.assertIn("area", execution["fallback_reason"])
+
+    def test_area_supported_native_plan_runs_401_1_in_one_gpu_call(self):
+        image = np.random.default_rng(4014).integers(0, 256, size=(96, 112, 3), dtype=np.uint8)
+        params = self._params()
+        expected = Detector401_1(params=params).run(image)
+        runtime = _NativeAreaRuntime()
+
+        actual = Detector401_1(params=params, use_gpu=True, gpu_runtime=runtime).run(image)
+
+        self.assertEqual(actual["defects"], expected["defects"])
+        self.assertEqual(actual["pass"], expected["pass"])
+        self.assertEqual(runtime.calls, 1)
+        self.assertEqual(actual["execution"]["backend"], "cuda_dll")
+        self.assertEqual(actual["execution"]["preprocess_capability"]["route"], "native_plan")
 
     def test_area_unsupported_cuda_fails_before_any_gpu_call_when_fallback_is_disabled(self):
         image = np.random.default_rng(4013).integers(0, 256, size=(96, 112, 3), dtype=np.uint8)

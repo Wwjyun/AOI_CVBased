@@ -33,6 +33,7 @@ from core.preprocess_plan import (  # noqa: E402
     PreprocessPlan,
     PreprocessDagNode,
     PreprocessDagPlan,
+    Resize,
     Threshold,
 )
 from core.recipe_manager import RecipeManager  # noqa: E402
@@ -299,6 +300,10 @@ def validate_primitives(runtime: GpuRuntime) -> list[dict]:
             PreprocessPlan(
                 (Gaussian(5), Morphology("open", 3, 2), Gray(), AdaptiveMean(11, -2.0, 255, True)),
                 name="native_401_style",
+            ),
+            PreprocessPlan(
+                (Gray(), Resize(96, 64, "area"), Gaussian(5), AdaptiveMean(11, -2.0, 255, True)),
+                name="native_401_1_area_resize",
             ),
         )
         cpu_executor = CpuPreprocessExecutor()

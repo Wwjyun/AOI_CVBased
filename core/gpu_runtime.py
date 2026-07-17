@@ -1049,6 +1049,7 @@ class GpuRuntime:
             "Threshold": 3,
             "AdaptiveMean": 4,
             "Morphology": 5,
+            "Resize": 6,
         }
         morphology_operations = {"open": 0, "close": 1, "dilate": 2, "erode": 3}
         encoded = []
@@ -1061,6 +1062,12 @@ class GpuRuntime:
             float_params = [0.0, 0.0]
             if name == "Gaussian":
                 int_params[0] = int(operator.kernel_size)
+            elif name == "Resize":
+                if str(operator.interpolation).lower() != "area":
+                    raise GpuRuntimeError(
+                        f"Generic native plan does not support Resize({operator.interpolation})"
+                    )
+                int_params[:2] = [int(operator.width), int(operator.height)]
             elif name == "Threshold":
                 int_params[:3] = [int(operator.threshold), int(operator.max_value), int(operator.invert)]
             elif name == "AdaptiveMean":

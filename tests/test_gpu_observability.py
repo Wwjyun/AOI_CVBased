@@ -129,6 +129,7 @@ class _NativePlanDll(_FusedDll):
         self.events = []
         self.plan_create_calls = 0
         self.plan_execute_calls = 0
+        self.plan_output_shapes = {}
         self.fail_next_plan_execute = False
         self.vf_plan_query = _Function(self._query)
         self.vf_plan_create = _Function(self._plan_create)
@@ -140,24 +141,38 @@ class _NativePlanDll(_FusedDll):
         reason.value = b"supported fake native plan"
         return 0
 
-    def _plan_create(self, _context, _descriptor, _width, _height, output):
+    def _plan_create(self, _context, descriptor, width, height, output):
         self.plan_create_calls += 1
-        output._obj.value = 5678
+        output_width = int(width)
+        output_height = int(height)
+        value = descriptor._obj
+        for index in range(int(value.operator_count)):
+            operator = value.operators[index]
+            if int(operator.kind) == 6:
+                output_width = int(operator.int_params[0])
+                output_height = int(operator.int_params[1])
+        handle = 5677 + self.plan_create_calls
+        self.plan_output_shapes[handle] = (output_height, output_width)
+        output._obj.value = handle
         return 0
 
     def _plan_execute(
-        self, _plan, _src, _width, height, _src_stride, _src_channels,
+        self, plan, _src, _width, height, _src_stride, _src_channels,
         dst, dst_stride, _dst_channels,
     ):
         self.plan_execute_calls += 1
         if self.fail_next_plan_execute:
             self.fail_next_plan_execute = False
             return 2
-        ctypes.memset(dst, 0, int(height) * int(dst_stride))
+        handle = plan.value if hasattr(plan, "value") else int(plan)
+        output_height = self.plan_output_shapes.get(handle, (int(height), 0))[0]
+        ctypes.memset(dst, 0, output_height * int(dst_stride))
         return 0
 
     def _plan_destroy(self, plan):
-        self.events.append(("plan", plan.value if hasattr(plan, "value") else int(plan)))
+        handle = plan.value if hasattr(plan, "value") else int(plan)
+        self.events.append(("plan", handle))
+        self.plan_output_shapes.pop(handle, None)
         return 0
 
     def _destroy(self, context):
@@ -337,9 +352,15 @@ class _NativePlanRuntimeStub:
         self.calls = 0
 
     @staticmethod
-    def native_plan_capability(plan, _image):
-        if any(isinstance(operator, Resize) for operator in plan.operations):
-            return False, "Resize(area) is unsupported by fake native plan"
+    def native_plan_capability(plan, image):
+        height, width = image.shape[:2]
+        for operator in plan.operations:
+            if isinstance(operator, Resize):
+                if operator.interpolation != "area":
+                    return False, f"Resize({operator.interpolation}) is unsupported by fake native plan"
+                if operator.width > width or operator.height > height:
+                    return False, "Resize(area) expansion is unsupported by fake native plan"
+                width, height = operator.width, operator.height
         return True, "supported fake native plan"
 
     def execute_plan(self, image, plan):
@@ -571,6 +592,16 @@ class GpuRuntimeMetricsTests(unittest.TestCase):
         self.assertEqual(list(operators[3].int_params)[:3], [11, 255, 1])
         self.assertAlmostEqual(operators[3].float_params[0], -2.5)
 
+    def test_native_descriptor_encodes_area_resize_target(self):
+        image = np.zeros((24, 32, 3), dtype=np.uint8)
+        plan = PreprocessPlan((Gray(), Resize(11, 7, "area")))
+
+        descriptor, operators = GpuRuntime._native_plan_descriptor(plan, image)
+
+        self.assertEqual(descriptor.operator_count, 2)
+        self.assertEqual([operators[index].kind for index in range(2)], [1, 6])
+        self.assertEqual(list(operators[1].int_params)[:2], [11, 7])
+
     def test_generic_native_dag_is_cached_multi_output_and_destroyed_first(self):
         runtime = GpuRuntime(enabled=False)
         dll = _NativeDagPlanDll()
@@ -725,7 +756,7 @@ class GpuRuntimeMetricsTests(unittest.TestCase):
         self.assertEqual(dll.plan_create_calls, 2)
         self.assertEqual(dll.events, [("plan", 5678)])
         runtime.close()
-        self.assertEqual(dll.events[-2:], [("plan", 5678), ("context", 1234)])
+        self.assertEqual(dll.events[-2:], [("plan", 5679), ("context", 1234)])
 
 
 class DetectorNativeRoutingTests(unittest.TestCase):
@@ -853,16 +884,32 @@ class PreprocessPlanTests(unittest.TestCase):
         self.assertEqual(report["route"], "native_plan")
         self.assertEqual(report["selected_backend"], "cuda")
 
-    def test_native_plan_rejects_whole_unsupported_graph_before_execution(self):
+    def test_native_plan_rejects_area_expansion_before_execution(self):
         image = np.zeros((20, 20, 3), dtype=np.uint8)
         runtime = _NativePlanRuntimeStub()
-        plan = PreprocessPlan((Gray(), Resize(10, 10, "area")))
+        plan = PreprocessPlan((Gray(), Resize(30, 10, "area")))
 
         report = CudaPreprocessExecutor(runtime).capability_report(plan, image).to_dict()
 
         self.assertEqual(report["route"], "fallback")
         self.assertEqual(report["selected_backend"], "cpu")
         self.assertEqual(runtime.calls, 0)
+
+    def test_native_plan_executes_area_downscale_with_resized_output(self):
+        runtime = GpuRuntime(enabled=False)
+        dll = _NativePlanDll()
+        runtime._dll = dll
+        runtime.device_count = 1
+        runtime._load_optional_context()
+        image = np.zeros((20, 30, 3), dtype=np.uint8)
+        plan = PreprocessPlan((Gray(), Resize(10, 8, "area")))
+
+        result = runtime.execute_plan(image, plan)
+
+        self.assertEqual(result.shape, (8, 10))
+        self.assertIn((8, 10), dll.plan_output_shapes.values())
+        self.assertEqual(dll.plan_create_calls, 1)
+        self.assertEqual(dll.plan_execute_calls, 1)
 
     def test_cuda_executor_rejects_non_equivalent_area_resize(self):
         plan = PreprocessPlan(operations=(Gray(), Resize(10, 10, "area")))

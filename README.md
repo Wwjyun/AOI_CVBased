@@ -490,7 +490,7 @@ detectors:
 
 - `CpuPreprocessExecutor` 定義 OpenCV 正確性語意。
 - `CudaPreprocessExecutor` 依 DLL 能力優先選擇 versioned generic native plan，再選相容的 fused adapter、舊版通用 primitive 或 CPU fallback。
-- Generic native linear plan 支援 Gray、Gaussian、Threshold、Adaptive Mean 與 Morphology，整份 plan capability 通過後只做一次 H2D、連續 kernels 與一次必要 D2H。
+- Generic native linear plan 支援 Gray、兩軸不放大的單通道 Resize(area)、Gaussian、Threshold、Adaptive Mean 與 Morphology；Resize 放大或混合軸縮放仍明確 fallback。整份 plan capability 通過後只做一次 H2D、連續 kernels 與一次必要 D2H。
 - Generic native DAG plan 支援拓撲排序的分支與多輸出；Detector 900 共用一次 device gray，單次上傳後只下載 outer/inner masks。
 - Detector 401-2 已有一次呼叫完成灰階、Gaussian 與 Adaptive Mean 的 persistent context 相容路徑。
 - Persistent context 現在持有 non-blocking CUDA stream、grow-only scratch 與 morphology ping-pong buffers；plan 內的中間結果不回傳 CPU。

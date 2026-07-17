@@ -51,6 +51,24 @@ class CudaSourceContractTests(unittest.TestCase):
         self.assertIn("context->u8[4]", device_execute)
         self.assertNotIn("detector", descriptor.lower())
 
+    def test_linear_native_plan_resizes_on_device_and_tracks_output_shape(self):
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "gpu" / "visionflow_cuda.cu").read_text(encoding="utf-8")
+        header = (root / "gpu" / "include" / "visionflow_cuda.h").read_text(encoding="utf-8")
+        execute = source.split("static int execute_linear_plan_device(", 1)[1].split(
+            "static int execute_dag_plan_device(", 1
+        )[0]
+        validation = source.split("int validate_plan_desc(", 1)[1].split(
+            "int validate_dag_plan_desc(", 1
+        )[0]
+
+        self.assertIn("VF_PLAN_RESIZE_AREA = 6", header)
+        self.assertIn("case VF_PLAN_RESIZE_AREA", validation)
+        self.assertIn("target_width", execute)
+        self.assertIn("resize_gray_kernel<<<", execute)
+        self.assertIn("compiled->output_width", source)
+        self.assertIn("compiled->output_height", source)
+
     def test_persistent_context_owns_stream_and_fused_path_uses_it(self):
         root = Path(__file__).resolve().parents[1]
         source = (root / "gpu" / "visionflow_cuda.cu").read_text(encoding="utf-8")

@@ -158,6 +158,8 @@ struct NativePlan {
     PersistentContext* context = nullptr;
     int width = 0;
     int height = 0;
+    int output_width = 0;
+    int output_height = 0;
     int input_channels = 0;
     int output_channels = 0;
     std::vector<VfPlanOperatorV1> operators;
@@ -267,6 +269,8 @@ int validate_plan_desc(
     int width,
     int height,
     int* output_channels,
+    int* output_width,
+    int* output_height,
     char* reason,
     int reason_capacity) {
     if (desc == nullptr || desc->struct_size != sizeof(VfPlanDescV1) ||
@@ -288,6 +292,8 @@ int validate_plan_desc(
     }
 
     int channels = desc->input_channels;
+    int current_width = width;
+    int current_height = height;
     int previous_node = VF_PLAN_INPUT_NODE;
     for (int index = 0; index < desc->operator_count; ++index) {
         const VfPlanOperatorV1& op = desc->operators[index];
@@ -321,7 +327,7 @@ int validate_plan_desc(
                 if (channels != 1 || op.int_params[1] < 0 || op.int_params[1] > 255 ||
                     (op.int_params[2] != 0 && op.int_params[2] != 1) ||
                     !std::isfinite(op.float_params[0]) ||
-                    adaptive_layout(width, height, op.int_params[0], &radius, &padded_width,
+                    adaptive_layout(current_width, current_height, op.int_params[0], &radius, &padded_width,
                                     &padded_height, &padded_count) != VF_CUDA_OK) {
                     write_reason(reason, reason_capacity, "AdaptiveMean shape or parameters are unsupported");
                     return VF_CUDA_UNSUPPORTED;
@@ -336,6 +342,17 @@ int validate_plan_desc(
                     return VF_CUDA_UNSUPPORTED;
                 }
                 break;
+            case VF_PLAN_RESIZE_AREA:
+                if (channels != 1 || op.int_params[0] <= 0 || op.int_params[1] <= 0 ||
+                    op.int_params[0] > current_width || op.int_params[1] > current_height) {
+                    write_reason(
+                        reason, reason_capacity,
+                        "Resize(area) requires one channel and non-expanding target dimensions");
+                    return VF_CUDA_UNSUPPORTED;
+                }
+                current_width = op.int_params[0];
+                current_height = op.int_params[1];
+                break;
             default:
                 write_reason(reason, reason_capacity, "Plan contains an unsupported operator kind");
                 return VF_CUDA_UNSUPPORTED;
@@ -347,6 +364,8 @@ int validate_plan_desc(
         return VF_CUDA_INVALID_ARGUMENT;
     }
     if (output_channels != nullptr) *output_channels = channels;
+    if (output_width != nullptr) *output_width = current_width;
+    if (output_height != nullptr) *output_height = current_height;
     write_reason(reason, reason_capacity, "Supported generic native linear plan");
     return VF_CUDA_OK;
 }
@@ -497,27 +516,36 @@ int reserve_dag_plan_buffers(PersistentContext* context, const NativeDagPlan& pl
 
 int reserve_plan_buffers(PersistentContext* context, const NativePlan& plan) {
     if (context == nullptr) return VF_CUDA_INVALID_ARGUMENT;
-    const size_t pixels = static_cast<size_t>(plan.width) * plan.height;
+    const size_t input_pixels = static_cast<size_t>(plan.width) * plan.height;
+    size_t maximum_pixels = input_pixels;
     int maximum_channels = plan.input_channels;
     bool needs_float = false;
     bool needs_morph_scratch = false;
     size_t maximum_padded_count = 0;
     int channels = plan.input_channels;
+    int current_width = plan.width;
+    int current_height = plan.height;
     for (const VfPlanOperatorV1& op : plan.operators) {
         if (op.kind == VF_PLAN_GRAY) channels = 1;
+        if (op.kind == VF_PLAN_RESIZE_AREA) {
+            current_width = op.int_params[0];
+            current_height = op.int_params[1];
+        }
+        const size_t current_pixels = static_cast<size_t>(current_width) * current_height;
+        maximum_pixels = std::max(maximum_pixels, current_pixels);
         maximum_channels = std::max(maximum_channels, channels);
         needs_float = needs_float || op.kind == VF_PLAN_GAUSSIAN;
         needs_morph_scratch = needs_morph_scratch || op.kind == VF_PLAN_MORPHOLOGY;
         if (op.kind == VF_PLAN_ADAPTIVE_MEAN) {
             int radius = 0, padded_width = 0, padded_height = 0;
             size_t padded_count = 0;
-            int result = adaptive_layout(plan.width, plan.height, op.int_params[0], &radius,
+            int result = adaptive_layout(current_width, current_height, op.int_params[0], &radius,
                                          &padded_width, &padded_height, &padded_count);
             if (result != VF_CUDA_OK) return result;
             maximum_padded_count = std::max(maximum_padded_count, padded_count);
         }
     }
-    const size_t image_bytes = pixels * static_cast<size_t>(maximum_channels);
+    const size_t image_bytes = maximum_pixels * static_cast<size_t>(maximum_channels);
     int result = reserve_device(&context->u8[0], &context->u8_capacity[0], image_bytes,
                                 &context->allocation_count);
     if (result == VF_CUDA_OK) result = reserve_device(
@@ -528,7 +556,7 @@ int reserve_plan_buffers(PersistentContext* context, const NativePlan& plan) {
         &context->u8[4], &context->u8_capacity[4], image_bytes, &context->allocation_count);
     if (result == VF_CUDA_OK && needs_float) result = reserve_device(
         &context->float_buffer, &context->float_capacity,
-        pixels * static_cast<size_t>(maximum_channels), &context->allocation_count);
+        maximum_pixels * static_cast<size_t>(maximum_channels), &context->allocation_count);
     if (result == VF_CUDA_OK && maximum_padded_count > 0) result = reserve_device(
         &context->u8[3], &context->u8_capacity[3], maximum_padded_count,
         &context->allocation_count);
@@ -865,10 +893,9 @@ static int execute_linear_plan_device(
     int dst_stride,
     int dst_channels) {
     PersistentContext* context = compiled->context;
-    const int width = compiled->width;
-    const int height = compiled->height;
+    int width = compiled->width;
+    int height = compiled->height;
     int channels = compiled->input_channels;
-    const size_t pixels = static_cast<size_t>(width) * height;
     for (const VfPlanOperatorV1& op : compiled->operators) {
         uint8_t* next = current == context->u8[1] ? context->u8[2] : context->u8[1];
         switch (op.kind) {
@@ -880,6 +907,16 @@ static int execute_linear_plan_device(
                     channels = 1;
                 }
                 break;
+            case VF_PLAN_RESIZE_AREA: {
+                const int target_width = op.int_params[0];
+                const int target_height = op.int_params[1];
+                resize_gray_kernel<<<grid2d(target_width, target_height), dim3(BLOCK_X, BLOCK_Y), 0, context->stream>>>(
+                    current, next, width, height, target_width, target_height);
+                current = next;
+                width = target_width;
+                height = target_height;
+                break;
+            }
             case VF_PLAN_GAUSSIAN: {
                 context->timing_has_gaussian = true;
                 cudaEventRecord(context->timing_events[TIMING_GAUSSIAN_START], context->stream);
@@ -897,8 +934,8 @@ static int execute_linear_plan_device(
             case VF_PLAN_THRESHOLD:
                 context->timing_has_threshold = true;
                 cudaEventRecord(context->timing_events[TIMING_THRESHOLD_START], context->stream);
-                threshold_kernel<<<(static_cast<int>(pixels) + 255) / 256, 256, 0, context->stream>>>(
-                    current, next, static_cast<int>(pixels), op.int_params[0],
+                threshold_kernel<<<(width * height + 255) / 256, 256, 0, context->stream>>>(
+                    current, next, width * height, op.int_params[0],
                     op.int_params[1], op.int_params[2]);
                 cudaEventRecord(context->timing_events[TIMING_THRESHOLD_END], context->stream);
                 current = next;
@@ -1366,7 +1403,8 @@ VF_CUDA_API int vf_plan_query(
     int height,
     char* reason,
     int reason_capacity) {
-    return validate_plan_desc(desc, width, height, nullptr, reason, reason_capacity);
+    return validate_plan_desc(
+        desc, width, height, nullptr, nullptr, nullptr, reason, reason_capacity);
 }
 
 VF_CUDA_API int vf_plan_create(
@@ -1378,7 +1416,10 @@ VF_CUDA_API int vf_plan_create(
     if (context == nullptr || plan == nullptr) return VF_CUDA_INVALID_ARGUMENT;
     *plan = nullptr;
     int output_channels = 0;
-    int result = validate_plan_desc(desc, width, height, &output_channels, nullptr, 0);
+    int output_width = 0;
+    int output_height = 0;
+    int result = validate_plan_desc(
+        desc, width, height, &output_channels, &output_width, &output_height, nullptr, 0);
     if (result != VF_CUDA_OK) return result;
 
     NativePlan* created = new (std::nothrow) NativePlan();
@@ -1386,6 +1427,8 @@ VF_CUDA_API int vf_plan_create(
     created->context = static_cast<PersistentContext*>(context);
     created->width = width;
     created->height = height;
+    created->output_width = output_width;
+    created->output_height = output_height;
     created->input_channels = desc->input_channels;
     created->output_channels = output_channels;
     try {
@@ -1420,7 +1463,8 @@ VF_CUDA_API int vf_plan_execute(
         height != compiled->height || src_channels != compiled->input_channels ||
         dst_channels != compiled->output_channels ||
         !visionflow_cuda::valid_image(src, width, height, src_stride, src_channels) ||
-        !visionflow_cuda::valid_image(dst, width, height, dst_stride, dst_channels)) {
+        !visionflow_cuda::valid_image(
+            dst, compiled->output_width, compiled->output_height, dst_stride, dst_channels)) {
         return VF_CUDA_INVALID_ARGUMENT;
     }
     PersistentContext* context = compiled->context;
@@ -1458,7 +1502,7 @@ VF_CUDA_API int vf_plan_execute_roi(
         y + compiled->height > context->resident_height ||
         dst_channels != compiled->output_channels ||
         !visionflow_cuda::valid_image(
-            dst, compiled->width, compiled->height, dst_stride, dst_channels)) {
+            dst, compiled->output_width, compiled->output_height, dst_stride, dst_channels)) {
         return VF_CUDA_INVALID_ARGUMENT;
     }
     reset_timing(context, false);

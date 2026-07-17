@@ -67,40 +67,48 @@ int main() {
         return 7;
     }
 
-    VfPlanOperatorV1 operators[3]{};
+    const int resized_width = 4;
+    const int resized_height = 4;
+    VfPlanOperatorV1 operators[4]{};
     operators[0].struct_size = sizeof(VfPlanOperatorV1);
     operators[0].kind = VF_PLAN_GRAY;
     operators[0].input_node = VF_PLAN_INPUT_NODE;
     operators[0].output_node = 0;
     operators[1].struct_size = sizeof(VfPlanOperatorV1);
-    operators[1].kind = VF_PLAN_GAUSSIAN;
+    operators[1].kind = VF_PLAN_RESIZE_AREA;
     operators[1].input_node = 0;
     operators[1].output_node = 1;
-    operators[1].int_params[0] = 3;
+    operators[1].int_params[0] = resized_width;
+    operators[1].int_params[1] = resized_height;
     operators[2].struct_size = sizeof(VfPlanOperatorV1);
-    operators[2].kind = VF_PLAN_ADAPTIVE_MEAN;
+    operators[2].kind = VF_PLAN_GAUSSIAN;
     operators[2].input_node = 1;
     operators[2].output_node = 2;
     operators[2].int_params[0] = 3;
-    operators[2].int_params[1] = 255;
-    operators[2].int_params[2] = 1;
-    operators[2].float_params[0] = -2.0f;
+    operators[3].struct_size = sizeof(VfPlanOperatorV1);
+    operators[3].kind = VF_PLAN_ADAPTIVE_MEAN;
+    operators[3].input_node = 2;
+    operators[3].output_node = 3;
+    operators[3].int_params[0] = 3;
+    operators[3].int_params[1] = 255;
+    operators[3].int_params[2] = 1;
+    operators[3].float_params[0] = -2.0f;
     VfPlanDescV1 descriptor{};
     descriptor.struct_size = sizeof(VfPlanDescV1);
     descriptor.version = VF_CUDA_PLAN_VERSION;
     descriptor.input_channels = 3;
-    descriptor.operator_count = 3;
+    descriptor.operator_count = 4;
     descriptor.operators = operators;
-    descriptor.output_node = 2;
+    descriptor.output_node = 3;
     char plan_reason[256]{};
     result = vf_plan_query(&descriptor, width, height, plan_reason, sizeof(plan_reason));
     void* plan = nullptr;
     if (result == VF_CUDA_OK) result = vf_plan_create(context, &descriptor, width, height, &plan);
-    std::vector<uint8_t> plan_binary(width * height, 0);
+    std::vector<uint8_t> plan_binary(resized_width * resized_height, 0);
     if (result == VF_CUDA_OK) {
         result = vf_plan_execute(
             plan, bgr.data(), width, height, width * 3, 3,
-            plan_binary.data(), width, 1);
+            plan_binary.data(), resized_width, 1);
     }
     uint64_t resident_generation = 0;
     if (result == VF_CUDA_OK) {
@@ -109,7 +117,7 @@ int main() {
     }
     if (result == VF_CUDA_OK) {
         result = vf_plan_execute_roi(
-            plan, resident_generation, 0, 0, plan_binary.data(), width, 1);
+            plan, resident_generation, 0, 0, plan_binary.data(), resized_width, 1);
     }
     uint64_t plan_allocation_count = 0;
     if (result == VF_CUDA_OK) {
@@ -118,7 +126,7 @@ int main() {
     if (result == VF_CUDA_OK) {
         result = vf_plan_execute(
             plan, bgr.data(), width, height, width * 3, 3,
-            plan_binary.data(), width, 1);
+            plan_binary.data(), resized_width, 1);
     }
     uint64_t repeated_allocation_count = 0;
     if (result == VF_CUDA_OK) {
@@ -133,8 +141,9 @@ int main() {
     dag_operators[1].int_params[0] = 127;
     dag_operators[1].int_params[1] = 255;
     dag_operators[1].int_params[2] = 1;
-    dag_operators[2] = operators[2];
+    dag_operators[2] = operators[3];
     dag_operators[2].input_node = 0;
+    dag_operators[2].output_node = 2;
     int32_t dag_output_nodes[2]{1, 2};
     VfDagPlanDescV1 dag_descriptor{};
     dag_descriptor.struct_size = sizeof(VfDagPlanDescV1);
