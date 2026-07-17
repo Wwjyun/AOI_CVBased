@@ -17,7 +17,7 @@ constexpr int SCAN_THREADS = 256;
 constexpr int TRANSPOSE_TILE = 32;
 constexpr int TRANSPOSE_ROWS = 8;
 constexpr int MAX_GAUSSIAN_KERNEL = 127;
-constexpr int TIMING_EVENT_COUNT = 10;
+constexpr int TIMING_EVENT_COUNT = 12;
 enum TimingEventIndex {
     TIMING_START = 0,
     TIMING_AFTER_INPUT = 1,
@@ -29,6 +29,8 @@ enum TimingEventIndex {
     TIMING_ADAPTIVE_END = 7,
     TIMING_THRESHOLD_START = 8,
     TIMING_THRESHOLD_END = 9,
+    TIMING_MORPHOLOGY_START = 10,
+    TIMING_MORPHOLOGY_END = 11,
 };
 
 __constant__ float gaussian_weights[MAX_GAUSSIAN_KERNEL];
@@ -58,6 +60,7 @@ struct PersistentContext {
     bool timing_has_gaussian = false;
     bool timing_has_adaptive = false;
     bool timing_has_threshold = false;
+    bool timing_has_morphology = false;
 
     PersistentContext() {
         initialization_error = cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
@@ -102,6 +105,7 @@ void reset_timing(PersistentContext* context, bool input_is_host) {
     context->timing_has_gaussian = false;
     context->timing_has_adaptive = false;
     context->timing_has_threshold = false;
+    context->timing_has_morphology = false;
     cudaEventRecord(context->timing_events[TIMING_START], context->stream);
 }
 
@@ -141,6 +145,12 @@ void finalize_timing(PersistentContext* context) {
             &context->last_timings.threshold_ms,
             context->timing_events[TIMING_THRESHOLD_START],
             context->timing_events[TIMING_THRESHOLD_END]);
+    }
+    if (context->timing_has_morphology) {
+        cudaEventElapsedTime(
+            &context->last_timings.morphology_ms,
+            context->timing_events[TIMING_MORPHOLOGY_START],
+            context->timing_events[TIMING_MORPHOLOGY_END]);
     }
 }
 
@@ -921,6 +931,8 @@ static int execute_linear_plan_device(
                 break;
             }
             case VF_PLAN_MORPHOLOGY: {
+                context->timing_has_morphology = true;
+                cudaEventRecord(context->timing_events[TIMING_MORPHOLOGY_START], context->stream);
                 const int operation = op.int_params[0];
                 const int kernel = op.int_params[1];
                 const int iterations = op.int_params[2];
@@ -938,6 +950,7 @@ static int execute_linear_plan_device(
                     source_buffer = destination;
                     destination = destination == next ? context->u8[4] : next;
                 }
+                cudaEventRecord(context->timing_events[TIMING_MORPHOLOGY_END], context->stream);
                 current = source_buffer;
                 break;
             }
@@ -1038,6 +1051,8 @@ static int execute_dag_plan_device(
                 break;
             }
             case VF_PLAN_MORPHOLOGY: {
+                context->timing_has_morphology = true;
+                cudaEventRecord(context->timing_events[TIMING_MORPHOLOGY_START], context->stream);
                 const int operation = op.int_params[0];
                 const int iterations = op.int_params[2];
                 const int passes = (operation == VF_MORPH_OPEN || operation == VF_MORPH_CLOSE)
@@ -1054,6 +1069,7 @@ static int execute_dag_plan_device(
                     source_buffer = destination;
                     destination = destination == output ? context->u8[4] : output;
                 }
+                cudaEventRecord(context->timing_events[TIMING_MORPHOLOGY_END], context->stream);
                 values[index] = source_buffer;
                 break;
             }

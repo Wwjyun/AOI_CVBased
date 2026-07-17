@@ -112,6 +112,7 @@ typedef struct VfCudaTimingsV1 {
     float gaussian_ms;
     float adaptive_integral_ms;
     float threshold_ms;
+    float morphology_ms;
     float total_device_ms;
 } VfCudaTimingsV1;
 

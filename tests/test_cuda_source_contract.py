@@ -121,6 +121,7 @@ class CudaSourceContractTests(unittest.TestCase):
         self.assertIn("TIMING_GAUSSIAN_START", source)
         self.assertIn("TIMING_ADAPTIVE_START", source)
         self.assertIn("TIMING_THRESHOLD_START", source)
+        self.assertIn("TIMING_MORPHOLOGY_START", source)
 
 
 if __name__ == "__main__":

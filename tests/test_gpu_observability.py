@@ -34,6 +34,7 @@ from detectors.detector_401_2 import Detector401_2
 from detectors.detector_401 import Detector401
 from gpu.validate_cuda_dll import (
     benchmark_crossover,
+    benchmark_morphology_iterations,
     compare,
     environment_snapshot,
     load_production_manifest,
@@ -92,6 +93,7 @@ class _FusedDll:
         value.kernel_ms = 2.5
         value.d2h_ms = 0.25
         value.synchronize_ms = 3.5
+        value.morphology_ms = 1.5
         value.total_device_ms = 3.5
         return 0
 
@@ -429,6 +431,7 @@ class GpuRuntimeMetricsTests(unittest.TestCase):
         self.assertEqual(metrics["persistent_context"]["allocation_count"], 7)
         self.assertEqual(metrics["native_timings_ms"]["context_create_ms"], 1.25)
         self.assertEqual(metrics["native_timings_ms"]["kernel_ms"], 2.5)
+        self.assertEqual(metrics["native_timings_ms"]["morphology_ms"], 1.5)
         self.assertEqual(metrics["native_timings_ms"]["total_device_ms"], 3.5)
 
         runtime.close()
@@ -1035,6 +1038,21 @@ class BenchmarkMetadataTests(unittest.TestCase):
         self.assertEqual([item["pixels"] for item in result["measurements"]], [64, 256])
         self.assertFalse(result["policy_changed"])
         self.assertIn("observed_stable_crossover_pixels", result)
+
+    def test_morphology_profile_reports_iterations_and_native_event_share(self):
+        runtime = GpuRuntime(enabled=False)
+        runtime._dll = _NativeDagPlanDll()
+        runtime.device_count = 1
+        runtime._load_optional_context()
+
+        result = benchmark_morphology_iterations(
+            runtime, repetitions=1, warmup=0, iterations=(2, 1), size=16
+        )
+
+        self.assertEqual([item["iterations"] for item in result["measurements"]], [1, 2])
+        self.assertEqual([item["passes"] for item in result["measurements"]], [2, 4])
+        self.assertEqual(result["measurements"][0]["morphology_kernel_share"], 0.6)
+        self.assertFalse(result["optimization_selected"])
 
     def test_production_manifest_requires_pass_and_ng_for_every_recipe(self):
         with tempfile.TemporaryDirectory() as temporary:

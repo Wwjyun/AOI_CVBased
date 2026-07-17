@@ -66,6 +66,10 @@ def parse_args() -> argparse.Namespace:
         "--crossover", action="store_true",
         help="Benchmark small-to-large CPU/GPU native-plan crossover without changing production policy.",
     )
+    parser.add_argument(
+        "--morphology-profile", action="store_true",
+        help="Profile detector-401-style morphology iterations and native CUDA event share.",
+    )
     parser.add_argument("--json-output", help="Write validation, benchmark, device and commit metadata as JSON.")
     args = parser.parse_args()
     if bool(args.image) != bool(args.recipe):
@@ -652,6 +656,66 @@ def benchmark_crossover(
     return result
 
 
+def benchmark_morphology_iterations(
+    runtime: GpuRuntime,
+    repetitions: int = 20,
+    warmup: int = 5,
+    iterations=(1, 2, 4, 8),
+    size: int = 1024,
+) -> dict:
+    if not runtime.supports_native_plan:
+        raise AssertionError("Morphology profiling requires the generic native plan ABI")
+    binary = np.random.default_rng(20260717).integers(
+        0, 2, size=(int(size), int(size)), dtype=np.uint8
+    ) * 255
+    kernel = np.ones((3, 3), dtype=np.uint8)
+    measurements = []
+    for count in sorted({int(value) for value in iterations if int(value) > 0}):
+        plan = PreprocessPlan(
+            (Morphology("close", 3, count),), name=f"morphology_close_i{count}"
+        )
+        cpu = _timing_summary(
+            lambda count=count: cv2.morphologyEx(
+                binary, cv2.MORPH_CLOSE, kernel, iterations=count
+            ),
+            repetitions,
+            warmup,
+        )
+        gpu = _timing_summary(
+            lambda plan=plan: runtime.execute_plan(binary, plan), repetitions, warmup
+        )
+        native = runtime.performance_stats().get("native_timings_ms") or {}
+        morphology_ms = native.get("morphology_ms")
+        kernel_ms = native.get("kernel_ms")
+        share = (
+            float(morphology_ms) / float(kernel_ms)
+            if isinstance(morphology_ms, (int, float)) and isinstance(kernel_ms, (int, float))
+            and kernel_ms > 0 else None
+        )
+        measurements.append({
+            "iterations": count,
+            "passes": count * 2,
+            "cpu": cpu,
+            "gpu_including_transfer": gpu,
+            "speedup": round(cpu["median_ms"] / gpu["median_ms"], 3)
+            if gpu["median_ms"] > 0 else None,
+            "native_timings_ms": native,
+            "morphology_kernel_share": round(share, 6) if share is not None else None,
+        })
+    result = {
+        "image_shape": list(binary.shape),
+        "kernel_size": 3,
+        "operation": "close",
+        "repetitions": max(1, int(repetitions)),
+        "warmup": max(0, int(warmup)),
+        "measurements": measurements,
+        "optimization_selected": False,
+        "note": "Separable morphology remains gated on RTX correctness and measured benefit.",
+    }
+    print(f"MORPHOLOGY_PROFILE {result}")
+    return result
+
+
 def normalized_result(result: dict) -> dict:
     normalized = deepcopy(result)
     for key in ("duration_sec", "outputs", "execution"):
@@ -803,6 +867,10 @@ def main() -> int:
     validation = validate_primitives(runtime)
     benchmark_result = benchmark(runtime, args.benchmark, args.warmup)
     crossover_result = benchmark_crossover(runtime, args.benchmark, args.warmup) if args.crossover else {}
+    morphology_result = (
+        benchmark_morphology_iterations(runtime, args.benchmark, args.warmup)
+        if args.morphology_profile else {}
+    )
     stress_result = stress_persistent_plan(runtime, args.stress, args.warmup)
     production_results = (
         validate_production_manifest(Path(args.production_manifest), str(runtime.dll_path))
@@ -824,6 +892,7 @@ def main() -> int:
                     "validation": validation,
                     "benchmark": benchmark_result,
                     "crossover": crossover_result,
+                    "morphology_profile": morphology_result,
                     "stress": stress_result,
                     "production": production_results,
                     "gpu_metrics": runtime.performance_stats(),

@@ -8,7 +8,7 @@ The optional versioned `VfPlanDescV1` ABI supports detector-neutral linear Gray,
 
 The additive `VfDagPlanDescV1` ABI uses the same detector-neutral operators with topological input-node references and an explicit output-node list. `vf_dag_plan_query/create/execute/destroy` upload the root once, keep branch intermediates in context-owned grow-only device buffers, copy only requested outputs, and synchronize once. Detector 900 uses this route to share device grayscale across its outer and inner masks.
 
-When exported, `vf_context_last_timings` returns the most recent persistent-context operation in `VfCudaTimingsV1`. CUDA events separate H2D or resident D2D staging, kernels, D2H, Gaussian, Adaptive Mean and threshold time; host clocks report context creation, allocation, synchronization and ROI-batch release overhead. The Python runtime exposes these values as `performance_stats()["native_timings_ms"]`.
+When exported, `vf_context_last_timings` returns the most recent persistent-context operation in `VfCudaTimingsV1`. CUDA events separate H2D or resident D2D staging, kernels, D2H, Gaussian, Adaptive Mean, threshold and morphology time; host clocks report context creation, allocation, synchronization and ROI-batch release overhead. The Python runtime exposes these values as `performance_stats()["native_timings_ms"]`.
 
 `vf_preprocess_401_2_u8` remains an additive ABI v1 compatibility adapter. It is not the template for future detector APIs.
 

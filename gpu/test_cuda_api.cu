@@ -199,7 +199,8 @@ int main() {
         timings.allocation_ms < 0.0f || timings.h2d_ms < 0.0f ||
         timings.device_copy_ms < 0.0f || timings.kernel_ms < 0.0f ||
         timings.d2h_ms < 0.0f || timings.synchronize_ms < 0.0f ||
-        timings.free_ms < 0.0f || timings.total_device_ms < 0.0f ||
+        timings.free_ms < 0.0f || timings.morphology_ms < 0.0f ||
+        timings.total_device_ms < 0.0f ||
         destroy_result != VF_CUDA_OK || free_bytes == 0 || total_bytes < free_bytes ||
         batch_count != 2 || batch_width != 4 || batch_height != 4 || batch_channels != 3 ||
         plan_allocation_count != repeated_allocation_count) {

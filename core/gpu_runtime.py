@@ -79,6 +79,7 @@ class _VfCudaTimingsV1(ctypes.Structure):
         ("gaussian_ms", ctypes.c_float),
         ("adaptive_integral_ms", ctypes.c_float),
         ("threshold_ms", ctypes.c_float),
+        ("morphology_ms", ctypes.c_float),
         ("total_device_ms", ctypes.c_float),
     ]
 

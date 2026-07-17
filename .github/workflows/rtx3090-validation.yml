@@ -39,7 +39,7 @@ jobs:
         run: .\gpu\test_cuda_api.exe
       - name: Equivalence and benchmark
         shell: pwsh
-        run: .\env\Scripts\python.exe gpu\validate_cuda_dll.py --warmup 5 --benchmark 20 --crossover --stress 10 100 1000 --json-output outputs_validation/rtx3090_benchmark.json
+        run: .\env\Scripts\python.exe gpu\validate_cuda_dll.py --warmup 5 --benchmark 20 --crossover --morphology-profile --stress 10 100 1000 --json-output outputs_validation/rtx3090_benchmark.json
       - name: Upload CUDA build and benchmark artifacts
         if: always()
         uses: actions/upload-artifact@v4

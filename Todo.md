@@ -102,10 +102,10 @@
 
 ### Morphology
 
-- [ ] 量測 detector 401 多 iterations 的 morphology 占比。
+- [ ] 量測 detector 401 多 iterations 的 morphology 占比。（native morphology CUDA event 與 close iterations 1/2/4/8 benchmark 已完成；實際占比待 RTX runner）
 - [ ] 評估矩形 kernel 的 horizontal/vertical separable min/max filter。
 - [x] 多 iterations 使用 device ping-pong buffers，中間不得回傳 CPU。
-- [ ] 小 kernel/少 iterations 建立 CPU/GPU crossover 規則。
+- [ ] 小 kernel/少 iterations 建立 CPU/GPU crossover 規則。（validator 已輸出各 iterations 含傳輸 CPU/GPU median/P95/speedup；production threshold 待 RTX 數據）
 
 ## P3：Detector 遷移與 CPU/GPU 邊界
 
@@ -264,3 +264,4 @@
 - [x] 2026-07-17：RTX validator 新增 persistent native plan 累積壓測 checkpoints，workflow 固定 warm-up 5 後跑 10/100/1000 次並保存 allocation count、VRAM、telemetry、average/median/P95 與 CUDA metrics；fake DLL 測試確認 warm-up 後不再配置，且一次 execution error 後可安全重用同一 plan handle。
 - [x] 2026-07-17：RTX validator 新增 64²、128²、256²、512²、1024² 的 401-style native plan CPU/GPU crossover matrix，包含 cold/warm-up/median/P95、含傳輸 speedup、穩定 1.0x/1.5x 門檻候選；只輸出證據、不在 RTX 驗收前改 production routing。
 - [x] 2026-07-17：新增 production acceptance manifest 與 validator 入口，強制五份 production recipes 各具 PASS/NG、唯一 case id、有效檔案與標籤，逐案執行 CPU/GPU 完整 pipeline 等價並核對 expected final；example 已列出 10 個待提供的真實樣本位置。
+- [x] 2026-07-17：`VfCudaTimingsV1` 新增 morphology CUDA event 分項，linear/DAG native plan 均量測完整 morphology passes；RTX validator 加入 detector-401-style close iterations 1/2/4/8 的 CPU/GPU cold/warm/median/P95、含傳輸 speedup 與 morphology/kernel 占比，separable kernel 與 routing threshold 仍待實機數據決策。
