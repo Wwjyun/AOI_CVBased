@@ -38,11 +38,24 @@ from core.preprocess_plan import (  # noqa: E402
 from core.recipe_manager import RecipeManager  # noqa: E402
 
 
+PRODUCTION_RECIPES = (
+    "PRODUCT_A_AOI_01.yaml",
+    "PRODUCT_A_CIRCLE_401_1_AOI_01.yaml",
+    "PRODUCT_A_NEGATIVE_401_AOI_01.yaml",
+    "PRODUCT_A_WHITE_RATIO_401_2_AOI_01.yaml",
+    "PRODUCT_A_FRAME_900_AOI_01.yaml",
+)
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Validate visionflow_cuda.dll against the CPU AOI path.")
     parser.add_argument("--dll", default="gpu/visionflow_cuda.dll", help="CUDA DLL path.")
     parser.add_argument("--image", help="Optional real image for full CPU/GPU pipeline comparison.")
     parser.add_argument("--recipe", help="Recipe used with --image.")
+    parser.add_argument(
+        "--production-manifest",
+        help="YAML manifest containing one PASS and one NG case for every production recipe.",
+    )
     parser.add_argument("--benchmark", type=int, default=20, help="Primitive benchmark repetitions.")
     parser.add_argument("--warmup", type=int, default=5, help="Warm-up calls excluded from benchmark statistics.")
     parser.add_argument(
@@ -649,7 +662,55 @@ def normalized_result(result: dict) -> dict:
     return normalized
 
 
-def validate_pipeline(image_path: Path, recipe_path: Path, dll_path: str) -> None:
+def load_production_manifest(path: Path) -> list[dict]:
+    manifest_path = Path(path).resolve()
+    payload = yaml.safe_load(manifest_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict) or payload.get("schema_version") != 1:
+        raise AssertionError("Production manifest must be a mapping with schema_version: 1")
+    raw_cases = payload.get("cases")
+    if not isinstance(raw_cases, list) or not raw_cases:
+        raise AssertionError("Production manifest cases must be a non-empty list")
+    cases = []
+    coverage = {name: set() for name in PRODUCTION_RECIPES}
+    identifiers = set()
+    for index, raw in enumerate(raw_cases):
+        if not isinstance(raw, dict):
+            raise AssertionError(f"Production case {index} must be a mapping")
+        identifier = str(raw.get("id", "")).strip()
+        recipe_value = str(raw.get("recipe", "")).strip()
+        image_value = str(raw.get("image", "")).strip()
+        expected = str(raw.get("expected_final", "")).upper()
+        if not identifier or identifier in identifiers:
+            raise AssertionError(f"Production case id is missing or duplicated: {identifier!r}")
+        if expected not in {"PASS", "NG"}:
+            raise AssertionError(f"Production case {identifier} expected_final must be PASS or NG")
+        recipe = (manifest_path.parent / recipe_value).resolve()
+        image = (manifest_path.parent / image_value).resolve()
+        if recipe.name not in coverage:
+            raise AssertionError(f"Production case {identifier} uses unknown recipe: {recipe.name}")
+        if not recipe.is_file() or not image.is_file():
+            raise AssertionError(
+                f"Production case {identifier} file is missing: recipe={recipe}, image={image}"
+            )
+        identifiers.add(identifier)
+        coverage[recipe.name].add(expected)
+        cases.append({
+            "id": identifier,
+            "recipe": recipe,
+            "image": image,
+            "expected_final": expected,
+        })
+    incomplete = {
+        recipe: sorted({"PASS", "NG"} - labels)
+        for recipe, labels in coverage.items()
+        if labels != {"PASS", "NG"}
+    }
+    if incomplete:
+        raise AssertionError(f"Production manifest requires PASS and NG for every recipe: {incomplete}")
+    return cases
+
+
+def validate_pipeline(image_path: Path, recipe_path: Path, dll_path: str) -> dict:
     manager = RecipeManager()
     base = manager.load(recipe_path)
     cpu_recipe = deepcopy(base)
@@ -705,6 +766,29 @@ def validate_pipeline(image_path: Path, recipe_path: Path, dll_path: str) -> Non
         print(json.dumps(summary, ensure_ascii=False, indent=2))
         raise AssertionError("Full pipeline CPU/GPU results differ; inspect the printed summaries and report JSON")
     print("PASS full_pipeline: CPU and GPU inspection results are identical")
+    return {
+        "image": str(image_path.resolve()),
+        "recipe": str(recipe_path.resolve()),
+        "final_result": cpu_result.get("final_result"),
+        "summary": cpu_result.get("summary"),
+        "gpu": active,
+    }
+
+
+def validate_production_manifest(path: Path, dll_path: str) -> list[dict]:
+    results = []
+    for case in load_production_manifest(path):
+        result = validate_pipeline(case["image"], case["recipe"], dll_path)
+        if result["final_result"] != case["expected_final"]:
+            raise AssertionError(
+                f"Production case {case['id']} expected {case['expected_final']}, "
+                f"got {result['final_result']}"
+            )
+        result["id"] = case["id"]
+        result["expected_final"] = case["expected_final"]
+        results.append(result)
+    print(f"PASS production manifest: {len(results)} CPU/GPU-equivalent labeled cases")
+    return results
 
 
 def main() -> int:
@@ -720,6 +804,10 @@ def main() -> int:
     benchmark_result = benchmark(runtime, args.benchmark, args.warmup)
     crossover_result = benchmark_crossover(runtime, args.benchmark, args.warmup) if args.crossover else {}
     stress_result = stress_persistent_plan(runtime, args.stress, args.warmup)
+    production_results = (
+        validate_production_manifest(Path(args.production_manifest), str(runtime.dll_path))
+        if args.production_manifest else []
+    )
     if args.image and args.recipe:
         validate_pipeline(Path(args.image), Path(args.recipe), str(runtime.dll_path))
     if args.json_output:
@@ -737,6 +825,7 @@ def main() -> int:
                     "benchmark": benchmark_result,
                     "crossover": crossover_result,
                     "stress": stress_result,
+                    "production": production_results,
                     "gpu_metrics": runtime.performance_stats(),
                 },
                 ensure_ascii=False,

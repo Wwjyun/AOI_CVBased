@@ -36,6 +36,8 @@ from gpu.validate_cuda_dll import (
     benchmark_crossover,
     compare,
     environment_snapshot,
+    load_production_manifest,
+    PRODUCTION_RECIPES,
     stress_persistent_plan,
     _timing_summary,
 )
@@ -1033,6 +1035,39 @@ class BenchmarkMetadataTests(unittest.TestCase):
         self.assertEqual([item["pixels"] for item in result["measurements"]], [64, 256])
         self.assertFalse(result["policy_changed"])
         self.assertIn("observed_stable_crossover_pixels", result)
+
+    def test_production_manifest_requires_pass_and_ng_for_every_recipe(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            image = root / "sample.png"
+            image.write_bytes(b"placeholder")
+            cases = []
+            for recipe_name in PRODUCTION_RECIPES:
+                recipe = Path(__file__).resolve().parents[1] / "recipes" / recipe_name
+                stem = recipe.stem.lower()
+                for label in ("PASS", "NG"):
+                    cases.append({
+                        "id": f"{stem}_{label.lower()}",
+                        "recipe": str(recipe),
+                        "image": str(image),
+                        "expected_final": label,
+                    })
+            manifest = root / "production.yaml"
+            manifest.write_text(
+                yaml.safe_dump({"schema_version": 1, "cases": cases}), encoding="utf-8"
+            )
+
+            loaded = load_production_manifest(manifest)
+
+            self.assertEqual(len(loaded), 10)
+            self.assertEqual({case["expected_final"] for case in loaded}, {"PASS", "NG"})
+
+            cases.pop()
+            manifest.write_text(
+                yaml.safe_dump({"schema_version": 1, "cases": cases}), encoding="utf-8"
+            )
+            with self.assertRaisesRegex(AssertionError, "requires PASS and NG"):
+                load_production_manifest(manifest)
 
 
 class CpuFallbackRegressionTests(unittest.TestCase):
