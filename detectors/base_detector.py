@@ -46,6 +46,24 @@ class BaseDetector:
     def detect(self, image) -> list[dict]:
         raise NotImplementedError
 
+    def run_batch(self, images, rois=None) -> list[dict]:
+        """Default batch contract; specialized backends may override without changing callers."""
+        sources = list(images)
+        if rois is None:
+            return [self.run(image) for image in sources]
+        regions = list(rois)
+        if len(regions) != len(sources):
+            raise ValueError("run_batch images and rois must have equal lengths")
+        results = []
+        for image, roi in zip(sources, regions):
+            x, y, width, height = (int(value) for value in roi)
+            if x < 0 or y < 0 or width <= 0 or height <= 0:
+                raise ValueError(f"Invalid batch ROI: {roi}")
+            if y + height > image.shape[0] or x + width > image.shape[1]:
+                raise ValueError(f"Batch ROI exceeds image bounds: roi={roi}, shape={image.shape}")
+            results.append(self.run(image[y : y + height, x : x + width]))
+        return results
+
     def execute_preprocess_plan(self, image, plan: PreprocessPlan):
         if self.gpu_active and self._cuda_preprocess_executor is not None:
             report = self._cuda_preprocess_executor.capability_report(plan, image).to_dict()

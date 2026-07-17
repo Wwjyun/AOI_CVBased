@@ -64,12 +64,24 @@ class GpuRuntime:
     ABI_VERSION = 1
     PLAN_VERSION = 1
 
-    def __init__(self, dll_path: str | Path = DEFAULT_DLL, fallback_to_cpu: bool = True, enabled: bool = True):
+    def __init__(
+        self,
+        dll_path: str | Path = DEFAULT_DLL,
+        fallback_to_cpu: bool = True,
+        enabled: bool = True,
+        queue_depth: int = 8,
+        workload: str = "latency",
+    ):
         load_started = time.perf_counter()
         self.requested_path = str(dll_path or self.DEFAULT_DLL)
         self.fallback_to_cpu = bool(fallback_to_cpu)
         self.dll_path = self._resolve_path(self.requested_path)
         self._lock = threading.RLock()
+        self.queue_depth = max(1, int(queue_depth))
+        self.workload = str(workload).lower()
+        if self.workload not in {"latency", "throughput"}:
+            raise ValueError("GPU workload must be 'latency' or 'throughput'")
+        self._queue_slots = threading.BoundedSemaphore(self.queue_depth)
         self._dll = None
         self._context = None
         self._native_plans: dict[tuple, ctypes.c_void_p] = {}
@@ -146,6 +158,11 @@ class GpuRuntime:
                 "native_plan": self.supports_native_plan,
                 "native_dag_plan": self.supports_native_dag_plan,
                 "fused_401_2": self.supports_fused_401_2,
+            },
+            "queue": {
+                "depth": self.queue_depth,
+                "execution": "single_serialized",
+                "workload": self.workload,
             },
             "fallback_reason": (self.unavailable_reason if not self.available else self.last_error) if requested else "",
         }
@@ -288,7 +305,7 @@ class GpuRuntime:
             int(bool(invert)),
         )
         queued = time.perf_counter()
-        with self._lock:
+        with self._queue_slots, self._lock:
             lock_acquired = time.perf_counter()
             result = int(function(*arguments))
             completed = time.perf_counter()
@@ -334,7 +351,7 @@ class GpuRuntime:
         key = (plan.signature, source.shape, source.dtype.str)
         output = np.empty(expected.shape, dtype=np.uint8)
         queued = time.perf_counter()
-        with self._lock:
+        with self._queue_slots, self._lock:
             lock_acquired = time.perf_counter()
             handle = self._native_plans.get(key)
             if handle is None:
@@ -417,7 +434,7 @@ class GpuRuntime:
             for name in plan.outputs
         }
         queued = time.perf_counter()
-        with self._lock:
+        with self._queue_slots, self._lock:
             lock_acquired = time.perf_counter()
             handle = self._native_dag_plans.get(key)
             if handle is None:
@@ -786,7 +803,7 @@ class GpuRuntime:
             int(dst_channels),
         )
         queued = time.perf_counter()
-        with self._lock:
+        with self._queue_slots, self._lock:
             lock_acquired = time.perf_counter()
             result = int(function(*common, *extra))
             completed = time.perf_counter()

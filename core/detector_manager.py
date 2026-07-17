@@ -37,6 +37,13 @@ class DetectorManager:
             )
         return detectors
 
+    @staticmethod
+    def run_batch(detectors, images, rois=None) -> dict[str, list[dict]]:
+        return {
+            detector.detector_id: detector.run_batch(images, rois=rois)
+            for detector in detectors
+        }
+
     def definitions(self) -> dict[str, dict]:
         return {
             detector_id: {

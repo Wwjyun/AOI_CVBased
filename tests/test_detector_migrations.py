@@ -11,6 +11,7 @@ from detectors.detector_401 import Detector401
 from detectors.detector_401_1 import Detector401_1
 from detectors.detector_401_2 import Detector401_2
 from detectors.detector_900 import Detector900
+from detectors.base_detector import BaseDetector
 
 
 class _AreaUnsupportedRuntime:
@@ -74,6 +75,33 @@ class _NativeDagRuntime:
     def execute_dag_plan(self, image, plan):
         self.calls += 1
         return CpuPreprocessDagExecutor().execute(image, plan)
+
+
+class _MeanDetector(BaseDetector):
+    detector_id = "mean"
+
+    def detect(self, image):
+        return [{"confidence": float(np.mean(image))}]
+
+
+class DetectorBatchContractTests(unittest.TestCase):
+    def test_default_batch_and_roi_contract_runs_in_input_order(self):
+        detector = _MeanDetector()
+        images = [
+            np.full((6, 7), 10, dtype=np.uint8),
+            np.full((6, 7), 20, dtype=np.uint8),
+        ]
+
+        full = detector.run_batch(images)
+        roi = detector.run_batch(images, rois=[(1, 2, 3, 2), (0, 0, 4, 5)])
+
+        self.assertEqual([item["score"] for item in full], [10.0, 20.0])
+        self.assertEqual([item["score"] for item in roi], [10.0, 20.0])
+
+    def test_default_batch_rejects_invalid_roi(self):
+        detector = _MeanDetector()
+        with self.assertRaisesRegex(ValueError, "exceeds image bounds"):
+            detector.run_batch([np.zeros((5, 5), dtype=np.uint8)], rois=[(4, 4, 2, 2)])
 
 
 class Detector4011PlanMigrationTests(unittest.TestCase):

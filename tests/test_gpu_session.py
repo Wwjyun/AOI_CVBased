@@ -24,6 +24,19 @@ class _CloseTrackingRuntime:
 
 
 class GpuExecutionSessionTests(unittest.TestCase):
+    def test_latency_and_throughput_sessions_select_distinct_queue_policy(self):
+        recipe_path = ROOT / "recipes" / "PRODUCT_A_NEGATIVE_401_AOI_01.yaml"
+        latency = GpuExecutionSession.from_recipe_path(recipe_path)
+        throughput = GpuExecutionSession.from_recipe_path(recipe_path, workload="throughput")
+        try:
+            self.assertEqual(latency.runtime.queue_depth, 1)
+            self.assertEqual(latency.runtime.workload, "latency")
+            self.assertEqual(throughput.runtime.queue_depth, 8)
+            self.assertEqual(throughput.runtime.workload, "throughput")
+        finally:
+            latency.close()
+            throughput.close()
+
     def test_session_rejects_incompatible_config_and_closes_once(self):
         runtime = _CloseTrackingRuntime()
         config = {"dll_path": "gpu/visionflow_cuda.dll", "fallback_to_cpu": True}
@@ -107,11 +120,12 @@ class GpuExecutionSessionTests(unittest.TestCase):
             with patch(
                 "core.batch_processor.GpuExecutionSession.from_recipe_path",
                 return_value=fake_session,
-            ):
+            ) as session_factory:
                 result = processor.run()
 
         self.assertEqual(result["summary"]["total"], 2)
         self.assertEqual(captured_sessions, [fake_session, fake_session])
+        self.assertEqual(session_factory.call_args.kwargs["workload"], "throughput")
 
     def test_monitor_pipeline_receives_existing_session(self):
         fake_session = Mock()

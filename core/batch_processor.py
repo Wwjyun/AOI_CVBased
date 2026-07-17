@@ -90,7 +90,7 @@ class BatchInspectionProcessor(LogMixin):
         worker_count = self._worker_count(total)
         self._progress(0, f"Batch inspection running with {worker_count} workers")
 
-        with GpuExecutionSession.from_recipe_path(self.recipe_path) as gpu_session:
+        with GpuExecutionSession.from_recipe_path(self.recipe_path, workload="throughput") as gpu_session:
             with ThreadPoolExecutor(max_workers=worker_count) as executor:
                 futures = {
                     executor.submit(

@@ -236,12 +236,17 @@ class PipelineProfilerTests(unittest.TestCase):
 
 class GpuRuntimeMetricsTests(unittest.TestCase):
     def test_disabled_runtime_has_zero_cuda_calls(self):
-        runtime = GpuRuntime(enabled=False)
+        runtime = GpuRuntime(enabled=False, queue_depth=3, workload="throughput")
 
         metrics = runtime.performance_stats()
 
         self.assertEqual(metrics["call_count"], 0)
         self.assertEqual(metrics["host_to_device_bytes"], 0)
+        self.assertEqual(runtime.status()["queue"], {
+            "depth": 3,
+            "execution": "single_serialized",
+            "workload": "throughput",
+        })
         self.assertEqual(metrics["device_to_host_bytes"], 0)
 
     def test_synchronous_call_records_estimated_transfer_bytes(self):

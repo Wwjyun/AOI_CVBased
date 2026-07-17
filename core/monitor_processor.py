@@ -104,7 +104,7 @@ class FolderMonitorProcessor(LogMixin):
         )
         self._progress(0, f"Monitoring {self.input_dir}")
 
-        with GpuExecutionSession.from_recipe_path(self.recipe_path) as gpu_session:
+        with GpuExecutionSession.from_recipe_path(self.recipe_path, workload="throughput") as gpu_session:
             while not self._should_stop():
                 self._enqueue_new_stable_images()
                 while self._pending and not self._should_stop():

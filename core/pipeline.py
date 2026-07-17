@@ -65,6 +65,8 @@ class AOIPipeline(LogMixin):
                     gpu_config.get("dll_path", GpuRuntime.DEFAULT_DLL),
                     fallback_to_cpu=gpu_config.get("fallback_to_cpu", True),
                     enabled=gpu_requested,
+                    queue_depth=1,
+                    workload="latency",
                 )
             )
         if gpu_requested and not gpu_runtime.available and not gpu_runtime.fallback_to_cpu:

@@ -122,14 +122,14 @@
 ## P4：Tiling、ROI、Batch 與跨圖片重用
 
 - [x] 偵測重複 GPU crop round trips，記錄傳輸量並輸出負優化警告。
-- [ ] production/benchmark 在 device tiling 改善前預設關閉 GPU crop。
+- [x] production/benchmark 在 device tiling 改善前預設關閉 GPU crop。
 - [ ] 原圖一次 upload，以 device offset/view 表示 grid ROI，不再每 tile 上傳完整原圖。
 - [ ] detector 可直接消費 device ROI；只有 CPU contour、GUI、debug 或存檔時才下載。
 - [ ] 新增 batch ROI API，以座標陣列產生連續 device buffers。
-- [ ] 新增 `run_batch(images/rois)` 或等價 detector batch 介面；CPU 預設實作可逐張執行。
+- [x] 新增 `run_batch(images/rois)` 或等價 detector batch 介面；CPU 預設實作可逐張執行。
 - [ ] 依影像尺寸與可用 VRAM 自動選 batch size；RTX 3090 測試 8、16、32、64 ROI。
-- [ ] 單張 GUI 採低延遲策略；資料夾、monitor、batch 採高吞吐策略。
-- [ ] 使用 bounded 單一 GPU queue，避免多個 CPU workers 同時搶 GPU 或無限制累積 VRAM。
+- [x] 單張 GUI 採低延遲策略；資料夾、monitor、batch 採高吞吐策略。
+- [x] 使用 bounded 單一 GPU queue，避免多個 CPU workers 同時搶 GPU 或無限制累積 VRAM。
 - [ ] 評估 pinned host memory 與 CUDA streams，量測 upload/kernel/download 重疊收益。
 
 ## P5：CPU 與整體 Pipeline 最佳化
@@ -246,3 +246,4 @@
 - [x] 2026-07-17：完成 generic native linear plan 原始碼與 OOP routing：versioned detector-neutral structs、optional query/create/execute/destroy、compiled-plan cache、persistent buffers、Gray/Gaussian/Threshold/AdaptiveMean/Morphology 單次 H2D/D2H execution，並同步 Python bridge、fake-DLL lifecycle、C++ smoke、validator、preflight 與文件；RTX 3090 編譯/實測仍保留待辦。
 - [x] 2026-07-17：persistent context 納入 non-blocking CUDA stream、plan scratch 與 morphology device ping-pong；新增 `GpuExecutionSession` 讓 batch/monitor 跨影像共用同一 runtime/context，並以 pipeline、batch、monitor 與 CUDA source contract 測試驗證生命週期；RTX 3090 runtime 驗證仍保留待辦。
 - [x] 2026-07-17：新增 detector-neutral native DAG/multi-output ABI、compiled-plan cache 與 CUDA executor；900 以一次 root H2D 共用 device gray，僅下載 outer/inner masks 並同步一次，已覆蓋 descriptor、fake-DLL lifecycle、detector routing、C++ smoke、validator 與 source contract；RTX 3090 編譯/實測仍保留待辦。
+- [x] 2026-07-17：新增 detector `run_batch(images/rois)` CPU 預設契約與 manager 介面；GpuRuntime 採 bounded queue 加單一序列化 execution，單張 pipeline 使用 latency depth=1，batch/monitor 使用可設定 throughput depth，production recipes 持續預設關閉負優化 GPU crop。

@@ -9,17 +9,18 @@ from core.recipe_manager import RecipeManager
 class GpuExecutionSession:
     """Own one long-lived runtime/context shared by compatible pipeline runs."""
 
-    def __init__(self, runtime: GpuRuntime, requested: bool, config: dict):
+    def __init__(self, runtime: GpuRuntime, requested: bool, config: dict, workload: str = "latency"):
         self.runtime = runtime
         self.requested = bool(requested)
         self._dll_path = GpuRuntime._resolve_path(
             str(config.get("dll_path", GpuRuntime.DEFAULT_DLL))
         )
         self._fallback_to_cpu = bool(config.get("fallback_to_cpu", True))
+        self.workload = workload
         self._closed = False
 
     @classmethod
-    def from_recipe(cls, recipe: dict) -> "GpuExecutionSession":
+    def from_recipe(cls, recipe: dict, workload: str = "latency") -> "GpuExecutionSession":
         gpu_config = recipe.get("gpu", {}) or {}
         detector_configs = RecipeManager().enabled_detectors(recipe)
         requested = bool(gpu_config.get("tiling", False)) or any(
@@ -29,12 +30,14 @@ class GpuExecutionSession:
             gpu_config.get("dll_path", GpuRuntime.DEFAULT_DLL),
             fallback_to_cpu=gpu_config.get("fallback_to_cpu", True),
             enabled=requested,
+            queue_depth=(1 if workload == "latency" else int(gpu_config.get("queue_depth", 8))),
+            workload=workload,
         )
-        return cls(runtime, requested, gpu_config)
+        return cls(runtime, requested, gpu_config, workload=workload)
 
     @classmethod
-    def from_recipe_path(cls, recipe_path: Path) -> "GpuExecutionSession":
-        return cls.from_recipe(RecipeManager().load(Path(recipe_path)))
+    def from_recipe_path(cls, recipe_path: Path, workload: str = "latency") -> "GpuExecutionSession":
+        return cls.from_recipe(RecipeManager().load(Path(recipe_path)), workload=workload)
 
     def runtime_for(self, gpu_config: dict, requested: bool) -> GpuRuntime:
         if self._closed:

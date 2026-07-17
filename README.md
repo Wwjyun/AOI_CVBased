@@ -203,6 +203,7 @@ gpu:
   display: false
   dll_path: "gpu/visionflow_cuda.dll"
   fallback_to_cpu: true
+  queue_depth: 8  # batch/monitor throughput queue；單張 GUI 固定低延遲 depth=1
 
 tile:
   mode: "grid"
