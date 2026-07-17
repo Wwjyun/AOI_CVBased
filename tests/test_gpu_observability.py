@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from copy import deepcopy
 from pathlib import Path
+from unittest.mock import patch
 
 import cv2
 import numpy as np
@@ -49,6 +50,29 @@ class _SuccessfulDll:
     @staticmethod
     def vf_bgr_to_gray_u8(*_args):
         return 0
+
+
+class _LoadScenarioDll:
+    def __init__(self, abi=1, device_count=1, context_result=0):
+        self.abi = abi
+        self.device_count = device_count
+        self.context_result = context_result
+        self.vf_gpu_abi_version = _Function(lambda: self.abi)
+        self.vf_gpu_device_count = _Function(lambda: self.device_count)
+        self.vf_gpu_device_name = _Function(self._device_name)
+        self.vf_gpu_compute_capability = _Function(lambda: 86)
+        self.vf_context_create = _Function(self._context_create)
+        self.vf_context_destroy = _Function(lambda _context: 0)
+
+    @staticmethod
+    def _device_name(buffer, _capacity):
+        buffer.value = b"fake RTX"
+        return 0
+
+    def _context_create(self, output):
+        if self.context_result == 0:
+            output._obj.value = 4321
+        return self.context_result
 
 
 class _Function:
@@ -386,6 +410,36 @@ class PipelineProfilerTests(unittest.TestCase):
 
 
 class GpuRuntimeMetricsTests(unittest.TestCase):
+    def test_loader_rejects_abi_mismatch_and_missing_device(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            dll_path = Path(temporary) / "visionflow_cuda.dll"
+            dll_path.write_bytes(b"fake")
+            with patch("core.gpu_runtime.ctypes.CDLL", return_value=_LoadScenarioDll(abi=99)):
+                mismatch = GpuRuntime(dll_path, enabled=True)
+            with patch("core.gpu_runtime.ctypes.CDLL", return_value=_LoadScenarioDll(device_count=0)):
+                no_device = GpuRuntime(dll_path, enabled=True)
+
+        self.assertFalse(mismatch.available)
+        self.assertIn("ABI mismatch", mismatch.unavailable_reason)
+        self.assertFalse(no_device.available)
+        self.assertIn("no CUDA device", no_device.unavailable_reason)
+
+    def test_context_initialization_failure_is_reported_to_every_native_route(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            dll_path = Path(temporary) / "visionflow_cuda.dll"
+            dll_path.write_bytes(b"fake")
+            with patch(
+                "core.gpu_runtime.ctypes.CDLL",
+                return_value=_LoadScenarioDll(context_result=2),
+            ):
+                runtime = GpuRuntime(dll_path, enabled=True)
+
+        self.assertTrue(runtime.available)
+        self.assertIsNone(runtime._context)
+        self.assertIn("context creation failed", runtime.fused_unavailable_reason)
+        self.assertEqual(runtime.native_plan_unavailable_reason, runtime.fused_unavailable_reason)
+        self.assertEqual(runtime.native_dag_plan_unavailable_reason, runtime.fused_unavailable_reason)
+
     def test_disabled_runtime_has_zero_cuda_calls(self):
         runtime = GpuRuntime(enabled=False, queue_depth=3, workload="throughput")
 

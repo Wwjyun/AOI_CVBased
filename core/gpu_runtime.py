@@ -921,9 +921,12 @@ class GpuRuntime:
         context = ctypes.c_void_p()
         result = int(create(ctypes.byref(context)))
         if result != 0 or not context.value:
-            self.fused_unavailable_reason = (
+            reason = (
                 f"CUDA persistent context creation failed with error {result}: {self._error_message(result)}"
             )
+            self.fused_unavailable_reason = reason
+            self.native_plan_unavailable_reason = reason
+            self.native_dag_plan_unavailable_reason = reason
             return
         self._context = context
         if fused is None:
