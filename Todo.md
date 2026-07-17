@@ -106,7 +106,7 @@
 
 ## P3：Detector 遷移與 CPU/GPU 邊界
 
-- [ ] 401-1 遷移到共用 plan：Gray → Resize(area) → Gaussian → AdaptiveMean → Morphology。
+- [x] 401-1 遷移到 cached 共用 plan：Gray → Resize(area) → Gaussian → AdaptiveMean → Morphology；CUDA 無法保持 area 語意時整個 detector CPU fallback。
 - [ ] 401 遷移到共用 plan，保留目前 threshold/morphology/contour 語意。
 - [x] 401-2 preprocessing 已遷移到共用 plan，並保留 fused/legacy/CPU 路徑。
 - [ ] 900 遷移成 DAG plan，共用 device gray 產生 outer global 與 inner adaptive masks。
@@ -233,3 +233,4 @@
 - [x] 2026-07-17：新增 per-detector bounded LRU `PreprocessPlanCache`，依 shape、dtype 與參數 signature 重用 immutable plan；401-2 已移出逐 tile plan 建立熱路徑並加入 cache/失效測試。
 - [x] 2026-07-17：加入 versioned operator/plan signature、tensor spec 推導及輸入輸出 dtype/channel/shape/order/參數驗證，CPU 與 CUDA executor 共用相同契約並以 fake runtime 覆蓋錯誤輸出。
 - [x] 2026-07-17：加入 preprocess capability report，記錄 requested/selected backend、fused/primitive/CPU/fallback route、原因、plan signature 與不支援項目，並帶入 detector execution metadata。
+- [x] 2026-07-17：將 401-1 遷移到 cached shared plan（Gray/Resize area/Gaussian/AdaptiveMean/Morphology），保留 process scale、ROI、contour 與 metadata 語意，area 不支援時維持 full-detector CPU fallback。

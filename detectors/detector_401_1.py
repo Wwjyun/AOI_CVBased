@@ -3,6 +3,7 @@ from __future__ import annotations
 import cv2
 import numpy as np
 
+from core.preprocess_plan import AdaptiveMean, Gaussian, Gray, Morphology, PreprocessPlan, Resize
 from detectors.base_detector import BaseDetector
 
 
@@ -31,9 +32,7 @@ class Detector401_1(BaseDetector):
     }
 
     def preprocess(self, image):
-        if self.gpu_active and image.ndim == 3:
-            return self.gpu_runtime.bgr_to_gray(image)
-        return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image.copy()
+        return image.copy()
 
     def detect(self, image) -> list[dict]:
         roi, offset_x, offset_y = self._roi_image(image)
@@ -96,75 +95,59 @@ class Detector401_1(BaseDetector):
         defects.sort(key=lambda item: item["area"], reverse=True)
         return defects
 
-    def _roi_image(self, gray):
+    def _roi_image(self, image):
         inset = max(0, int(self.params.get("roi_inset_px", 100)))
         if inset <= 0:
-            return gray, 0, 0
+            return image, 0, 0
 
-        height, width = gray.shape[:2]
+        height, width = image.shape[:2]
         if width <= inset * 2 or height <= inset * 2:
-            return gray, 0, 0
+            return image, 0, 0
 
-        return gray[inset : height - inset, inset : width - inset], inset, inset
+        return image[inset : height - inset, inset : width - inset], inset, inset
 
-    def _make_binary(self, gray):
+    def _make_binary(self, image):
         process_scale = min(max(float(self.params.get("process_scale", 1.0)), 0.05), 1.0)
-        work = gray
-        if process_scale < 0.999:
-            height, width = gray.shape[:2]
-            target_width = max(1, int(width * process_scale))
-            target_height = max(1, int(height * process_scale))
-            if self.gpu_active:
-                work = self.gpu_runtime.resize_gray(gray, target_width, target_height)
-            else:
-                work = cv2.resize(gray, (target_width, target_height), interpolation=cv2.INTER_AREA)
-
+        height, width = image.shape[:2]
+        target_width = max(1, int(width * process_scale))
+        target_height = max(1, int(height * process_scale))
         blur_size = self._odd_at_least(int(self.params.get("blur_size", 45)), 3)
-        work = self.gpu_runtime.gaussian_blur(work, blur_size) if self.gpu_active else cv2.GaussianBlur(work, (blur_size, blur_size), 0)
-
-        threshold_type = cv2.THRESH_BINARY_INV if self.params.get("invert", False) else cv2.THRESH_BINARY
         block_size = self._odd_at_least(int(self.params.get("adaptive_block_size", 33)), 3)
         adaptive_c = float(self.params.get("adaptive_c", -2.0))
-        if self.gpu_active:
-            binary = self.gpu_runtime.adaptive_threshold(
-                work, block_size, adaptive_c, int(self.params.get("max_value", 255)), bool(self.params.get("invert", False))
-            )
-        else:
-            binary = cv2.adaptiveThreshold(
-                work,
-                int(self.params.get("max_value", 255)),
-                cv2.ADAPTIVE_THRESH_MEAN_C,
-                threshold_type,
-                block_size,
-                adaptive_c,
-            )
-        return self._morph(binary), process_scale
-
-    def _morph(self, binary):
+        max_value = int(self.params.get("max_value", 255))
+        invert = bool(self.params.get("invert", False))
         operation = str(self.params.get("morph_operation", "none")).lower()
-        iterations = int(self.params.get("morph_iterations", 1))
-        kernel_size = int(self.params.get("morph_kernel", 3))
-        if operation in {"none", ""} or iterations <= 0 or kernel_size <= 1:
-            return binary
-
-        kernel_size = self._odd_at_least(kernel_size, 3)
-        if self.gpu_active:
-            return self.gpu_runtime.morphology(binary, operation, kernel_size, iterations)
-        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (kernel_size, kernel_size))
-        operations = {
-            "open": cv2.MORPH_OPEN,
-            "close": cv2.MORPH_CLOSE,
-            "dilate": cv2.MORPH_DILATE,
-            "erode": cv2.MORPH_ERODE,
-        }
-        cv_operation = operations.get(operation)
-        if cv_operation is None:
-            raise ValueError(f"Unsupported morphology operation: {operation}")
-        if cv_operation == cv2.MORPH_DILATE:
-            return cv2.dilate(binary, kernel, iterations=iterations)
-        if cv_operation == cv2.MORPH_ERODE:
-            return cv2.erode(binary, kernel, iterations=iterations)
-        return cv2.morphologyEx(binary, cv_operation, kernel, iterations=iterations)
+        iterations = max(0, int(self.params.get("morph_iterations", 1)))
+        raw_kernel_size = int(self.params.get("morph_kernel", 3))
+        kernel_size = 1 if raw_kernel_size <= 1 else self._odd_at_least(raw_kernel_size, 3)
+        signature = (
+            "401_1_preprocess",
+            target_width,
+            target_height,
+            blur_size,
+            block_size,
+            adaptive_c,
+            max_value,
+            invert,
+            operation,
+            kernel_size,
+            iterations,
+        )
+        plan = self.cached_preprocess_plan(
+            image,
+            signature,
+            lambda: PreprocessPlan(
+                name="401_1_gray_resize_gaussian_adaptive_morphology",
+                operations=(
+                    Gray(),
+                    Resize(target_width, target_height, "area"),
+                    Gaussian(blur_size),
+                    AdaptiveMean(block_size, adaptive_c, max_value, invert),
+                    Morphology(operation, kernel_size, iterations),
+                ),
+            ),
+        )
+        return self.execute_preprocess_plan(image, plan), process_scale
 
     def _passes_filters(self, area: float, circularity: float, fill_ratio: float) -> bool:
         min_area = float(self.params.get("min_area", 100))
