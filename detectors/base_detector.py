@@ -9,6 +9,7 @@ from core.preprocess_plan import (
     PreprocessPlan,
     PreprocessDagPlan,
     PreprocessPlanCache,
+    UnsupportedPreprocessPlan,
 )
 
 
@@ -45,9 +46,15 @@ class BaseDetector:
 
     def execute_preprocess_plan(self, image, plan: PreprocessPlan):
         if self.gpu_active and self._cuda_preprocess_executor is not None:
-            self.last_preprocess_capability = self._cuda_preprocess_executor.capability_report(
-                plan, image
-            ).to_dict()
+            report = self._cuda_preprocess_executor.capability_report(plan, image).to_dict()
+            self.last_preprocess_capability = report
+            if report["selected_backend"] != "cuda":
+                return self._execute_cpu_fallback(
+                    image,
+                    plan,
+                    report["reason"],
+                    self._cpu_preprocess_executor,
+                )
             return self._cuda_preprocess_executor.execute(image, plan)
         report = self._cpu_preprocess_executor.capability_report(plan).to_dict()
         if self.use_gpu and self.gpu_fallback_reason:
@@ -65,7 +72,20 @@ class BaseDetector:
 
     def execute_preprocess_dag(self, image, plan: PreprocessDagPlan) -> dict:
         if self.gpu_active:
-            raise RuntimeError("CUDA DAG executor is not available; full detector CPU fallback required")
+            reason = "CUDA DAG executor is not available; full detector CPU fallback required"
+            self.last_preprocess_capability = {
+                **self._cpu_preprocess_dag_executor.capability_report(plan).to_dict(),
+                "requested_backend": "cuda",
+                "selected_backend": "cpu",
+                "route": "fallback",
+                "reason": reason,
+            }
+            return self._execute_cpu_fallback(
+                image,
+                plan,
+                reason,
+                self._cpu_preprocess_dag_executor,
+            )
         report = self._cpu_preprocess_dag_executor.capability_report(plan).to_dict()
         if self.use_gpu and self.gpu_fallback_reason:
             report.update(
@@ -77,6 +97,16 @@ class BaseDetector:
         self.last_preprocess_capability = report
         return self._cpu_preprocess_dag_executor.execute(image, plan)
 
+    def _execute_cpu_fallback(self, image, plan, reason: str, executor):
+        if not self._gpu_fallback_enabled:
+            raise UnsupportedPreprocessPlan(reason)
+        self.gpu_fallback_reason = reason
+        return executor.execute(image, plan)
+
+    @property
+    def _gpu_fallback_enabled(self) -> bool:
+        return bool(getattr(self.gpu_runtime, "fallback_to_cpu", True))
+
     @property
     def preprocess_plan_cache_size(self) -> int:
         return self._preprocess_plan_cache.size
@@ -86,7 +116,7 @@ class BaseDetector:
             processed = self.preprocess(image)
             defects = self.detect(processed)
         except Exception as exc:
-            if not self.gpu_active:
+            if not self.gpu_active or not self._gpu_fallback_enabled:
                 raise
             self.gpu_fallback_reason = str(exc)
             processed = self.preprocess(image)

@@ -16,6 +16,7 @@ class _AreaUnsupportedRuntime:
     available = True
     unavailable_reason = ""
     supports_fused_401_2 = False
+    fallback_to_cpu = True
 
     def __init__(self):
         self.gray_calls = 0
@@ -130,11 +131,26 @@ class Detector4011PlanMigrationTests(unittest.TestCase):
         self.assertEqual(fallback_result["defects"], cpu_result["defects"])
         self.assertEqual(fallback_result["pass"], cpu_result["pass"])
         self.assertEqual(fallback_result["score"], cpu_result["score"])
-        self.assertEqual(runtime.gray_calls, 1)
+        self.assertEqual(runtime.gray_calls, 0)
         execution = fallback_result["execution"]
         self.assertEqual(execution["backend"], "cpu")
         self.assertEqual(execution["preprocess_capability"]["route"], "fallback")
         self.assertIn("area", execution["fallback_reason"])
+
+    def test_area_unsupported_cuda_fails_before_any_gpu_call_when_fallback_is_disabled(self):
+        image = np.random.default_rng(4013).integers(0, 256, size=(96, 112, 3), dtype=np.uint8)
+        runtime = _AreaUnsupportedRuntime()
+        runtime.fallback_to_cpu = False
+        detector = Detector401_1(
+            params=self._params(),
+            use_gpu=True,
+            gpu_runtime=runtime,
+        )
+
+        with self.assertRaisesRegex(RuntimeError, "Resize.*area"):
+            detector.run(image)
+
+        self.assertEqual(runtime.gray_calls, 0)
 
 
 class Detector401PlanMigrationTests(unittest.TestCase):

@@ -61,6 +61,7 @@
 - [x] 將 plan 建立移出每次 tile 熱路徑，依 detector params、dtype 與 shape cache immutable plan，並以 bounded LRU 避免無限成長。
 - [x] 加入 versioned operator/plan signature、輸入輸出 uint8 型別、channel、shape、順序與 operator 參數 validation。
 - [x] 加入 versioned capability report，清楚列出 plan 為何走 fused、primitive、CPU 或 fallback，並寫入 detector execution metadata。
+- [x] capability preflight 判定整份 plan/DAG 不支援 CUDA 時，在任何 primitive 執行前直接走完整 CPU fallback；關閉 fallback 時明確失敗。
 
 ### Generic native plan ABI
 
@@ -241,3 +242,4 @@
 - [x] 2026-07-17：401-2 contour white-ratio 改用局部 bbox mask，避免逐 contour 配置整張 ROI；CPU 測試確認逐像素統計、排序、ROI offset 與 metadata 均與舊 full-ROI 演算法一致。
 - [x] 2026-07-17：完成 connected components CPU 評估；合成測試證明 pixel area 與孔洞/list contour 語意不等價，固定 seed 4K/350 blobs benchmark 的 findContours LIST median 3.562 ms、connectedComponentsWithStats 8.063 ms，因此 401/401-1/401-2 維持 CPU contours。
 - [x] 2026-07-17：加入 CUDA build preflight 與 SHA-256 manifest，靜態核對 17 個 ABI v1 header/source/runtime/smoke exports；DLL、LIB、test EXE 改在 staging 成功編譯並通過 dumpbin exports/dependencies 後才發布，避免 stale artifacts。
+- [x] 2026-07-17：修正 CUDA capability preflight routing；unsupported linear/DAG plan 不再先執行部分 GPU primitive，並讓 `fallback_to_cpu: false` 對 runtime/semantic failure 維持嚴格失敗。
