@@ -30,7 +30,7 @@
 - [x] 記錄 recipe setup、image load、tiling、各 detector、aggregation、reporting 與 end-to-end host wall time。
 - [x] Reporter 分別記錄 overlay、NG tiles、CSV、matrix CSV 與 JSON 耗時。
 - [x] 記錄 DLL load、同步呼叫、lock wait、估算 H2D/D2H bytes、round trips 與各 primitive 呼叫統計。
-- [ ] 加入 GUI 顯示、QImage/QPixmap 轉換與使用者實際等待時間計時。
+- [x] 加入 GUI 顯示、QImage/QPixmap 轉換與使用者實際等待時間計時。
 - [ ] DLL 加入 CUDA event，拆分 context、allocation、H2D、kernel、synchronize、D2H 與 free。
 - [ ] 保存測試機 CPU、GPU、RAM、Driver、Toolkit、recipe、影像資訊與 commit hash，建立可重現 baseline。
 - [ ] 分開公布冷啟動、warm-up、純檢測與包含輸出的端到端數據。
@@ -227,3 +227,4 @@
 - [x] 2026-07-14：更新 `aoi-verify-push`，並新增 `aoi-detector-development`、`aoi-cuda-validate`、`aoi-release` skills；四者皆完成 metadata 與官方 validator 檢查。
 - [x] 2026-07-15：整理 2026-07-09 至 2026-07-15 Git 紀錄、GPU/CUDA 進度與待驗收項目，完成本週流水帳報告。
 - [x] 2026-07-15：更新並完整中文化根目錄 `README.md`，同步目前 CLI、GUI、配方、Detector、輸出、CUDA fallback、打包與驗證方式。
+- [x] 2026-07-17：加入 GUI 預覽影像載入、色彩轉換、QImage/QPixmap、scene 顯示與使用者實際等待時間量測，並輸出至日誌及 viewer backend tooltip。

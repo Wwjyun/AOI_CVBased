@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from core.performance import PipelineProfiler
 from gui import icons
 from gui.theme import COLORS, DEFECT_COLOR_FALLBACK, DEFECT_COLORS, R_LG
 from gui.widgets.common import EmptyState, IconButton
@@ -280,26 +281,35 @@ class ImageViewer(QWidget):
         self._scan_timer.setInterval(16)
         self._scan_timer.timeout.connect(self._advance_scan_line)
         self._scan_progress = 0.0
+        self.last_display_performance: dict = {}
 
         self._update_empty_state()
 
     # ------------------------------------------------------------------
     # image loading
     # ------------------------------------------------------------------
-    def set_qimage(self, image: QImage, name: str = "") -> None:
-        pixmap = QPixmap.fromImage(image)
+    def set_qimage(self, image: QImage, name: str = "") -> dict:
+        profiler = PipelineProfiler()
+        with profiler.measure("qpixmap_conversion"):
+            pixmap = QPixmap.fromImage(image)
         if pixmap.isNull():
             self.last_error = "無法建立圖片預覽。"
-            return
+            self.last_display_performance = profiler.snapshot()
+            return self.last_display_performance
         self.last_error = ""
-        if name:
-            self._image_name = name
-            self.name_label.setText(name)
-        self.pixmap_item.setPixmap(pixmap)
-        self._scene.setSceneRect(pixmap.rect())
-        self.size_label.setText(f"{pixmap.width()} × {pixmap.height()} px")
-        self.fit_to_view()
-        self._update_empty_state()
+        with profiler.measure("scene_update"):
+            if name:
+                self._image_name = name
+                self.name_label.setText(name)
+            self.pixmap_item.setPixmap(pixmap)
+            self._scene.setSceneRect(pixmap.rect())
+            self.size_label.setText(f"{pixmap.width()} × {pixmap.height()} px")
+        with profiler.measure("fit_to_view"):
+            self.fit_to_view()
+        with profiler.measure("visibility_update"):
+            self._update_empty_state()
+        self.last_display_performance = profiler.snapshot()
+        return self.last_display_performance
 
     def set_image_name(self, name: str) -> None:
         self._image_name = name
@@ -314,7 +324,20 @@ class ImageViewer(QWidget):
         else:
             text = "顯示: CPU"
         self.backend_label.setText(text)
-        self.backend_label.setToolTip(str(status.get("fallback_reason", "")))
+        tooltip_lines = []
+        fallback_reason = str(status.get("fallback_reason", ""))
+        if fallback_reason:
+            tooltip_lines.append(fallback_reason)
+        performance = status.get("display_performance", {})
+        worker = performance.get("worker", {})
+        viewer = performance.get("viewer", {})
+        if worker:
+            tooltip_lines.append(f"QImage worker: {worker.get('end_to_end_sec', 0.0) * 1000:.2f} ms")
+        if viewer:
+            tooltip_lines.append(f"QPixmap/viewer: {viewer.get('end_to_end_sec', 0.0) * 1000:.2f} ms")
+        if "user_wait_sec" in performance:
+            tooltip_lines.append(f"User wait: {performance['user_wait_sec'] * 1000:.2f} ms")
+        self.backend_label.setToolTip("\n".join(tooltip_lines))
 
     def clear(self) -> None:
         self.pixmap_item.setPixmap(QPixmap())

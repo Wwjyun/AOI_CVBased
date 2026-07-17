@@ -13,6 +13,7 @@ from core.gpu_runtime import GpuRuntime, GpuRuntimeError
 from core.batch_processor import BatchInspectionProcessor
 from core.logging_system import LogMixin
 from core.monitor_processor import FolderMonitorProcessor
+from core.performance import PipelineProfiler
 from core.pipeline import AOIPipeline
 from core.tiler import create_tiler
 
@@ -30,43 +31,54 @@ class ImagePreviewWorker(QObject, LogMixin):
 
     @Slot()
     def run(self) -> None:
+        profiler = PipelineProfiler()
         try:
             self.logger.info("Preview load started: image=%s", self.path)
             self.progress.emit(0, "Loading image")
-            bgr = self.image_loader.load_bgr(self.path)
+            with profiler.measure("image_load"):
+                bgr = self.image_loader.load_bgr(self.path)
             self.progress.emit(60, "Converting preview")
             requested = bool(self.gpu_config.get("display", False))
-            runtime = GpuRuntime(
-                self.gpu_config.get("dll_path", GpuRuntime.DEFAULT_DLL),
-                fallback_to_cpu=self.gpu_config.get("fallback_to_cpu", True),
-                enabled=requested,
-            )
-            if requested and not runtime.available and not runtime.fallback_to_cpu:
-                raise GpuRuntimeError(runtime.unavailable_reason)
-            if requested and runtime.available:
-                try:
-                    image = runtime.bgr_to_rgb(bgr)
-                except Exception as exc:
-                    runtime.fallback_or_raise(exc)
+            with profiler.measure("color_conversion"):
+                runtime = GpuRuntime(
+                    self.gpu_config.get("dll_path", GpuRuntime.DEFAULT_DLL),
+                    fallback_to_cpu=self.gpu_config.get("fallback_to_cpu", True),
+                    enabled=requested,
+                )
+                if requested and not runtime.available and not runtime.fallback_to_cpu:
+                    raise GpuRuntimeError(runtime.unavailable_reason)
+                if requested and runtime.available:
+                    try:
+                        image = runtime.bgr_to_rgb(bgr)
+                    except Exception as exc:
+                        runtime.fallback_or_raise(exc)
+                        image = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+                else:
                     image = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
-            else:
-                image = cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
             backend_status = runtime.status(requested)
             height, width, channels = image.shape
-            qimage = QImage(
-                image.data,
-                width,
-                height,
-                channels * width,
-                QImage.Format.Format_RGB888,
-            ).copy()
+            with profiler.measure("qimage_copy"):
+                qimage = QImage(
+                    image.data,
+                    width,
+                    height,
+                    channels * width,
+                    QImage.Format.Format_RGB888,
+                ).copy()
+            backend_status["display_performance"] = {"worker": profiler.snapshot()}
         except Exception as exc:
             self.logger.exception("Preview load failed: image=%s", self.path)
             self.failed.emit(self.path, str(exc))
             return
 
         self.progress.emit(100, "Preview ready")
-        self.logger.info("Preview load completed: image=%s size=%sx%s", self.path, width, height)
+        self.logger.info(
+            "Preview load completed: image=%s size=%sx%s performance=%s",
+            self.path,
+            width,
+            height,
+            backend_status["display_performance"]["worker"],
+        )
         self.loaded.emit(self.path, qimage, backend_status)
 
 

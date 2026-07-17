@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime
+import time
 from pathlib import Path
 
 from PySide6.QtCore import QThread, QUrl
@@ -133,6 +134,7 @@ class MainWindow(QMainWindow, LogMixin):
         self._preview_thread: QThread | None = None
         self._preview_worker: ImagePreviewWorker | None = None
         self._preview_updates_current_image = False
+        self._preview_started_at: float | None = None
         self._inspection_thread: QThread | None = None
         self._inspection_worker: InspectionWorker | None = None
         self._batch_thread: QThread | None = None
@@ -579,6 +581,7 @@ class MainWindow(QMainWindow, LogMixin):
             return
 
         self._preview_updates_current_image = update_current_image
+        self._preview_started_at = time.perf_counter()
         if update_current_image:
             self.topbar.image_chip.set_value("", loading=True)
         self.statusBar().showMessage(f"影像載入中：{path}")
@@ -597,8 +600,13 @@ class MainWindow(QMainWindow, LogMixin):
         self._preview_thread.start()
 
     def _on_preview_loaded(self, path: Path, image, backend_status: dict) -> None:
-        self.run_screen.image_viewer.set_qimage(image, name=Path(path).name)
+        viewer_performance = self.run_screen.image_viewer.set_qimage(image, name=Path(path).name)
+        display_performance = backend_status.setdefault("display_performance", {})
+        display_performance["viewer"] = viewer_performance
+        if self._preview_started_at is not None:
+            display_performance["user_wait_sec"] = round(time.perf_counter() - self._preview_started_at, 6)
         self.run_screen.image_viewer.set_backend_status(backend_status)
+        self.logger.info("GUI preview displayed: image=%s performance=%s", path, display_performance)
         if self.run_screen.image_viewer.last_error:
             QMessageBox.warning(self, "載入影像", self.run_screen.image_viewer.last_error)
             return
@@ -621,6 +629,7 @@ class MainWindow(QMainWindow, LogMixin):
 
     def _on_preview_thread_finished(self) -> None:
         self._preview_updates_current_image = False
+        self._preview_started_at = None
         self._preview_thread = None
         self._preview_worker = None
         self._refresh_image_chip()
