@@ -146,9 +146,10 @@
 ## P6：GUI、設定與部署
 
 - [x] Recipe 與 GUI 可設定 GPU，並顯示 DLL/device/fallback 狀態。
-- [ ] GPU mode 統一為清楚的 `auto`、`cpu`、`cuda` 語意，預設值需由實機驗收決定。
+- [x] GPU mode 統一為清楚的 `auto`、`cpu`、`cuda` 語意，並相容未含 mode 的舊 recipe。
+- [ ] production 預設 mode 仍需由 RTX 3090 實機驗收決定。
 - [ ] GUI worker 不得在 UI thread 等待 CUDA；取消、錯誤與進度更新必須保持可回應。
-- [ ] GUI 顯示實際 backend，不得因 recipe 勾選 GPU 就顯示 CUDA active。
+- [x] GUI 顯示實際 backend，不得因 recipe 勾選 GPU 就顯示 CUDA active。
 - [ ] PyInstaller 包含 `gpu/visionflow_cuda.dll`，但 CPU-only 電腦沒有 DLL/GPU 仍可正常啟動。
 - [ ] 有 GPU、無 GPU、DLL 缺少、DLL 版本不符、fallback 開/關各完成一次打包實機測試。
 
@@ -248,3 +249,4 @@
 - [x] 2026-07-17：新增 detector-neutral native DAG/multi-output ABI、compiled-plan cache 與 CUDA executor；900 以一次 root H2D 共用 device gray，僅下載 outer/inner masks 並同步一次，已覆蓋 descriptor、fake-DLL lifecycle、detector routing、C++ smoke、validator 與 source contract；RTX 3090 編譯/實測仍保留待辦。
 - [x] 2026-07-17：新增 detector `run_batch(images/rois)` CPU 預設契約與 manager 介面；GpuRuntime 採 bounded queue 加單一序列化 execution，單張 pipeline 使用 latency depth=1，batch/monitor 使用可設定 throughput depth，production recipes 持續預設關閉負優化 GPU crop。
 - [x] 2026-07-17：新增 Windows CPU/static CI 與受信任 RTX 3090 self-hosted manual/nightly workflow；PR 執行 tests、compileall、recipe/CLI/GUI smoke、CUDA contract，GPU job 使用專屬 labels 並上傳 DLL/LIB/EXE/build log、環境及含 commit 的 benchmark JSON；Nsight capture 保留實機待辦。
+- [x] 2026-07-17：統一 GPU `auto/cpu/cuda` policy：auto 可安全 fallback、cpu 完全不要求/載入 CUDA、cuda 強制成功且禁止 fallback；recipe 驗證、pipeline、長生命週期 session、GUI preview/tiling worker 與設計器均共用同一語意，GUI/history 顯示實際 backend。

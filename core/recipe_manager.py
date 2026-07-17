@@ -67,6 +67,12 @@ class RecipeManager:
                 raise RecipeError(f"Recipe gpu.{key} must be true or false.")
         if "dll_path" in (gpu or {}) and not isinstance(gpu["dll_path"], str):
             raise RecipeError("Recipe gpu.dll_path must be a string.")
+        if str((gpu or {}).get("mode", "auto")).lower() not in {"auto", "cpu", "cuda"}:
+            raise RecipeError("Recipe gpu.mode must be auto, cpu, or cuda.")
+        if "queue_depth" in (gpu or {}) and (
+            not isinstance(gpu["queue_depth"], int) or gpu["queue_depth"] <= 0
+        ):
+            raise RecipeError("Recipe gpu.queue_depth must be a positive integer.")
         for detector_id, config in recipe["detectors"].items():
             if not isinstance(config, dict):
                 raise RecipeError(f"Recipe detector {detector_id} must be a mapping.")
@@ -81,3 +87,16 @@ class RecipeManager:
             for detector_id, config in detectors.items()
             if config.get("enabled", False)
         }
+
+    @staticmethod
+    def gpu_mode(gpu: dict | None) -> str:
+        return str((gpu or {}).get("mode", "auto")).lower()
+
+    @classmethod
+    def gpu_feature_requested(cls, gpu: dict | None, feature: str) -> bool:
+        return cls.gpu_mode(gpu) != "cpu" and bool((gpu or {}).get(feature, False))
+
+    @classmethod
+    def gpu_fallback_enabled(cls, gpu: dict | None) -> bool:
+        mode = cls.gpu_mode(gpu)
+        return mode != "cuda" and bool((gpu or {}).get("fallback_to_cpu", True))

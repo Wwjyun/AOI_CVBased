@@ -15,20 +15,21 @@ class GpuExecutionSession:
         self._dll_path = GpuRuntime._resolve_path(
             str(config.get("dll_path", GpuRuntime.DEFAULT_DLL))
         )
-        self._fallback_to_cpu = bool(config.get("fallback_to_cpu", True))
+        self._fallback_to_cpu = RecipeManager().gpu_fallback_enabled(config)
         self.workload = workload
         self._closed = False
 
     @classmethod
     def from_recipe(cls, recipe: dict, workload: str = "latency") -> "GpuExecutionSession":
         gpu_config = recipe.get("gpu", {}) or {}
-        detector_configs = RecipeManager().enabled_detectors(recipe)
-        requested = bool(gpu_config.get("tiling", False)) or any(
+        manager = RecipeManager()
+        detector_configs = manager.enabled_detectors(recipe)
+        requested = manager.gpu_feature_requested(gpu_config, "tiling") or manager.gpu_mode(gpu_config) != "cpu" and any(
             bool(config.get("use_gpu", False)) for config in detector_configs.values()
         )
         runtime = GpuRuntime(
             gpu_config.get("dll_path", GpuRuntime.DEFAULT_DLL),
-            fallback_to_cpu=gpu_config.get("fallback_to_cpu", True),
+            fallback_to_cpu=manager.gpu_fallback_enabled(gpu_config),
             enabled=requested,
             queue_depth=(1 if workload == "latency" else int(gpu_config.get("queue_depth", 8))),
             workload=workload,
@@ -45,7 +46,7 @@ class GpuExecutionSession:
         requested_path = GpuRuntime._resolve_path(
             str(gpu_config.get("dll_path", GpuRuntime.DEFAULT_DLL))
         )
-        fallback_to_cpu = bool(gpu_config.get("fallback_to_cpu", True))
+        fallback_to_cpu = RecipeManager().gpu_fallback_enabled(gpu_config)
         if requested_path != self._dll_path or fallback_to_cpu != self._fallback_to_cpu:
             raise GpuRuntimeError("Injected GPU session is incompatible with the recipe GPU configuration")
         if requested and not self.requested:

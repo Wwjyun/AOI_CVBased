@@ -55,7 +55,10 @@ class AOIPipeline(LogMixin):
             recipe = RecipeTemplatePathSync.from_recipe(recipe).apply(recipe)
             gpu_config = recipe.get("gpu", {}) or {}
             detector_configs = self.recipe_manager.enabled_detectors(recipe)
-            gpu_requested = bool(gpu_config.get("tiling", False)) or any(
+            gpu_mode = self.recipe_manager.gpu_mode(gpu_config)
+            tiling_gpu_requested = self.recipe_manager.gpu_feature_requested(gpu_config, "tiling")
+            detector_gpu_allowed = gpu_mode != "cpu"
+            gpu_requested = tiling_gpu_requested or detector_gpu_allowed and any(
                 bool(config.get("use_gpu", False)) for config in detector_configs.values()
             )
             gpu_runtime = (
@@ -63,7 +66,7 @@ class AOIPipeline(LogMixin):
                 if self.gpu_session is not None
                 else GpuRuntime(
                     gpu_config.get("dll_path", GpuRuntime.DEFAULT_DLL),
-                    fallback_to_cpu=gpu_config.get("fallback_to_cpu", True),
+                    fallback_to_cpu=self.recipe_manager.gpu_fallback_enabled(gpu_config),
                     enabled=gpu_requested,
                     queue_depth=1,
                     workload="latency",
@@ -88,7 +91,10 @@ class AOIPipeline(LogMixin):
         self._progress(10, "Image loaded")
         with profiler.measure("initialization"):
             tile_config = recipe["tile"]
-            tiler = create_tiler(tile_config, gpu_runtime=gpu_runtime if gpu_config.get("tiling", False) else None)
+            tiler = create_tiler(tile_config, gpu_runtime=gpu_runtime if tiling_gpu_requested else None)
+            if not detector_gpu_allowed:
+                for config in detector_configs.values():
+                    config["use_gpu"] = False
             detectors = self.detector_manager.create_enabled(detector_configs, gpu_runtime=gpu_runtime)
         self.logger.info("Detectors initialized: count=%s ids=%s", len(detectors), [d.detector_id for d in detectors])
         self._progress(15, "Detectors initialized")
@@ -97,7 +103,7 @@ class AOIPipeline(LogMixin):
             tiles = list(tiler.iter_tiles(image))
         tiling_gpu_metrics = gpu_runtime.performance_stats()
         crop_metrics = tiling_gpu_metrics.get("functions", {}).get("vf_crop_u8", {})
-        if gpu_config.get("tiling", False) and crop_metrics.get("calls", 0) > 1:
+        if tiling_gpu_requested and crop_metrics.get("calls", 0) > 1:
             self.logger.warning(
                 "CUDA tiling performed %s synchronous crop round trips and estimated %s H2D bytes; "
                 "keep gpu.tiling disabled for performance until source buffers are reusable",
@@ -172,8 +178,9 @@ class AOIPipeline(LogMixin):
             "duration_sec": round(time.perf_counter() - started, 3),
             "execution": {
                 "gpu": {
-                    "tiling": gpu_runtime.status(bool(gpu_config.get("tiling", False))),
-                    "display_requested": bool(gpu_config.get("display", False)),
+                    "mode": gpu_mode,
+                    "tiling": gpu_runtime.status(tiling_gpu_requested),
+                    "display_requested": self.recipe_manager.gpu_feature_requested(gpu_config, "display"),
                     "detectors": {
                         detector.detector_id: {
                             "requested": detector.use_gpu,

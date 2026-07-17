@@ -15,6 +15,7 @@ from core.logging_system import LogMixin
 from core.monitor_processor import FolderMonitorProcessor
 from core.performance import PipelineProfiler
 from core.pipeline import AOIPipeline
+from core.recipe_manager import RecipeManager
 from core.tiler import create_tiler
 
 
@@ -38,11 +39,11 @@ class ImagePreviewWorker(QObject, LogMixin):
             with profiler.measure("image_load"):
                 bgr = self.image_loader.load_bgr(self.path)
             self.progress.emit(60, "Converting preview")
-            requested = bool(self.gpu_config.get("display", False))
+            requested = RecipeManager().gpu_feature_requested(self.gpu_config, "display")
             with profiler.measure("color_conversion"):
                 runtime = GpuRuntime(
                     self.gpu_config.get("dll_path", GpuRuntime.DEFAULT_DLL),
-                    fallback_to_cpu=self.gpu_config.get("fallback_to_cpu", True),
+                    fallback_to_cpu=RecipeManager().gpu_fallback_enabled(self.gpu_config),
                     enabled=requested,
                 )
                 if requested and not runtime.available and not runtime.fallback_to_cpu:
@@ -225,10 +226,10 @@ class TilePreviewWorker(QObject, LogMixin):
             self.progress.emit(0, "Loading image for tile preview")
             image = self.image_loader.load_bgr(self.image_path)
             self.progress.emit(20, "Creating tiler")
-            requested = bool(self.gpu_config.get("tiling", False))
+            requested = RecipeManager().gpu_feature_requested(self.gpu_config, "tiling")
             runtime = GpuRuntime(
                 self.gpu_config.get("dll_path", GpuRuntime.DEFAULT_DLL),
-                fallback_to_cpu=self.gpu_config.get("fallback_to_cpu", True),
+                fallback_to_cpu=RecipeManager().gpu_fallback_enabled(self.gpu_config),
                 enabled=requested,
             )
             if requested and not runtime.available and not runtime.fallback_to_cpu:

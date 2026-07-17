@@ -199,6 +199,7 @@ machine_id: "AOI_01"
 version: "0.1.0"
 
 gpu:
+  mode: auto  # auto=可回退、cpu=完全不載入 CUDA、cuda=CUDA 必須成功
   tiling: false
   display: false
   dll_path: "gpu/visionflow_cuda.dll"
@@ -495,6 +496,7 @@ detectors:
 - Persistent context 現在持有 non-blocking CUDA stream、grow-only scratch 與 morphology ping-pong buffers；plan 內的中間結果不回傳 CPU。
 - Batch 與 monitor 會透過 `GpuExecutionSession` 跨多張影像共用同一個 `GpuRuntime`/CUDA context，結束工作後才統一釋放。
 - 舊版 DLL 缺少新 exports 時仍保留既有路徑或 CPU fallback。
+- GPU mode 統一為 `auto`、`cpu`、`cuda`：`auto` 依設定嘗試並可回退，`cpu` 不載入 CUDA，`cuda` 禁止隱性 CPU fallback；執行結果與 GUI 顯示的是實際 backend。
 
 目前 CUDA 原始碼包含 separable Gaussian、constant weights、64-bit integral Adaptive Mean Threshold、persistent context 與 grow-only buffers。這些功能仍需在目標 RTX 3090（`sm_86`）完成正式編譯、五份配方等價、效能、VRAM 與壓力驗收後，才能視為 production-ready 或預設啟用。
 

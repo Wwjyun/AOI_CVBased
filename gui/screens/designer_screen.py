@@ -267,11 +267,16 @@ class DesignerScreen(QWidget):
     def _build_gpu_panel(self) -> Panel:
         panel = Panel(title="GPU / CUDA DLL")
         form = _form_grid()
+        self.gpu_mode_combo = QComboBox()
+        self.gpu_mode_combo.addItem("Auto（可安全回退）", "auto")
+        self.gpu_mode_combo.addItem("CPU only", "cpu")
+        self.gpu_mode_combo.addItem("CUDA required", "cuda")
         self.gpu_tiling_toggle = Toggle(checked=False)
         self.gpu_display_toggle = Toggle(checked=False)
         self.gpu_fallback_toggle = Toggle(checked=True)
         self.gpu_dll_path_edit = QLineEdit(GpuRuntime.DEFAULT_DLL)
         self.gpu_dll_path_edit.setProperty("mono", "true")
+        form.addRow(_label("GPU mode"), self.gpu_mode_combo)
         form.addRow(_label("切小圖使用 GPU"), self.gpu_tiling_toggle)
         form.addRow(_label("GUI 預覽使用 GPU"), self.gpu_display_toggle)
         form.addRow(_label("失敗回退 CPU"), self.gpu_fallback_toggle)
@@ -284,17 +289,25 @@ class DesignerScreen(QWidget):
         self.gpu_dll_path_edit.editingFinished.connect(self._refresh_gpu_status)
         self.gpu_tiling_toggle.toggled.connect(lambda _checked: self._refresh_gpu_status())
         self.gpu_display_toggle.toggled.connect(lambda _checked: self._refresh_gpu_status())
+        self.gpu_mode_combo.currentIndexChanged.connect(lambda _index: self._refresh_gpu_status())
         self._refresh_gpu_status()
         return panel
 
     def _refresh_gpu_status(self) -> None:
-        runtime = GpuRuntime(self.gpu_dll_path_edit.text().strip() or GpuRuntime.DEFAULT_DLL)
-        if runtime.available:
-            self.gpu_status_label.setText(f"CUDA DLL 可用 · {runtime.device_name}")
-            self.gpu_status_label.setStyleSheet(f"color: {COLORS['accent_text']}; font-size: 11px;")
-        else:
-            self.gpu_status_label.setText(f"目前使用 CPU · {runtime.unavailable_reason}")
+        mode = str(self.gpu_mode_combo.currentData() or "auto")
+        self.gpu_fallback_toggle.setEnabled(mode != "cuda")
+        if mode == "cpu":
+            self.gpu_status_label.setText("CPU mode · 不載入 CUDA DLL")
             self.gpu_status_label.setStyleSheet(f"color: {COLORS['text_3']}; font-size: 11px;")
+            return
+        with GpuRuntime(self.gpu_dll_path_edit.text().strip() or GpuRuntime.DEFAULT_DLL) as runtime:
+            if runtime.available:
+                self.gpu_status_label.setText(f"CUDA 可用 · {runtime.device_name} · mode={mode}")
+                self.gpu_status_label.setStyleSheet(f"color: {COLORS['accent_text']}; font-size: 11px;")
+            else:
+                suffix = "將回退 CPU" if mode == "auto" else "執行時將明確失敗"
+                self.gpu_status_label.setText(f"CUDA 不可用 · {suffix} · {runtime.unavailable_reason}")
+                self.gpu_status_label.setStyleSheet(f"color: {COLORS['text_3']}; font-size: 11px;")
 
     # ------------------------------------------------------------------
     # tiling
@@ -470,6 +483,8 @@ class DesignerScreen(QWidget):
 
         self._set_tile_config(recipe.get("tile", {}), recipe.get("assets", {}))
         gpu = recipe.get("gpu", {}) or {}
+        mode_index = self.gpu_mode_combo.findData(str(gpu.get("mode", "auto")).lower())
+        self.gpu_mode_combo.setCurrentIndex(max(0, mode_index))
         self.gpu_tiling_toggle.setChecked(bool(gpu.get("tiling", False)))
         self.gpu_display_toggle.setChecked(bool(gpu.get("display", False)))
         self.gpu_fallback_toggle.setChecked(bool(gpu.get("fallback_to_cpu", True)))
@@ -897,6 +912,7 @@ class DesignerScreen(QWidget):
 
     def build_gpu_config(self) -> dict:
         return {
+            "mode": str(self.gpu_mode_combo.currentData() or "auto"),
             "tiling": bool(self.gpu_tiling_toggle.isChecked()),
             "display": bool(self.gpu_display_toggle.isChecked()),
             "dll_path": self.gpu_dll_path_edit.text().strip() or GpuRuntime.DEFAULT_DLL,
