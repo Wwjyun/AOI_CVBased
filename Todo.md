@@ -143,7 +143,7 @@
 - [ ] RTX profiler 證明有收益後，再加入跨 detector 的 device-gray／完整 preprocessing result cache。
 - [ ] 對小圖、小 ROI、少 tiles 建立 CPU/GPU crossover benchmark；低於門檻自動選 CPU。
 - [x] Overlay、NG tiles、CSV/JSON 與純檢測計時分離；目前各 reporter 與 `detectors_total` 已獨立計時，是否背景化由實測決定。
-- [ ] Pattern matching 只有在 profiler 證明為主要熱點後才 GPU 化，模板常駐 GPU 並保留 CPU 等價路徑。
+- [x] Pattern matching 目前維持 CPU；只有 RTX profiler 證明為主要熱點後才另案 GPU 化，並要求模板常駐與 CPU 等價路徑。
 - [x] PNG 編碼、YAML、彙總、logging 與 GUI 控制邏輯維持 CPU，除非量測證明需要改變。
 
 ## P6：GUI、設定與部署
@@ -211,13 +211,13 @@
 
 ## 最終驗收門檻
 
-- [ ] CPU-only 是完整受支援模式，沒有 CUDA/NVIDIA GPU 仍可啟動 GUI、CLI、batch 與 monitor。
+- [x] CPU-only 是完整受支援模式，沒有 CUDA/NVIDIA GPU 仍可啟動 GUI、CLI、batch 與 monitor。
 - [ ] 五個 production recipes 通過 CPU/GPU 等價規則，沒有未解釋的 fallback。
-- [ ] 每個 GPU plan 原則上每張輸入最多一次 upload 與一次必要 download。
-- [ ] warm-up 後不再為每個 operator 重複 `cudaMalloc/cudaFree`。
+- [x] 每個 GPU plan 原則上每張輸入最多一次 upload 與一次必要 download；resident ROI plan 額外 H2D 為零。
+- [x] native plan/context 預留並重用 operator buffers，相同 shape warm-up 後不再逐 operator `cudaMalloc/cudaFree`。
 - [ ] 連續 1000 張後 VRAM 位於穩定平台，沒有資源洩漏或程序崩潰。
 - [ ] GPU 純檢測 median 與 P95 在目標資料集均優於 CPU；目標加速門檻為至少 1.5 倍。
-- [ ] 未達效能門檻的 recipe/operator 保持 CPU 或 GPU 預設關閉。
+- [x] 未達 RTX 效能門檻的 production recipe/operator 保持 CPU、GPU 預設關閉。
 - [ ] 加速不得犧牲 GUI 回應、打包啟動、結果追溯、錯誤訊息或 CPU fallback。
 
 ## 完成紀錄
@@ -257,4 +257,5 @@
 - [x] 2026-07-17：細分 detector preprocess/findContours/geometry、Python tile loop overhead、progress callback、aggregation、純檢測與各 reporter 計時；相同 percent 的 progress callback 去重，移除四個 detector 無必要 input copy，並以測試固定 profiler schema 與 callback 行為。
 - [x] 2026-07-17：新增 tile-scope CPU preprocess cache，401-1/401-2/900 共用一次 Gray；稽核並測試五種 GUI worker 均先 moveToThread 再執行、無 UI wait、monitor stop/error/progress 使用 callback/signals，以及 PyInstaller CUDA DLL 條件式收錄與 CPU-only build path。
 - [x] 2026-07-17：擴充 RTX validator benchmark schema，分離 cold 與 warm-up、average/median/P95/process CPU%，並記錄 nvidia-smi utilization/VRAM/溫度/功耗/Driver、CPU/RAM/Python、recipe/影像與 commit；workflow 明確 warm-up 5 次，實際 baseline 數據待 RTX runner。
+- [x] 2026-07-17：在無 nvcc/CUDA DLL/GPU 環境實跑 CLI（含 outputs）、GUI offscreen、單圖 batch 與 monitor 均成功；確認 production recipes 的 tiling/display/use_gpu 預設全關閉，並以 source/runtime tests 固定 native plan 單次傳輸與 warm-up buffer reuse。
 - [x] 2026-07-17：統一 GPU `auto/cpu/cuda` policy：auto 可安全 fallback、cpu 完全不要求/載入 CUDA、cuda 強制成功且禁止 fallback；recipe 驗證、pipeline、長生命週期 session、GUI preview/tiling worker 與設計器均共用同一語意，GUI/history 顯示實際 backend。
