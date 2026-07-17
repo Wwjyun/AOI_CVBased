@@ -98,6 +98,23 @@ typedef struct VfRoiV1 {
     int32_t height;
 } VfRoiV1;
 
+typedef struct VfCudaTimingsV1 {
+    uint32_t struct_size;
+    uint32_t version;
+    float context_create_ms;
+    float allocation_ms;
+    float h2d_ms;
+    float device_copy_ms;
+    float kernel_ms;
+    float d2h_ms;
+    float synchronize_ms;
+    float free_ms;
+    float gaussian_ms;
+    float adaptive_integral_ms;
+    float threshold_ms;
+    float total_device_ms;
+} VfCudaTimingsV1;
+
 VF_CUDA_API int vf_gpu_abi_version(void);
 VF_CUDA_API int vf_gpu_device_count(void);
 VF_CUDA_API int vf_gpu_compute_capability(void);
@@ -109,6 +126,7 @@ VF_CUDA_API int vf_context_create(void** context);
 VF_CUDA_API int vf_context_destroy(void* context);
 VF_CUDA_API int vf_context_stats(
     void* context, uint64_t* reserved_bytes, uint64_t* allocation_count);
+VF_CUDA_API int vf_context_last_timings(void* context, VfCudaTimingsV1* timings);
 VF_CUDA_API int vf_context_upload_u8(
     void* context,
     const uint8_t* src, int width, int height, int src_stride, int src_channels,

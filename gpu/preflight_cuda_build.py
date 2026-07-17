@@ -61,6 +61,7 @@ OPTIONAL_ROI_BATCH_EXPORTS = {
     "vf_roi_batch_download_u8",
     "vf_roi_batch_destroy",
 }
+OPTIONAL_TIMING_EXPORTS = {"vf_context_last_timings"}
 CONTRACT_FILES = {
     "header": Path("gpu/include/visionflow_cuda.h"),
     "source": Path("gpu/visionflow_cuda.cu"),
@@ -141,6 +142,14 @@ def inspect_contract(root: Path = ROOT) -> dict:
             errors.append(f"native smoke does not call ROI batch exports: {sorted(missing_batch_smoke)}")
         if missing_batch_runtime:
             errors.append(f"Python runtime does not reference ROI batch exports: {sorted(missing_batch_runtime)}")
+    declared_timing_exports = OPTIONAL_TIMING_EXPORTS & header_exports
+    if declared_timing_exports:
+        missing_timing_smoke = {name for name in OPTIONAL_TIMING_EXPORTS if name not in texts["smoke"]}
+        missing_timing_runtime = {name for name in OPTIONAL_TIMING_EXPORTS if name not in texts["runtime"]}
+        if missing_timing_smoke:
+            errors.append(f"native smoke does not call timing exports: {sorted(missing_timing_smoke)}")
+        if missing_timing_runtime:
+            errors.append(f"Python runtime does not reference timing exports: {sorted(missing_timing_runtime)}")
     if "visionflow_cuda.cu" not in texts["build"] or "test_cuda_api.cu" not in texts["build"]:
         errors.append("build script is missing an explicit DLL or smoke source manifest")
     if re.search(r"(?:\*\.cu|Get-ChildItem[^\n]*\.cu)", texts["build"], re.IGNORECASE):
@@ -155,6 +164,7 @@ def inspect_contract(root: Path = ROOT) -> dict:
         "optional_generic_plan_exports": sorted(declared_plan_exports),
         "optional_resident_roi_exports": sorted(declared_resident_exports),
         "optional_roi_batch_exports": sorted(declared_batch_exports),
+        "optional_timing_exports": sorted(declared_timing_exports),
         "dll_sources": ["gpu/visionflow_cuda.cu"],
         "smoke_sources": ["gpu/test_cuda_api.cu"],
         "sha256": {

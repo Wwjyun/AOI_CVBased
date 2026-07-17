@@ -64,6 +64,25 @@ class _VfRoiV1(ctypes.Structure):
     ]
 
 
+class _VfCudaTimingsV1(ctypes.Structure):
+    _fields_ = [
+        ("struct_size", ctypes.c_uint32),
+        ("version", ctypes.c_uint32),
+        ("context_create_ms", ctypes.c_float),
+        ("allocation_ms", ctypes.c_float),
+        ("h2d_ms", ctypes.c_float),
+        ("device_copy_ms", ctypes.c_float),
+        ("kernel_ms", ctypes.c_float),
+        ("d2h_ms", ctypes.c_float),
+        ("synchronize_ms", ctypes.c_float),
+        ("free_ms", ctypes.c_float),
+        ("gaussian_ms", ctypes.c_float),
+        ("adaptive_integral_ms", ctypes.c_float),
+        ("threshold_ms", ctypes.c_float),
+        ("total_device_ms", ctypes.c_float),
+    ]
+
+
 class GpuRuntimeError(RuntimeError):
     pass
 
@@ -265,9 +284,10 @@ class GpuRuntime:
         }
 
     def performance_stats(self) -> dict:
-        """Return host-observed CUDA call metrics; DLL-internal phases are not separable in ABI v1."""
+        """Return host wrapper metrics and optional native CUDA event timings."""
         with self._lock:
             context_stats = self._context_stats_unlocked()
+            native_timings = self._native_timings_unlocked()
             functions = {
                 name: {
                     "calls": int(values["calls"]),
@@ -279,8 +299,8 @@ class GpuRuntime:
                 for name, values in sorted(self._performance["functions"].items())
             }
             return {
-                "measurement_scope": "synchronous_host_wrapper_estimate",
-                "note": "Host timing combines H2D, kernels, synchronize and D2H; stateless ABI calls also allocate/free.",
+                "measurement_scope": "host_wrapper_and_optional_cuda_events",
+                "note": "Native timings describe the most recent persistent-context operation when the DLL exports them.",
                 "load_sec": round(float(self._performance["load_sec"]), 6),
                 "call_count": int(self._performance["call_count"]),
                 "estimated_round_trips": int(self._performance["estimated_round_trips"]),
@@ -289,6 +309,7 @@ class GpuRuntime:
                 "wall_sec": round(float(self._performance["wall_sec"]), 6),
                 "lock_wait_sec": round(float(self._performance["lock_wait_sec"]), 6),
                 "persistent_context": context_stats,
+                "native_timings_ms": native_timings,
                 "functions": functions,
             }
 
@@ -892,6 +913,10 @@ class GpuRuntime:
                 ctypes.POINTER(ctypes.c_uint64),
             ]
             stats.restype = ctypes.c_int
+        timings = getattr(self._dll, "vf_context_last_timings", None)
+        if timings is not None:
+            timings.argtypes = [ctypes.c_void_p, ctypes.POINTER(_VfCudaTimingsV1)]
+            timings.restype = ctypes.c_int
         context = ctypes.c_void_p()
         result = int(create(ctypes.byref(context)))
         if result != 0 or not context.value:
@@ -1140,6 +1165,24 @@ class GpuRuntime:
             "active": True,
             "reserved_bytes": int(reserved_bytes.value),
             "allocation_count": int(allocation_count.value),
+        }
+
+    def _native_timings_unlocked(self) -> dict | None:
+        if self._context is None or self._dll is None:
+            return None
+        query = getattr(self._dll, "vf_context_last_timings", None)
+        if query is None:
+            return None
+        timings = _VfCudaTimingsV1()
+        timings.struct_size = ctypes.sizeof(_VfCudaTimingsV1)
+        timings.version = 1
+        result = int(query(self._context, ctypes.byref(timings)))
+        if result != 0:
+            return {"error_code": result}
+        return {
+            name: round(float(getattr(timings, name)), 6)
+            for name, _ctype in _VfCudaTimingsV1._fields_
+            if name not in {"struct_size", "version"}
         }
 
     def _call_image(self, function_name: str, source: np.ndarray, output: np.ndarray, *extra) -> None:

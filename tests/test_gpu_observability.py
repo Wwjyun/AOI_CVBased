@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 import yaml
 
-from core.gpu_runtime import GpuResidentImage, GpuRuntime, GpuRuntimeError
+from core.gpu_runtime import GpuResidentImage, GpuRuntime, GpuRuntimeError, _VfCudaTimingsV1
 from core.performance import PipelineProfiler
 from core.pipeline import AOIPipeline
 from core.preprocess_plan import (
@@ -55,6 +55,7 @@ class _FusedDll:
         self.vf_context_create = _Function(self._create)
         self.vf_context_destroy = _Function(self._destroy)
         self.vf_context_stats = _Function(self._stats)
+        self.vf_context_last_timings = _Function(self._timings)
         self.vf_preprocess_401_2_u8 = _Function(lambda *_args: 0)
 
     @staticmethod
@@ -70,6 +71,20 @@ class _FusedDll:
     def _stats(_context, reserved_bytes, allocation_count):
         reserved_bytes._obj.value = 4096
         allocation_count._obj.value = 7
+        return 0
+
+    @staticmethod
+    def _timings(_context, timings):
+        value = timings._obj
+        if value.struct_size != ctypes.sizeof(_VfCudaTimingsV1) or value.version != 1:
+            return 1
+        value.context_create_ms = 1.25
+        value.allocation_ms = 0.5
+        value.h2d_ms = 0.75
+        value.kernel_ms = 2.5
+        value.d2h_ms = 0.25
+        value.synchronize_ms = 3.5
+        value.total_device_ms = 3.5
         return 0
 
 
@@ -400,6 +415,9 @@ class GpuRuntimeMetricsTests(unittest.TestCase):
         self.assertEqual(metrics["functions"]["vf_preprocess_401_2_u8"]["calls"], 1)
         self.assertEqual(metrics["persistent_context"]["reserved_bytes"], 4096)
         self.assertEqual(metrics["persistent_context"]["allocation_count"], 7)
+        self.assertEqual(metrics["native_timings_ms"]["context_create_ms"], 1.25)
+        self.assertEqual(metrics["native_timings_ms"]["kernel_ms"], 2.5)
+        self.assertEqual(metrics["native_timings_ms"]["total_device_ms"], 3.5)
 
         runtime.close()
         self.assertFalse(runtime.supports_fused_401_2)

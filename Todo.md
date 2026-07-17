@@ -31,7 +31,7 @@
 - [x] Reporter 分別記錄 overlay、NG tiles、CSV、matrix CSV 與 JSON 耗時。
 - [x] 記錄 DLL load、同步呼叫、lock wait、估算 H2D/D2H bytes、round trips 與各 primitive 呼叫統計。
 - [x] 加入 GUI 顯示、QImage/QPixmap 轉換與使用者實際等待時間計時。
-- [ ] DLL 加入 CUDA event，拆分 context、allocation、H2D、kernel、synchronize、D2H 與 free。
+- [x] DLL 加入 CUDA event，拆分 context、allocation、H2D、device copy、kernel、synchronize、D2H 與 free；RTX 數值驗證仍列在實機驗收清單。
 - [x] benchmark JSON 保存 CPU、GPU、RAM、Driver、recipe、影像資訊與 commit hash；Toolkit 另由 runner environment artifact 保存。
 - [ ] 在 RTX 3090 固定 production 測試集執行並建立可重現 baseline。
 - [x] benchmark 分開記錄 cold、warm-up 次數、純檢測與既有 pipeline/report 端到端數據。
@@ -86,7 +86,7 @@
 - [x] Integral image 使用 row scan、transpose、第二次 row scan，並檢查 allocation overflow。
 - [x] 驗證工具已加入 Gaussian、Adaptive Mean、401-2 fused 與 4K benchmark 案例。
 - [ ] Gaussian 加入 shared-memory tile/halo，實測 kernel 45 收益與限制。
-- [ ] CUDA event 分別量測 integral 建立、Gaussian passes 與 threshold kernel。
+- [x] CUDA event 分別量測 Adaptive Mean integral/kernel、Gaussian passes 與 threshold kernel；待 RTX runner 回收實測數值。
 
 ### Persistent context 與 buffers
 
@@ -260,3 +260,4 @@
 - [x] 2026-07-17：在無 nvcc/CUDA DLL/GPU 環境實跑 CLI（含 outputs）、GUI offscreen、單圖 batch 與 monitor 均成功；確認 production recipes 的 tiling/display/use_gpu 預設全關閉，並以 source/runtime tests 固定 native plan 單次傳輸與 warm-up buffer reuse。
 - [x] 2026-07-17：首次手動 dispatch RTX 3090 workflow run `29574501971`；workflow active 且 request 成功，但持續 queued、updated_at 未變，確認目前 self-hosted RTX runner 尚未上線接單。
 - [x] 2026-07-17：統一 GPU `auto/cpu/cuda` policy：auto 可安全 fallback、cpu 完全不要求/載入 CUDA、cuda 強制成功且禁止 fallback；recipe 驗證、pipeline、長生命週期 session、GUI preview/tiling worker 與設計器均共用同一語意，GUI/history 顯示實際 backend。
+- [x] 2026-07-17：新增 `VfCudaTimingsV1` 與 `vf_context_last_timings`，persistent plan 以 CUDA events 拆分 H2D/D2D、kernel、D2H、Gaussian、Adaptive Mean、threshold 與 device total，host clock 補 context/allocation/synchronize/free；Python metrics、C++ smoke、preflight 與 source/runtime tests 已同步，數值正確性待 RTX runner 驗證。

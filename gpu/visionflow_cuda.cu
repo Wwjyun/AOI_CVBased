@@ -3,6 +3,7 @@
 #include "visionflow_cuda_internal.cuh"
 #include <algorithm>
 #include <climits>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <new>
@@ -16,6 +17,19 @@ constexpr int SCAN_THREADS = 256;
 constexpr int TRANSPOSE_TILE = 32;
 constexpr int TRANSPOSE_ROWS = 8;
 constexpr int MAX_GAUSSIAN_KERNEL = 127;
+constexpr int TIMING_EVENT_COUNT = 10;
+enum TimingEventIndex {
+    TIMING_START = 0,
+    TIMING_AFTER_INPUT = 1,
+    TIMING_AFTER_KERNEL = 2,
+    TIMING_AFTER_OUTPUT = 3,
+    TIMING_GAUSSIAN_START = 4,
+    TIMING_GAUSSIAN_END = 5,
+    TIMING_ADAPTIVE_START = 6,
+    TIMING_ADAPTIVE_END = 7,
+    TIMING_THRESHOLD_START = 8,
+    TIMING_THRESHOLD_END = 9,
+};
 
 __constant__ float gaussian_weights[MAX_GAUSSIAN_KERNEL];
 
@@ -37,9 +51,24 @@ struct PersistentContext {
     unsigned long long allocation_count = 0;
     cudaStream_t stream = nullptr;
     cudaError_t initialization_error = cudaSuccess;
+    cudaEvent_t timing_events[TIMING_EVENT_COUNT]{};
+    VfCudaTimingsV1 last_timings{};
+    float pending_allocation_ms = 0.0f;
+    bool timing_input_is_host = true;
+    bool timing_has_gaussian = false;
+    bool timing_has_adaptive = false;
+    bool timing_has_threshold = false;
 
     PersistentContext() {
         initialization_error = cudaStreamCreateWithFlags(&stream, cudaStreamNonBlocking);
+        last_timings.struct_size = sizeof(VfCudaTimingsV1);
+        last_timings.version = 1;
+        if (initialization_error == cudaSuccess) {
+            for (cudaEvent_t& event : timing_events) {
+                initialization_error = cudaEventCreate(&event);
+                if (initialization_error != cudaSuccess) break;
+            }
+        }
     }
 
     ~PersistentContext() {
@@ -48,9 +77,72 @@ struct PersistentContext {
         for (void* pointer : u64) visionflow_cuda::free_device(pointer);
         for (void* pointer : dag_u8) visionflow_cuda::free_device(pointer);
         visionflow_cuda::free_device(resident_u8);
+        for (cudaEvent_t event : timing_events) {
+            if (event != nullptr) cudaEventDestroy(event);
+        }
         if (stream != nullptr) cudaStreamDestroy(stream);
     }
 };
+
+float elapsed_host_ms(std::chrono::steady_clock::time_point started) {
+    return std::chrono::duration<float, std::milli>(
+        std::chrono::steady_clock::now() - started).count();
+}
+
+void reset_timing(PersistentContext* context, bool input_is_host) {
+    float context_create_ms = context->last_timings.context_create_ms;
+    float allocation_ms = context->pending_allocation_ms;
+    context->pending_allocation_ms = 0.0f;
+    context->last_timings = {};
+    context->last_timings.struct_size = sizeof(VfCudaTimingsV1);
+    context->last_timings.version = 1;
+    context->last_timings.context_create_ms = context_create_ms;
+    context->last_timings.allocation_ms = allocation_ms;
+    context->timing_input_is_host = input_is_host;
+    context->timing_has_gaussian = false;
+    context->timing_has_adaptive = false;
+    context->timing_has_threshold = false;
+    cudaEventRecord(context->timing_events[TIMING_START], context->stream);
+}
+
+void finalize_timing(PersistentContext* context) {
+    float input_ms = 0.0f;
+    cudaEventElapsedTime(
+        &input_ms, context->timing_events[TIMING_START],
+        context->timing_events[TIMING_AFTER_INPUT]);
+    if (context->timing_input_is_host) context->last_timings.h2d_ms = input_ms;
+    else context->last_timings.device_copy_ms = input_ms;
+    cudaEventElapsedTime(
+        &context->last_timings.kernel_ms,
+        context->timing_events[TIMING_AFTER_INPUT],
+        context->timing_events[TIMING_AFTER_KERNEL]);
+    cudaEventElapsedTime(
+        &context->last_timings.d2h_ms,
+        context->timing_events[TIMING_AFTER_KERNEL],
+        context->timing_events[TIMING_AFTER_OUTPUT]);
+    cudaEventElapsedTime(
+        &context->last_timings.total_device_ms,
+        context->timing_events[TIMING_START],
+        context->timing_events[TIMING_AFTER_OUTPUT]);
+    if (context->timing_has_gaussian) {
+        cudaEventElapsedTime(
+            &context->last_timings.gaussian_ms,
+            context->timing_events[TIMING_GAUSSIAN_START],
+            context->timing_events[TIMING_GAUSSIAN_END]);
+    }
+    if (context->timing_has_adaptive) {
+        cudaEventElapsedTime(
+            &context->last_timings.adaptive_integral_ms,
+            context->timing_events[TIMING_ADAPTIVE_START],
+            context->timing_events[TIMING_ADAPTIVE_END]);
+    }
+    if (context->timing_has_threshold) {
+        cudaEventElapsedTime(
+            &context->last_timings.threshold_ms,
+            context->timing_events[TIMING_THRESHOLD_START],
+            context->timing_events[TIMING_THRESHOLD_END]);
+    }
+}
 
 struct NativePlan {
     PersistentContext* context = nullptr;
@@ -779,6 +871,8 @@ static int execute_linear_plan_device(
                 }
                 break;
             case VF_PLAN_GAUSSIAN: {
+                context->timing_has_gaussian = true;
+                cudaEventRecord(context->timing_events[TIMING_GAUSSIAN_START], context->stream);
                 int radius = 0;
                 int result = prepare_gaussian_weights(op.int_params[0], &radius);
                 if (result != VF_CUDA_OK) return result;
@@ -786,16 +880,22 @@ static int execute_linear_plan_device(
                     current, context->float_buffer, width, height, channels, radius);
                 gaussian_vertical_kernel<<<grid2d(width, height), dim3(BLOCK_X, BLOCK_Y), 0, context->stream>>>(
                     context->float_buffer, next, width, height, channels, radius);
+                cudaEventRecord(context->timing_events[TIMING_GAUSSIAN_END], context->stream);
                 current = next;
                 break;
             }
             case VF_PLAN_THRESHOLD:
+                context->timing_has_threshold = true;
+                cudaEventRecord(context->timing_events[TIMING_THRESHOLD_START], context->stream);
                 threshold_kernel<<<(static_cast<int>(pixels) + 255) / 256, 256, 0, context->stream>>>(
                     current, next, static_cast<int>(pixels), op.int_params[0],
                     op.int_params[1], op.int_params[2]);
+                cudaEventRecord(context->timing_events[TIMING_THRESHOLD_END], context->stream);
                 current = next;
                 break;
             case VF_PLAN_ADAPTIVE_MEAN: {
+                context->timing_has_adaptive = true;
+                cudaEventRecord(context->timing_events[TIMING_ADAPTIVE_START], context->stream);
                 int radius = 0, padded_width = 0, padded_height = 0;
                 size_t padded_count = 0;
                 int result = adaptive_layout(width, height, op.int_params[0], &radius, &padded_width,
@@ -816,6 +916,7 @@ static int execute_linear_plan_device(
                 adaptive_integral_kernel<<<grid2d(width, height), dim3(BLOCK_X, BLOCK_Y), 0, context->stream>>>(
                     current, context->u64[1], next, width, height, padded_height,
                     op.int_params[0], op.float_params[0], op.int_params[1], op.int_params[2]);
+                cudaEventRecord(context->timing_events[TIMING_ADAPTIVE_END], context->stream);
                 current = next;
                 break;
             }
@@ -846,12 +947,18 @@ static int execute_linear_plan_device(
     }
     int result = visionflow_cuda::kernel_launch_result();
     if (result != VF_CUDA_OK) return result;
+    cudaEventRecord(context->timing_events[TIMING_AFTER_KERNEL], context->stream);
     const size_t output_row_bytes = static_cast<size_t>(width) * dst_channels;
     cudaError_t error = cudaMemcpy2DAsync(
         dst, dst_stride, current, output_row_bytes, output_row_bytes, height,
         cudaMemcpyDeviceToHost, context->stream);
     if (error != cudaSuccess) return cuda_result(error);
-    return visionflow_cuda::stream_result(context->stream);
+    cudaEventRecord(context->timing_events[TIMING_AFTER_OUTPUT], context->stream);
+    auto synchronize_started = std::chrono::steady_clock::now();
+    result = visionflow_cuda::stream_result(context->stream);
+    context->last_timings.synchronize_ms = elapsed_host_ms(synchronize_started);
+    if (result == VF_CUDA_OK) finalize_timing(context);
+    return result;
 }
 
 static int execute_dag_plan_device(
@@ -881,6 +988,8 @@ static int execute_dag_plan_device(
                 }
                 break;
             case VF_PLAN_GAUSSIAN: {
+                context->timing_has_gaussian = true;
+                cudaEventRecord(context->timing_events[TIMING_GAUSSIAN_START], context->stream);
                 int radius = 0;
                 int result = prepare_gaussian_weights(op.int_params[0], &radius);
                 if (result != VF_CUDA_OK) return result;
@@ -888,16 +997,22 @@ static int execute_dag_plan_device(
                     input, context->float_buffer, width, height, channels, radius);
                 gaussian_vertical_kernel<<<grid2d(width, height), dim3(BLOCK_X, BLOCK_Y), 0, context->stream>>>(
                     context->float_buffer, output, width, height, channels, radius);
+                cudaEventRecord(context->timing_events[TIMING_GAUSSIAN_END], context->stream);
                 values[index] = output;
                 break;
             }
             case VF_PLAN_THRESHOLD:
+                context->timing_has_threshold = true;
+                cudaEventRecord(context->timing_events[TIMING_THRESHOLD_START], context->stream);
                 threshold_kernel<<<(static_cast<int>(pixels) + 255) / 256, 256, 0, context->stream>>>(
                     input, output, static_cast<int>(pixels), op.int_params[0],
                     op.int_params[1], op.int_params[2]);
+                cudaEventRecord(context->timing_events[TIMING_THRESHOLD_END], context->stream);
                 values[index] = output;
                 break;
             case VF_PLAN_ADAPTIVE_MEAN: {
+                context->timing_has_adaptive = true;
+                cudaEventRecord(context->timing_events[TIMING_ADAPTIVE_START], context->stream);
                 int radius = 0, padded_width = 0, padded_height = 0;
                 size_t padded_count = 0;
                 int result = adaptive_layout(width, height, op.int_params[0], &radius, &padded_width,
@@ -918,6 +1033,7 @@ static int execute_dag_plan_device(
                 adaptive_integral_kernel<<<grid2d(width, height), dim3(BLOCK_X, BLOCK_Y), 0, context->stream>>>(
                     input, context->u64[1], output, width, height, padded_height,
                     op.int_params[0], op.float_params[0], op.int_params[1], op.int_params[2]);
+                cudaEventRecord(context->timing_events[TIMING_ADAPTIVE_END], context->stream);
                 values[index] = output;
                 break;
             }
@@ -947,6 +1063,7 @@ static int execute_dag_plan_device(
     }
     int result = visionflow_cuda::kernel_launch_result();
     if (result != VF_CUDA_OK) return result;
+    cudaEventRecord(context->timing_events[TIMING_AFTER_KERNEL], context->stream);
     for (int index = 0; index < output_count; ++index) {
         int node = compiled->output_nodes[index];
         size_t row_bytes = static_cast<size_t>(width) * compiled->node_channels[node];
@@ -955,7 +1072,12 @@ static int execute_dag_plan_device(
             row_bytes, height, cudaMemcpyDeviceToHost, context->stream);
         if (error != cudaSuccess) return cuda_result(error);
     }
-    return visionflow_cuda::stream_result(context->stream);
+    cudaEventRecord(context->timing_events[TIMING_AFTER_OUTPUT], context->stream);
+    auto synchronize_started = std::chrono::steady_clock::now();
+    result = visionflow_cuda::stream_result(context->stream);
+    context->last_timings.synchronize_ms = elapsed_host_ms(synchronize_started);
+    if (result == VF_CUDA_OK) finalize_timing(context);
+    return result;
 }
 
 VF_CUDA_API int vf_gpu_abi_version() { return VF_CUDA_ABI_VERSION; }
@@ -1011,6 +1133,7 @@ VF_CUDA_API int vf_gpu_memory_info(uint64_t* free_bytes, uint64_t* total_bytes) 
 VF_CUDA_API int vf_context_create(void** context) {
     if (context == nullptr) return VF_CUDA_INVALID_ARGUMENT;
     *context = nullptr;
+    auto started = std::chrono::steady_clock::now();
     PersistentContext* created = new (std::nothrow) PersistentContext();
     if (created == nullptr) return VF_CUDA_ALLOCATION_FAILED;
     if (created->initialization_error != cudaSuccess) {
@@ -1018,7 +1141,17 @@ VF_CUDA_API int vf_context_create(void** context) {
         delete created;
         return result;
     }
+    created->last_timings.context_create_ms = elapsed_host_ms(started);
     *context = created;
+    return VF_CUDA_OK;
+}
+
+VF_CUDA_API int vf_context_last_timings(void* context, VfCudaTimingsV1* timings) {
+    if (context == nullptr || timings == nullptr ||
+        timings->struct_size != sizeof(VfCudaTimingsV1) || timings->version != 1) {
+        return VF_CUDA_INVALID_ARGUMENT;
+    }
+    *timings = static_cast<PersistentContext*>(context)->last_timings;
     return VF_CUDA_OK;
 }
 
@@ -1062,16 +1195,25 @@ VF_CUDA_API int vf_context_upload_u8(
         !visionflow_cuda::valid_image(src, width, height, src_stride, src_channels)) {
         return VF_CUDA_INVALID_ARGUMENT;
     }
+    reset_timing(persistent, true);
     size_t row_bytes = static_cast<size_t>(width) * src_channels;
+    auto allocation_started = std::chrono::steady_clock::now();
     int result = reserve_device(
         &persistent->resident_u8, &persistent->resident_capacity,
         row_bytes * static_cast<size_t>(height), &persistent->allocation_count);
+    persistent->last_timings.allocation_ms += elapsed_host_ms(allocation_started);
     if (result != VF_CUDA_OK) return result;
     cudaError_t error = cudaMemcpy2DAsync(
         persistent->resident_u8, row_bytes, src, src_stride, row_bytes, height,
         cudaMemcpyHostToDevice, persistent->stream);
     if (error != cudaSuccess) return cuda_result(error);
+    cudaEventRecord(persistent->timing_events[TIMING_AFTER_INPUT], persistent->stream);
+    cudaEventRecord(persistent->timing_events[TIMING_AFTER_KERNEL], persistent->stream);
+    cudaEventRecord(persistent->timing_events[TIMING_AFTER_OUTPUT], persistent->stream);
+    auto synchronize_started = std::chrono::steady_clock::now();
     result = visionflow_cuda::stream_result(persistent->stream);
+    persistent->last_timings.synchronize_ms = elapsed_host_ms(synchronize_started);
+    if (result == VF_CUDA_OK) finalize_timing(persistent);
     if (result != VF_CUDA_OK) return result;
     persistent->resident_width = width;
     persistent->resident_height = height;
@@ -1193,7 +1335,12 @@ VF_CUDA_API int vf_roi_batch_download_u8(
 }
 
 VF_CUDA_API int vf_roi_batch_destroy(void* batch) {
-    delete static_cast<NativeRoiBatch*>(batch);
+    NativeRoiBatch* native = static_cast<NativeRoiBatch*>(batch);
+    if (native == nullptr) return VF_CUDA_OK;
+    PersistentContext* context = native->context;
+    auto started = std::chrono::steady_clock::now();
+    delete native;
+    if (context != nullptr) context->last_timings.free_ms = elapsed_host_ms(started);
     return VF_CUDA_OK;
 }
 
@@ -1231,7 +1378,9 @@ VF_CUDA_API int vf_plan_create(
         delete created;
         return VF_CUDA_ALLOCATION_FAILED;
     }
+    auto allocation_started = std::chrono::steady_clock::now();
     result = reserve_plan_buffers(created->context, *created);
+    created->context->pending_allocation_ms += elapsed_host_ms(allocation_started);
     if (result != VF_CUDA_OK) {
         delete created;
         return result;
@@ -1259,11 +1408,13 @@ VF_CUDA_API int vf_plan_execute(
         return VF_CUDA_INVALID_ARGUMENT;
     }
     PersistentContext* context = compiled->context;
+    reset_timing(context, true);
     const size_t source_row_bytes = static_cast<size_t>(width) * src_channels;
     cudaError_t error = cudaMemcpy2DAsync(
         context->u8[0], source_row_bytes, src, src_stride, source_row_bytes, height,
         cudaMemcpyHostToDevice, context->stream);
     if (error != cudaSuccess) return cuda_result(error);
+    cudaEventRecord(context->timing_events[TIMING_AFTER_INPUT], context->stream);
 
     return execute_linear_plan_device(
         compiled, context->u8[0], dst, dst_stride, dst_channels);
@@ -1294,6 +1445,7 @@ VF_CUDA_API int vf_plan_execute_roi(
             dst, compiled->width, compiled->height, dst_stride, dst_channels)) {
         return VF_CUDA_INVALID_ARGUMENT;
     }
+    reset_timing(context, false);
     size_t resident_pitch = static_cast<size_t>(context->resident_width) * context->resident_channels;
     size_t roi_row_bytes = static_cast<size_t>(compiled->width) * compiled->input_channels;
     const uint8_t* source = context->resident_u8 +
@@ -1302,6 +1454,7 @@ VF_CUDA_API int vf_plan_execute_roi(
         context->u8[0], roi_row_bytes, source, resident_pitch, roi_row_bytes, compiled->height,
         cudaMemcpyDeviceToDevice, context->stream);
     if (error != cudaSuccess) return cuda_result(error);
+    cudaEventRecord(context->timing_events[TIMING_AFTER_INPUT], context->stream);
     return execute_linear_plan_device(
         compiled, context->u8[0], dst, dst_stride, dst_channels);
 }
@@ -1340,7 +1493,9 @@ VF_CUDA_API int vf_dag_plan_create(
         delete created;
         return VF_CUDA_ALLOCATION_FAILED;
     }
+    auto allocation_started = std::chrono::steady_clock::now();
     result = reserve_dag_plan_buffers(created->context, *created);
+    created->context->pending_allocation_ms += elapsed_host_ms(allocation_started);
     if (result != VF_CUDA_OK) {
         delete created;
         return result;
@@ -1375,11 +1530,13 @@ VF_CUDA_API int vf_dag_plan_execute(
         }
     }
     PersistentContext* context = compiled->context;
+    reset_timing(context, true);
     const size_t source_row_bytes = static_cast<size_t>(width) * src_channels;
     cudaError_t error = cudaMemcpy2DAsync(
         context->u8[0], source_row_bytes, src, src_stride, source_row_bytes, height,
         cudaMemcpyHostToDevice, context->stream);
     if (error != cudaSuccess) return cuda_result(error);
+    cudaEventRecord(context->timing_events[TIMING_AFTER_INPUT], context->stream);
 
     return execute_dag_plan_device(
         compiled, context->u8[0], outputs, output_count);
@@ -1419,6 +1576,7 @@ VF_CUDA_API int vf_dag_plan_execute_roi(
             return VF_CUDA_INVALID_ARGUMENT;
         }
     }
+    reset_timing(context, false);
     size_t resident_pitch = static_cast<size_t>(context->resident_width) * context->resident_channels;
     size_t roi_row_bytes = static_cast<size_t>(compiled->width) * compiled->input_channels;
     const uint8_t* source = context->resident_u8 +
@@ -1427,6 +1585,7 @@ VF_CUDA_API int vf_dag_plan_execute_roi(
         context->u8[0], roi_row_bytes, source, resident_pitch, roi_row_bytes, compiled->height,
         cudaMemcpyDeviceToDevice, context->stream);
     if (error != cudaSuccess) return cuda_result(error);
+    cudaEventRecord(context->timing_events[TIMING_AFTER_INPUT], context->stream);
     return execute_dag_plan_device(
         compiled, context->u8[0], outputs, output_count);
 }

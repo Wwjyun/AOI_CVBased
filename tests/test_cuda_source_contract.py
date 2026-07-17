@@ -7,6 +7,7 @@ from gpu.preflight_cuda_build import (
     OPTIONAL_GENERIC_PLAN_EXPORTS,
     OPTIONAL_RESIDENT_ROI_EXPORTS,
     OPTIONAL_ROI_BATCH_EXPORTS,
+    OPTIONAL_TIMING_EXPORTS,
     REQUIRED_ABI_V1_EXPORTS,
     inspect_contract,
 )
@@ -22,6 +23,7 @@ class CudaSourceContractTests(unittest.TestCase):
         self.assertEqual(set(result["optional_generic_plan_exports"]), OPTIONAL_GENERIC_PLAN_EXPORTS)
         self.assertEqual(set(result["optional_resident_roi_exports"]), OPTIONAL_RESIDENT_ROI_EXPORTS)
         self.assertEqual(set(result["optional_roi_batch_exports"]), OPTIONAL_ROI_BATCH_EXPORTS)
+        self.assertEqual(set(result["optional_timing_exports"]), OPTIONAL_TIMING_EXPORTS)
         self.assertEqual(result["dll_sources"], ["gpu/visionflow_cuda.cu"])
         self.assertEqual(result["smoke_sources"], ["gpu/test_cuda_api.cu"])
 
@@ -106,6 +108,19 @@ class CudaSourceContractTests(unittest.TestCase):
         self.assertIn("created->data", create)
         self.assertEqual(create.count("cudaMemcpyAsync("), 1)
         self.assertNotIn("cudaMemcpyDeviceToHost", create)
+
+    def test_persistent_plan_records_cuda_event_phase_timings(self):
+        root = Path(__file__).resolve().parents[1]
+        source = (root / "gpu" / "visionflow_cuda.cu").read_text(encoding="utf-8")
+        header = (root / "gpu" / "include" / "visionflow_cuda.h").read_text(encoding="utf-8")
+
+        self.assertIn("typedef struct VfCudaTimingsV1", header)
+        self.assertIn("vf_context_last_timings", header)
+        self.assertIn("cudaEventRecord", source)
+        self.assertIn("cudaEventElapsedTime", source)
+        self.assertIn("TIMING_GAUSSIAN_START", source)
+        self.assertIn("TIMING_ADAPTIVE_START", source)
+        self.assertIn("TIMING_THRESHOLD_START", source)
 
 
 if __name__ == "__main__":
