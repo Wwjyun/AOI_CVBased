@@ -138,7 +138,8 @@
 - [x] 分別量測 `findContours`、幾何分析、Python tile/detector 迴圈、progress callback、aggregation 與 reporter。
 - [x] 降低 progress callback 頻率，避免每個小 primitive 更新 GUI。
 - [x] 移除不必要的 detector `image.copy()` 與完整尺寸 temporary masks；必要的 non-contiguous CUDA/QImage 邊界 copy 保留。
-- [ ] 相同 tile 被多個 detectors 使用時，共用 gray 與可重用的 CPU/GPU preprocessing 結果。
+- [x] 相同 tile 的 CPU detectors 共用一次 gray；GPU detectors 共用 resident source，避免各自重傳原圖。
+- [ ] RTX profiler 證明有收益後，再加入跨 detector 的 device-gray／完整 preprocessing result cache。
 - [ ] 對小圖、小 ROI、少 tiles 建立 CPU/GPU crossover benchmark；低於門檻自動選 CPU。
 - [x] Overlay、NG tiles、CSV/JSON 與純檢測計時分離；目前各 reporter 與 `detectors_total` 已獨立計時，是否背景化由實測決定。
 - [ ] Pattern matching 只有在 profiler 證明為主要熱點後才 GPU 化，模板常駐 GPU 並保留 CPU 等價路徑。
@@ -149,9 +150,9 @@
 - [x] Recipe 與 GUI 可設定 GPU，並顯示 DLL/device/fallback 狀態。
 - [x] GPU mode 統一為清楚的 `auto`、`cpu`、`cuda` 語意，並相容未含 mode 的舊 recipe。
 - [ ] production 預設 mode 仍需由 RTX 3090 實機驗收決定。
-- [ ] GUI worker 不得在 UI thread 等待 CUDA；取消、錯誤與進度更新必須保持可回應。
+- [x] GUI worker 不在 UI thread 等待 CUDA；monitor 取消、錯誤與進度以 stop callback／Qt signals 保持可回應。
 - [x] GUI 顯示實際 backend，不得因 recipe 勾選 GPU 就顯示 CUDA active。
-- [ ] PyInstaller 包含 `gpu/visionflow_cuda.dll`，但 CPU-only 電腦沒有 DLL/GPU 仍可正常啟動。
+- [x] PyInstaller 有 DLL 時條件式包含 `gpu/visionflow_cuda.dll`，無 DLL 時建立 CPU-compatible package 且 runtime 可 fallback。
 - [ ] 有 GPU、無 GPU、DLL 缺少、DLL 版本不符、fallback 開/關各完成一次打包實機測試。
 
 ## P7：CI、GitHub Actions 與發布
@@ -253,4 +254,5 @@
 - [x] 2026-07-17：新增 context-owned resident image 與 linear/DAG device ROI ABI；grid pipeline 每張原圖只 upload 一次，以可組合子 ROI 對應 tile 與 detector inset，ROI plan 僅 D2D staging 並下載必要輸出；已覆蓋 generation/bounds、零額外 H2D、pipeline 單次 upload、C++ smoke、validator 與 source contract，RTX 3090 編譯/實測仍保留待辦。
 - [x] 2026-07-17：新增 native ROI coordinate batch opaque API，以單一 3D gather kernel 產生連續 device buffers；Python OOP handle 支援 download/context cleanup，依 `cudaMemGetInfo`、ROI 工作集與 8/16/32/64 candidates 自動選批次，配置失敗逐級降批且無 stale handle；validator 已準備四種批次實測，RTX 3090 數據仍保留待辦。
 - [x] 2026-07-17：細分 detector preprocess/findContours/geometry、Python tile loop overhead、progress callback、aggregation、純檢測與各 reporter 計時；相同 percent 的 progress callback 去重，移除四個 detector 無必要 input copy，並以測試固定 profiler schema 與 callback 行為。
+- [x] 2026-07-17：新增 tile-scope CPU preprocess cache，401-1/401-2/900 共用一次 Gray；稽核並測試五種 GUI worker 均先 moveToThread 再執行、無 UI wait、monitor stop/error/progress 使用 callback/signals，以及 PyInstaller CUDA DLL 條件式收錄與 CPU-only build path。
 - [x] 2026-07-17：統一 GPU `auto/cpu/cuda` policy：auto 可安全 fallback、cpu 完全不要求/載入 CUDA、cuda 強制成功且禁止 fallback；recipe 驗證、pipeline、長生命週期 session、GUI preview/tiling worker 與設計器均共用同一語意，GUI/history 顯示實際 backend。

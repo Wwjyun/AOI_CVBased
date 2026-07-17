@@ -25,9 +25,7 @@ class Detector401_2(BaseDetector):
     }
 
     def preprocess(self, image):
-        if self.gpu_active:
-            return image
-        return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+        return image if self.gpu_active else self.shared_gray(image)
 
     def detect(self, image) -> list[dict]:
         roi, offset_x, offset_y = self._roi_image(image)

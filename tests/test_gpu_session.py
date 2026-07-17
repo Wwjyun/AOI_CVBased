@@ -65,7 +65,7 @@ class _RoiCapturingDetector:
     def __init__(self):
         self.device_rois = []
 
-    def run(self, _image, device_roi=None):
+    def run(self, _image, device_roi=None, preprocess_cache=None):
         self.device_rois.append(device_roi)
         return {
             "detector_id": self.detector_id,

@@ -11,6 +11,7 @@ from core.gpu_runtime import GpuRuntime, GpuRuntimeError
 from core.gpu_session import GpuExecutionSession
 from core.logging_system import LogMixin
 from core.performance import PipelineProfiler
+from core.preprocess_cache import TilePreprocessCache
 from core.recipe_manager import RecipeManager
 from core.recipe_builder import RecipeTemplatePathSync
 from core.reporter import Reporter
@@ -147,9 +148,14 @@ class AOIPipeline(LogMixin):
         with profiler.measure("detectors_total"):
             for tile_index, tile in enumerate(tiles, start=1):
                 detector_results = []
+                preprocess_cache = TilePreprocessCache(tile.image)
                 for detector in detectors:
                     with profiler.measure(f"detector:{detector.detector_id}"):
-                        detector_result = detector.run(tile.image, device_roi=tile.device_roi)
+                        detector_result = detector.run(
+                            tile.image,
+                            device_roi=tile.device_roi,
+                            preprocess_cache=preprocess_cache,
+                        )
                         for stage, duration in (
                             detector_result.get("execution", {})
                             .get("performance", {})

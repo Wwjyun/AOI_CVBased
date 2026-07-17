@@ -33,7 +33,7 @@ class Detector401_1(BaseDetector):
     }
 
     def preprocess(self, image):
-        return image
+        return image if self.gpu_active else self.shared_gray(image)
 
     def detect(self, image) -> list[dict]:
         roi, offset_x, offset_y = self._roi_image(image)

@@ -4,6 +4,8 @@ from copy import deepcopy
 from contextlib import contextmanager
 import time
 
+import cv2
+
 from core.preprocess_plan import (
     CpuPreprocessExecutor,
     CpuPreprocessDagExecutor,
@@ -38,6 +40,7 @@ class BaseDetector:
         self._preprocess_plan_cache = PreprocessPlanCache()
         self.last_preprocess_capability: dict = {}
         self._active_device_roi = None
+        self._active_preprocess_cache = None
         self._detection_stage_durations: dict[str, float] = {}
 
     @property
@@ -145,6 +148,12 @@ class BaseDetector:
         height, width = image.shape[:2]
         return self._active_device_roi.roi(offset_x, offset_y, width, height)
 
+    def shared_gray(self, image):
+        cache = self._active_preprocess_cache
+        if cache is not None and cache.source is image:
+            return cache.gray()
+        return cv2.cvtColor(image, cv2.COLOR_BGR2GRAY) if image.ndim == 3 else image
+
     @contextmanager
     def measure_detection_stage(self, name: str):
         started = time.perf_counter()
@@ -164,10 +173,12 @@ class BaseDetector:
     def preprocess_plan_cache_size(self) -> int:
         return self._preprocess_plan_cache.size
 
-    def run(self, image, device_roi=None) -> dict:
+    def run(self, image, device_roi=None, preprocess_cache=None) -> dict:
         self._detection_stage_durations = {}
         previous_device_roi = self._active_device_roi
+        previous_preprocess_cache = self._active_preprocess_cache
         self._active_device_roi = device_roi
+        self._active_preprocess_cache = preprocess_cache
         try:
             try:
                 processed = self.preprocess(image)
@@ -181,6 +192,7 @@ class BaseDetector:
                 defects = self.detect(processed)
         finally:
             self._active_device_roi = previous_device_roi
+            self._active_preprocess_cache = previous_preprocess_cache
         max_confidence = max((defect.get("confidence", 0.0) for defect in defects), default=0.0)
         return {
             "detector_id": self.detector_id,

@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 
 from core.preprocess_plan import CpuPreprocessDagExecutor
+from core.preprocess_cache import TilePreprocessCache
 from detectors.detector_401 import Detector401
 from detectors.detector_401_1 import Detector401_1
 from detectors.detector_401_2 import Detector401_2
@@ -102,6 +103,22 @@ class DetectorBatchContractTests(unittest.TestCase):
         detector = _MeanDetector()
         with self.assertRaisesRegex(ValueError, "exceeds image bounds"):
             detector.run_batch([np.zeros((5, 5), dtype=np.uint8)], rois=[(4, 4, 2, 2)])
+
+
+class SharedTilePreprocessCacheTests(unittest.TestCase):
+    def test_cpu_detectors_share_one_gray_conversion_for_same_tile(self):
+        image = np.zeros((32, 40, 3), dtype=np.uint8)
+        cache = TilePreprocessCache(image)
+        detectors = (Detector401_1(), Detector401_2(), Detector900())
+
+        outputs = []
+        for detector in detectors:
+            detector._active_preprocess_cache = cache
+            outputs.append(detector.preprocess(image))
+
+        self.assertIs(outputs[0], outputs[1])
+        self.assertIs(outputs[1], outputs[2])
+        self.assertEqual(outputs[0].shape, (32, 40))
 
 
 class Detector4011PlanMigrationTests(unittest.TestCase):
