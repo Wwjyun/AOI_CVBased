@@ -35,7 +35,7 @@ The normal development machine may not have `nvcc`, CMake, or an NVIDIA GPU. Nev
 ## Module ownership
 
 - Top-level entry points: keep CLI orchestration in `main.py`, packaged startup/smoke in `gui_launcher.py`, packaging in `build_exe.ps1` and `VisionFlow AOI.spec`, and standalone exports in `export_*.py`.
-- `core/`: pipeline, recipe loading/building, tiling, aggregation, reporting, profiling, batch/monitor processing, result compaction, GPU sessions/bridge, preprocessing plans and executors.
+- `core/`: pipeline, recipe loading/building, tiling, aggregation, reporting, profiling, batch/monitor processing, result schemas/compaction, GPU sessions/bridge, preprocessing plans and executors.
 - `detectors/`: detector-specific feature extraction, geometry, filtering, and result metadata.
 - `gpu/`: CUDA C ABI, kernels, persistent contexts, build scripts, native smoke tests, and CPU/GPU validation.
 - `gui/`: PySide6 screens, widgets, workers, status, and preview behavior.
@@ -62,6 +62,9 @@ Put behavior in the narrowest appropriate module. Do not duplicate pipeline or f
 - Prefer one upload, multiple device operators, and one necessary download. Reuse context buffers across operators, tiles, and images where lifetime permits.
 - Preserve context-owned resident image/device ROI lifetime and generation checks. Batch and monitor share one `GpuExecutionSession`; do not create one runtime per image or per worker.
 - Keep small contour/geometry work, YAML, aggregation, GUI control, CSV/JSON, PNG encoding, and disk I/O on CPU unless profiling proves otherwise.
+- Tile-level CPU parallelism is opt-in. Use thread-local detector instances, preserve input ordering, and keep GPU detector or resident-image execution on the single serialized GPU path.
+- Recipe caching must invalidate on file metadata changes and return independent deep copies; never expose a mutable cached recipe.
+- Debug intermediate images are opt-in runtime payloads. Strip them from JSON and public tile results, and never enable them in production defaults.
 - GPU default enablement requires RTX 3090 equivalence, stability, and end-to-end performance evidence.
 
 ## Compatibility and OOP rules

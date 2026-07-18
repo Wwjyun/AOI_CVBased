@@ -177,6 +177,21 @@
 - [x] hosted CI 監測 RTX workflow 最近成功時間（超過 48 小時失敗）、benchmark 與 baseline 比較並 gate P95 退化，另有 weekly PyInstaller build + packaged smoke，Python 版本與部署版本一致。
 - [x] Hypothesis 隨機產生影像與合法 PreprocessPlan，驗證 CPU executor 與直接 OpenCV reference；固定生成順序可供 RTX CPU/GPU fuzzing，recipe/designer schema 與 GPU ABI/metrics 已拆成可 headless 測試模組。
 
+## P9：CPU 吞吐、輸出與可維護性優化
+
+本區的效能功能不得改變 recipe 語意、PASS/NG、座標、缺陷 metadata 或預設輸出。無實機收益證據的平行策略維持 opt-in。
+
+- [x] 單張純 CPU 檢測支援 opt-in tile 級平行：`performance.tile_workers`／`AOI_TILE_WORKERS` 啟用，thread-local detector 避免共享 instance state；GPU detector 或 resident image 強制保持序列。
+- [x] Recipe 依 path、mtime、size 建立 thread-safe process cache，cache hit 回傳 deepcopy，檔案異動後重新解析與驗證。
+- [x] Batch worker 上限調整為 `min(8, cpu_count, image_count)`，批次期間分配 OpenCV thread budget 並於結束時還原；`AOI_BATCH_WORKERS`／`max_workers` 可覆寫。
+- [x] `gc.collect(0)` 改為 `AOI_BATCH_GC_INTERVAL` 可設定週期，預設每 8 張，`0` 停用。
+- [x] Reporter 支援 bounded NG tile 平行寫檔、`png_compression`、overlay PNG/JPG、JPEG quality 與 preview max dimension；machine-readable 座標維持全解析度。
+- [x] `output.save_debug_images` 可輸出 detector preprocess 中間影像；runtime payload 在 JSON 與公開 tile result 前移除，預設關閉，CPU fallback 也保留擷取。
+- [x] 新增 `core/result_types.py` TypedDict 結果契約與 runtime contract test。
+- [x] 新增 Windows Unicode 路徑安全的 P9 regression tests，固定 serial/parallel 結果等價、cache invalidation、batch/GC policy、輸出參數、overlay decode/downscale 與 debug payload 隔離。
+- [ ] 使用固定 production 資料集量測 worker 上限、GC interval、PNG compression、NG write workers 的 median/P95、peak RSS 與檔案大小，再決定量產建議值。
+- [ ] 在 RTX 3090 驗證 `AOI_TILE_WORKERS>1` 不會使 GPU detector/resident image 進入平行路徑，且 GPU queue/VRAM 無競爭或累積。
+
 ## RTX 3090 編譯與實機驗收
 
 ### 環境與編譯
@@ -285,3 +300,4 @@
 - [x] 2026-07-17：依目前 codebase 稽核並更新 `README.md` 與 `AGENT.md`，同步 Windows／RTX CI、shared preprocess plan、GPU session、CUDA preflight、打包 fallback smoke、專案模組地圖與實際驗證命令；未變更 runtime 行為或 RTX 實機驗收狀態。
 - [x] 2026-07-17：修正 Windows CLI smoke 的 exit code 判斷，明確接受 PASS=0 與 NG=2，並讓未捕捉例外等其他 exit code 正確使 CI 失敗。
 - [x] 2026-07-17：完成 P8 產線安全與持續驗證：strict detector schema/GUI 共用、recipe/build SHA-256/commit provenance、NG dataset sidecar、五配方與每 detector 至少五個合成 golden cases、Python 3.13 Windows lock、RTX 48h heartbeat/P95 15% gate/weekly package smoke、100-case Hypothesis preprocess fuzz，並拆分 GPU ABI 與 metrics；本機 CPU-compatible PyInstaller build 及 packaged smoke exit 0。
+- [x] 2026-07-18：參考 `VisionFlow_GPU_CPU-main.zip` 完成 P9 修正版移植：recipe cache、opt-in CPU tile 平行、batch/OpenCV thread budget 與週期 GC、NG tile 平行寫檔、overlay 格式／品質／縮圖、debug preprocess images、TypedDict 結果契約及 Unicode-safe regression tests；修正參考快照在中文 Windows 路徑以 `cv2.imread` 造成的 3 個假失敗，並補 invalid output config 與 process-wide OpenCV lock。實跑 119 tests、compileall、CUDA preflight、`git diff --check`、4-worker CLI synthetic smoke（9 tiles，PASS）及 GUI offscreen smoke皆通過；RTX 3090 runtime 與 production tuning 仍保留未完成。

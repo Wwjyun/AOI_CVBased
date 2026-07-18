@@ -43,6 +43,21 @@ class BaseDetector:
         self._active_device_roi = None
         self._active_preprocess_cache = None
         self._detection_stage_durations: dict[str, float] = {}
+        self.export_debug_images = False
+        self.debug_images: dict[str, object] = {}
+
+    def _record_debug_image(self, name: str, image) -> None:
+        if not self.export_debug_images or image is None:
+            return
+        copier = getattr(image, "copy", None)
+        self.debug_images[str(name)] = copier() if callable(copier) else image
+
+    def _record_preprocess_result(self, plan, result) -> None:
+        if isinstance(result, dict):
+            for name, image in result.items():
+                self._record_debug_image(name, image)
+        else:
+            self._record_debug_image(getattr(plan, "name", "preprocess"), result)
 
     @property
     def gpu_active(self) -> bool:
@@ -88,11 +103,13 @@ class BaseDetector:
                     report["reason"],
                     self._cpu_preprocess_executor,
                 )
-            return self._cuda_preprocess_executor.execute(
+            result = self._cuda_preprocess_executor.execute(
                 image,
                 plan,
                 device_roi=self._device_roi_for(image, device_roi_offset),
             )
+            self._record_preprocess_result(plan, result)
+            return result
         report = self._cpu_preprocess_executor.capability_report(plan).to_dict()
         if self.use_gpu and self.gpu_fallback_reason:
             report.update(
@@ -102,7 +119,9 @@ class BaseDetector:
                 reason=self.gpu_fallback_reason,
             )
         self.last_preprocess_capability = report
-        return self._cpu_preprocess_executor.execute(image, plan)
+        result = self._cpu_preprocess_executor.execute(image, plan)
+        self._record_preprocess_result(plan, result)
+        return result
 
     def cached_preprocess_plan(self, image, signature, factory) -> PreprocessPlan | PreprocessDagPlan:
         return self._preprocess_plan_cache.get_or_create(image, signature, factory)
@@ -120,11 +139,13 @@ class BaseDetector:
                 return self._execute_cpu_fallback(
                     image, plan, report["reason"], self._cpu_preprocess_dag_executor
                 )
-            return self._cuda_preprocess_dag_executor.execute(
+            result = self._cuda_preprocess_dag_executor.execute(
                 image,
                 plan,
                 device_roi=self._device_roi_for(image, device_roi_offset),
             )
+            self._record_preprocess_result(plan, result)
+            return result
         report = self._cpu_preprocess_dag_executor.capability_report(plan).to_dict()
         if self.use_gpu and self.gpu_fallback_reason:
             report.update(
@@ -134,13 +155,17 @@ class BaseDetector:
                 reason=self.gpu_fallback_reason,
             )
         self.last_preprocess_capability = report
-        return self._cpu_preprocess_dag_executor.execute(image, plan)
+        result = self._cpu_preprocess_dag_executor.execute(image, plan)
+        self._record_preprocess_result(plan, result)
+        return result
 
     def _execute_cpu_fallback(self, image, plan, reason: str, executor):
         if not self._gpu_fallback_enabled:
             raise UnsupportedPreprocessPlan(reason)
         self.gpu_fallback_reason = reason
-        return executor.execute(image, plan)
+        result = executor.execute(image, plan)
+        self._record_preprocess_result(plan, result)
+        return result
 
     def _device_roi_for(self, image, offset: tuple[int, int]):
         if self._active_device_roi is None:
@@ -176,6 +201,8 @@ class BaseDetector:
 
     def run(self, image, device_roi=None, preprocess_cache=None) -> dict:
         self._detection_stage_durations = {}
+        if self.export_debug_images:
+            self.debug_images = {}
         previous_device_roi = self._active_device_roi
         previous_preprocess_cache = self._active_preprocess_cache
         self._active_device_roi = device_roi

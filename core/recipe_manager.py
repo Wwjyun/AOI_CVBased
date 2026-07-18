@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -11,6 +12,45 @@ class RecipeError(RuntimeError):
     pass
 
 
+class _RecipeCache:
+    """Thread-safe validated recipe cache keyed by path and file metadata."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._entries: dict[str, tuple[int, int, dict[str, Any]]] = {}
+
+    def get(self, path: Path) -> dict[str, Any] | None:
+        try:
+            stat = path.stat()
+            key = str(path.resolve())
+        except OSError:
+            return None
+        with self._lock:
+            entry = self._entries.get(key)
+            if entry is None:
+                return None
+            mtime_ns, size, recipe = entry
+            if (mtime_ns, size) != (stat.st_mtime_ns, stat.st_size):
+                return None
+            return deepcopy(recipe)
+
+    def store(self, path: Path, recipe: dict[str, Any]) -> None:
+        try:
+            stat = path.stat()
+            key = str(path.resolve())
+        except OSError:
+            return
+        with self._lock:
+            self._entries[key] = (stat.st_mtime_ns, stat.st_size, deepcopy(recipe))
+
+    def clear(self) -> None:
+        with self._lock:
+            self._entries.clear()
+
+
+_RECIPE_CACHE = _RecipeCache()
+
+
 class RecipeManager:
     REQUIRED_TOP_LEVEL_KEYS = {"recipe_name", "product_id", "machine_id", "version", "tile", "decision", "detectors", "output"}
 
@@ -19,11 +59,16 @@ class RecipeManager:
         if not recipe_path.exists():
             raise RecipeError(f"Recipe does not exist: {recipe_path}")
 
+        cached = _RECIPE_CACHE.get(recipe_path)
+        if cached is not None:
+            return cached
+
         with recipe_path.open("r", encoding="utf-8") as handle:
             recipe = yaml.safe_load(handle) or {}
 
         self.validate(recipe)
-        return recipe
+        _RECIPE_CACHE.store(recipe_path, recipe)
+        return deepcopy(recipe)
 
     def validate(self, recipe: dict[str, Any]) -> None:
         missing = self.REQUIRED_TOP_LEVEL_KEYS - set(recipe)
