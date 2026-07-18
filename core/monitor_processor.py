@@ -102,7 +102,7 @@ class FolderMonitorProcessor(LogMixin):
             monitor_output_dir,
             len(self._seen),
         )
-        self._progress(0, f"Monitoring {self.input_dir}")
+        self._progress(0, f"正在監控 {self.input_dir}")
 
         with GpuExecutionSession.from_recipe_path(self.recipe_path, workload="throughput") as gpu_session:
             while not self._should_stop():
@@ -113,7 +113,7 @@ class FolderMonitorProcessor(LogMixin):
                     self._processed_count += 1
                     if self.item_callback is not None:
                         self.item_callback(result.to_dict())
-                    self._progress(100, f"Processed {image_path.name}")
+                    self._progress(100, f"已處理 {image_path.name}")
                 self._sleep_interval()
 
         finished_at = datetime.datetime.now()
@@ -137,7 +137,7 @@ class FolderMonitorProcessor(LogMixin):
             self._file_states.pop(image_path, None)
             self._pending.append(image_path)
             self.logger.info("Monitor queued image: %s", image_path)
-            self._progress(5, f"Queued {image_path.name}")
+            self._progress(5, f"已排入 {image_path.name}")
 
     def _process_image(
         self,

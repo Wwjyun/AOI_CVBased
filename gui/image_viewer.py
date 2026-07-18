@@ -412,6 +412,30 @@ class ImageViewer(QWidget):
         for item_id, item in self._defect_items.items():
             item.set_selected(item_id == defect_id)
 
+    def focus_defect(self, defect_id) -> bool:
+        item = self._defect_items.get(defect_id)
+        if item is None:
+            return False
+        self.set_selected_defect(defect_id)
+        rect = item.sceneBoundingRect().adjusted(-24, -24, 24, 24)
+        self.view.fitInView(rect, Qt.AspectRatioMode.KeepAspectRatio)
+        self._zoom = self.view.transform().m11()
+        self._update_zoom_label()
+        self.view.centerOn(item)
+        return True
+
+    def zoom_scale(self) -> float:
+        return float(self._zoom)
+
+    def set_zoom_scale(self, zoom: float) -> None:
+        if self.pixmap_item.pixmap().isNull():
+            return
+        zoom = max(ZOOM_MIN, min(ZOOM_MAX, float(zoom)))
+        self.view.resetTransform()
+        self.view.scale(zoom, zoom)
+        self._zoom = zoom
+        self._update_zoom_label()
+
     def _on_defect_clicked(self, defect_id) -> None:
         new_id = None if self._selected_defect_id == defect_id else defect_id
         self.set_selected_defect(new_id)

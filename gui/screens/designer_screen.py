@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 from core.detector_manager import DetectorManager
 from core.gpu_runtime import GpuRuntime
 from core.recipe_builder import RecipeTemplatePathSync
+from core.recipe_manager import RecipeError, RecipeManager
 from gui import icons
 from gui.detector_labels import detector_zh_name
 from gui.theme import COLORS, R_MD
@@ -192,6 +193,8 @@ class TilePreviewLabel(QLabel):
 class DesignerScreen(QWidget):
     preview_requested = Signal(dict)
     recipe_saved = Signal(Path)
+    dirty_changed = Signal(bool)
+    validation_changed = Signal(bool, str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -204,6 +207,8 @@ class DesignerScreen(QWidget):
         self._row_widgets: dict[str, dict] = {}
         self._active_detector = "401-1"
         self.mode = "eng"
+        self._dirty = False
+        self._loading_recipe = False
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -239,6 +244,8 @@ class DesignerScreen(QWidget):
 
         # ---------------- action bar ----------------
         outer.addWidget(self._build_action_bar())
+        self._bind_dirty_tracking()
+        self._set_editor_state("saved", "已儲存")
 
     # ------------------------------------------------------------------
     # recipe info
@@ -475,22 +482,73 @@ class DesignerScreen(QWidget):
     def set_recipe(self, recipe: dict | None) -> None:
         if recipe is None:
             return
+        self._loading_recipe = True
+        try:
+            self.recipe_name_edit.setText(str(recipe.get("recipe_name", "")))
+            self.product_id_edit.setText(str(recipe.get("product_id", "")))
+            self.machine_id_edit.setText(str(recipe.get("machine_id", "")))
+            self.version_edit.setText(str(recipe.get("version", "")))
 
-        self.recipe_name_edit.setText(str(recipe.get("recipe_name", "")))
-        self.product_id_edit.setText(str(recipe.get("product_id", "")))
-        self.machine_id_edit.setText(str(recipe.get("machine_id", "")))
-        self.version_edit.setText(str(recipe.get("version", "")))
+            self._set_tile_config(recipe.get("tile", {}), recipe.get("assets", {}))
+            gpu = recipe.get("gpu", {}) or {}
+            mode_index = self.gpu_mode_combo.findData(str(gpu.get("mode", "auto")).lower())
+            self.gpu_mode_combo.setCurrentIndex(max(0, mode_index))
+            self.gpu_tiling_toggle.setChecked(bool(gpu.get("tiling", False)))
+            self.gpu_display_toggle.setChecked(bool(gpu.get("display", False)))
+            self.gpu_fallback_toggle.setChecked(bool(gpu.get("fallback_to_cpu", True)))
+            self.gpu_dll_path_edit.setText(str(gpu.get("dll_path", GpuRuntime.DEFAULT_DLL)))
+            self._refresh_gpu_status()
+            self._set_detector_config(recipe.get("detectors", {}))
+        finally:
+            self._loading_recipe = False
+        self._set_dirty(False)
+        self._set_editor_state("saved", "已儲存")
 
-        self._set_tile_config(recipe.get("tile", {}), recipe.get("assets", {}))
-        gpu = recipe.get("gpu", {}) or {}
-        mode_index = self.gpu_mode_combo.findData(str(gpu.get("mode", "auto")).lower())
-        self.gpu_mode_combo.setCurrentIndex(max(0, mode_index))
-        self.gpu_tiling_toggle.setChecked(bool(gpu.get("tiling", False)))
-        self.gpu_display_toggle.setChecked(bool(gpu.get("display", False)))
-        self.gpu_fallback_toggle.setChecked(bool(gpu.get("fallback_to_cpu", True)))
-        self.gpu_dll_path_edit.setText(str(gpu.get("dll_path", GpuRuntime.DEFAULT_DLL)))
-        self._refresh_gpu_status()
-        self._set_detector_config(recipe.get("detectors", {}))
+    def is_dirty(self) -> bool:
+        return self._dirty
+
+    def _bind_dirty_tracking(self) -> None:
+        for widget in self.findChildren(QWidget):
+            if widget.property("dirtyTracked"):
+                continue
+            connected = True
+            if isinstance(widget, QLineEdit):
+                widget.textChanged.connect(self._mark_dirty)
+            elif isinstance(widget, QComboBox):
+                widget.currentIndexChanged.connect(self._mark_dirty)
+            elif isinstance(widget, Toggle):
+                widget.toggled.connect(self._mark_dirty)
+            elif isinstance(widget, NumStepper):
+                widget.valueChanged.connect(self._mark_dirty)
+            elif isinstance(widget, Segmented):
+                widget.currentChanged.connect(self._mark_dirty)
+            else:
+                connected = False
+            if connected:
+                widget.setProperty("dirtyTracked", True)
+
+    def _mark_dirty(self, *_args) -> None:
+        if self._loading_recipe:
+            return
+        self._set_dirty(True)
+        self._set_editor_state("dirty", "未儲存")
+
+    def _set_dirty(self, dirty: bool) -> None:
+        dirty = bool(dirty)
+        if dirty == self._dirty:
+            return
+        self._dirty = dirty
+        self.dirty_changed.emit(dirty)
+
+    def _set_editor_state(self, state: str, message: str) -> None:
+        if not hasattr(self, "editor_state_badge"):
+            return
+        kind = {"saved": "pass", "dirty": "neutral", "invalid": "ng"}.get(state, "neutral")
+        self.editor_state_badge.setText(message)
+        self.editor_state_badge.set_kind(kind)
+        self.editor_state_badge.setToolTip(message)
+        valid = state != "invalid"
+        self.validation_changed.emit(valid, message)
 
     def set_mode(self, mode: str) -> None:
         if mode == self.mode:
@@ -791,6 +849,9 @@ class DesignerScreen(QWidget):
         self.enabled_count_label = QLabel("")
         self.enabled_count_label.setStyleSheet(f"color: {COLORS['text_3']}; font-size: 12px;")
         row.addWidget(self.enabled_count_label)
+        self.editor_state_badge = Badge("已儲存", kind="pass")
+        self.editor_state_badge.setAccessibleName("Recipe 狀態：已儲存")
+        row.addWidget(self.editor_state_badge)
         row.addStretch(1)
 
         self.preview_button = QPushButton("預覽切圖")
@@ -934,6 +995,17 @@ class DesignerScreen(QWidget):
         if not any(self._enabled.values()):
             self.preview_status.setText("請至少啟用一個 detector")
             self.preview_status.setStyleSheet(f"color: {COLORS['ng']}; font-size: 9pt;")
+            self._set_editor_state("invalid", "驗證失敗：請至少啟用一個 detector")
+            return
+
+        try:
+            recipe = self.build_recipe()
+            RecipeManager().validate(recipe)
+        except (RecipeError, TypeError, ValueError) as exc:
+            message = f"Recipe 驗證失敗：{exc}"
+            self.preview_status.setText(message)
+            self.preview_status.setStyleSheet(f"color: {COLORS['ng']}; font-size: 9pt;")
+            self._set_editor_state("invalid", message)
             return
 
         path, _ = QFileDialog.getSaveFileName(
@@ -945,8 +1017,17 @@ class DesignerScreen(QWidget):
         if not path:
             return
         recipe_path = Path(path)
-        with recipe_path.open("w", encoding="utf-8") as handle:
-            yaml.safe_dump(self.build_recipe(), handle, allow_unicode=True, sort_keys=False)
+        try:
+            with recipe_path.open("w", encoding="utf-8") as handle:
+                yaml.safe_dump(recipe, handle, allow_unicode=True, sort_keys=False)
+        except OSError as exc:
+            message = f"Recipe 儲存失敗：{exc}"
+            self.preview_status.setText(message)
+            self.preview_status.setStyleSheet(f"color: {COLORS['ng']}; font-size: 9pt;")
+            self._set_editor_state("invalid", message)
+            return
+        self._set_dirty(False)
+        self._set_editor_state("saved", "已儲存")
         self.recipe_saved.emit(recipe_path)
         self.preview_status.setText(f"Recipe 已儲存：{recipe_path}")
         self.preview_status.setStyleSheet(f"color: {COLORS['accent_text']}; font-size: 9pt;")

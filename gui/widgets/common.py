@@ -6,6 +6,7 @@ from PySide6.QtWidgets import (
     QAbstractButton,
     QButtonGroup,
     QComboBox,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -58,6 +59,7 @@ class Badge(QLabel):
         "ng": (COLORS["ng_soft"], COLORS["ng"]),
         "neutral": (COLORS["surface_3"], COLORS["text_2"]),
         "accent": (COLORS["accent_soft"], COLORS["accent_text"]),
+        "warning": (COLORS["warn_soft"], COLORS["warn"]),
     }
 
     def __init__(self, text: str, kind: str = "neutral", parent=None):
@@ -72,11 +74,49 @@ class Badge(QLabel):
         self.style().polish(self)
 
 
+class InlineNotice(QFrame):
+    """Non-modal feedback strip using the existing AOI color tokens."""
+
+    KIND_COLORS = {
+        "info": (COLORS["accent_softer"], COLORS["accent_text"], COLORS["accent_soft"]),
+        "warning": (COLORS["warn_soft"], COLORS["warn"], COLORS["warn_soft"]),
+        "error": (COLORS["ng_soft"], COLORS["ng"], COLORS["ng_soft"]),
+        "success": (COLORS["pass_soft"], COLORS["pass"], COLORS["pass_soft"]),
+    }
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setVisible(False)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(14, 7, 14, 7)
+        layout.setSpacing(8)
+        self.label = QLabel()
+        self.label.setWordWrap(True)
+        layout.addWidget(self.label, 1)
+        self.close_button = QPushButton("關閉")
+        self.close_button.setProperty("variant", "ghost")
+        self.close_button.setProperty("size", "sm")
+        self.close_button.clicked.connect(self.hide)
+        layout.addWidget(self.close_button)
+
+    def show_message(self, text: str, kind: str = "info") -> None:
+        background, foreground, border = self.KIND_COLORS.get(kind, self.KIND_COLORS["info"])
+        self.setStyleSheet(
+            f"QFrame {{ background: {background}; border: 1px solid {border}; border-radius: 6px; }}"
+            f"QLabel {{ color: {foreground}; border: none; background: transparent; font-weight: 500; }}"
+        )
+        self.label.setText(str(text))
+        self.setAccessibleName(f"{kind}: {text}")
+        self.setVisible(True)
+
+
 def result_badge(result: str | None) -> Badge:
     if result == "PASS":
         return Badge("PASS", kind="pass")
     if result == "NG":
         return Badge("NG", kind="ng")
+    if result == "ERROR":
+        return Badge("ERROR", kind="warning")
     return Badge("—", kind="neutral")
 
 

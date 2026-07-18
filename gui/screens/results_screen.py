@@ -3,8 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import QRectF, QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QIcon, QImage, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QFont, QIcon, QImage, QKeySequence, QPainter, QPen, QPixmap, QShortcut
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QFrame,
     QGridLayout,
     QHBoxLayout,
@@ -30,7 +31,7 @@ from gui.widgets.panel import Panel
 
 OUTPUT_LABELS = {
     "overlay": "Overlay",
-    "ng_tiles_dir": "NG Tiles",
+    "ng_tiles_dir": "NG 切圖",
     "csv": "CSV",
     "matrix_csv": "Matrix CSV",
     "json": "JSON",
@@ -213,6 +214,15 @@ class ResultsScreen(QWidget):
         self._stack.addWidget(self._content)
         self._stack.setCurrentWidget(self._empty_state)
 
+        self._next_shortcut = QShortcut(QKeySequence("J"), self)
+        self._previous_shortcut = QShortcut(QKeySequence("K"), self)
+        self._focus_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Return), self)
+        for shortcut in (self._next_shortcut, self._previous_shortcut, self._focus_shortcut):
+            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._next_shortcut.activated.connect(lambda: self.select_relative(1))
+        self._previous_shortcut.activated.connect(lambda: self.select_relative(-1))
+        self._focus_shortcut.activated.connect(self.focus_selected)
+
     # ------------------------------------------------------------------
     def _build_empty_state(self) -> QWidget:
         wrapper = QWidget()
@@ -270,7 +280,7 @@ class ResultsScreen(QWidget):
         layout.addWidget(self.final_card)
 
         self.tiles_value, tiles_card = _stat_card("Tiles")
-        self.ng_tiles_value, ng_tiles_card = _stat_card("NG Tiles", COLORS["ng"])
+        self.ng_tiles_value, ng_tiles_card = _stat_card("NG 切圖", COLORS["ng"])
         self.defects_value, defects_card = _stat_card("缺陷數", COLORS["ng"])
         self.duration_value, duration_card = _stat_card("耗時")
 
@@ -283,7 +293,24 @@ class ResultsScreen(QWidget):
         self.filter_segmented = Segmented([("all", "全部")], value="all")
         self.filter_segmented.currentChanged.connect(self._on_filter_changed)
 
-        self.defects_panel = Panel(title="缺陷清單（0）", actions=self.filter_segmented, flush=True)
+        self._actions = QWidget()
+        self._actions_layout = QHBoxLayout(self._actions)
+        self._actions_layout.setContentsMargins(0, 0, 0, 0)
+        self._actions_layout.setSpacing(6)
+        self.previous_button = QPushButton("上一個 NG")
+        self.next_button = QPushButton("下一個 NG")
+        for button in (self.previous_button, self.next_button):
+            button.setProperty("variant", "ghost")
+            button.setProperty("size", "sm")
+        self.previous_button.setToolTip("上一個 NG（K）")
+        self.next_button.setToolTip("下一個 NG（J）")
+        self.previous_button.clicked.connect(lambda: self.select_relative(-1))
+        self.next_button.clicked.connect(lambda: self.select_relative(1))
+        self._actions_layout.addWidget(self.previous_button)
+        self._actions_layout.addWidget(self.next_button)
+        self._actions_layout.addWidget(self.filter_segmented)
+
+        self.defects_panel = Panel(title="缺陷清單（0）", actions=self._actions, flush=True)
 
         self.defects_table = QTableWidget(0, 8)
         self.defects_table.setHorizontalHeaderLabels(
@@ -305,7 +332,7 @@ class ResultsScreen(QWidget):
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(12)
 
-        ng_panel = Panel(title="NG Tiles")
+        ng_panel = Panel(title="NG 切圖")
         self._ng_scroll = QScrollArea()
         self._ng_scroll.setWidgetResizable(True)
         self._ng_scroll.setFrameShape(QFrame.Shape.NoFrame)
@@ -354,14 +381,17 @@ class ResultsScreen(QWidget):
 
         detector_ids = sorted({defect["detector_id"] for defect in self._defects})
         options = [("all", "全部")] + [(detector_id, detector_id) for detector_id in detector_ids]
+        old_filter = self.filter_segmented
         self.filter_segmented = Segmented(options, value=self._filter if self._filter in dict(options) else "all")
         self.filter_segmented.currentChanged.connect(self._on_filter_changed)
         self._filter = self.filter_segmented.value() or "all"
-        self.defects_panel.set_actions(self.filter_segmented)
+        self._actions_layout.replaceWidget(old_filter, self.filter_segmented)
+        old_filter.deleteLater()
 
         self._populate_table()
         self._populate_thumbnails()
         self._populate_outputs()
+        self._update_navigation_state()
 
     def set_selected(self, defect_id: object | None) -> None:
         self._selected_id = defect_id
@@ -374,11 +404,44 @@ class ResultsScreen(QWidget):
                     item.setBackground(color)
         for thumb_id, thumb in self._thumb_widgets.items():
             thumb.set_selected(thumb_id == defect_id)
+        if selected_row >= 0:
+            item = self.defects_table.item(selected_row, 0)
+            if item is not None:
+                self.defects_table.scrollToItem(item, QAbstractItemView.ScrollHint.PositionAtCenter)
+        thumb = self._thumb_widgets.get(defect_id)
+        if thumb is not None:
+            self._ng_scroll.ensureWidgetVisible(thumb, 8, 8)
+        self._update_navigation_state()
+
+    def select_relative(self, delta: int) -> object | None:
+        defects = self._filtered_defects()
+        if not defects:
+            return None
+        ids = [defect["id"] for defect in defects]
+        try:
+            current = ids.index(self._selected_id)
+        except ValueError:
+            current = -1 if delta >= 0 else 0
+        selected_id = ids[(current + delta) % len(ids)]
+        self.set_selected(selected_id)
+        self.defect_selected.emit(selected_id)
+        return selected_id
+
+    def focus_selected(self) -> None:
+        if self._selected_id is not None:
+            self.view_requested.emit(self._selected_id)
+
+    def _update_navigation_state(self) -> None:
+        enabled = bool(self._filtered_defects())
+        if hasattr(self, "previous_button"):
+            self.previous_button.setEnabled(enabled)
+            self.next_button.setEnabled(enabled)
 
     # ------------------------------------------------------------------
     def _on_filter_changed(self, value: str) -> None:
         self._filter = value
         self._populate_table()
+        self._update_navigation_state()
 
     def _filtered_defects(self) -> list[dict]:
         if self._filter == "all":

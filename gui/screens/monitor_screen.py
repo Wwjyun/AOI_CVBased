@@ -8,8 +8,7 @@ from PySide6.QtWidgets import (
     QMenu,
     QPushButton,
     QSplitter,
-    QTableWidget,
-    QTableWidgetItem,
+    QTableView,
     QVBoxLayout,
     QWidget,
 )
@@ -17,9 +16,10 @@ from PySide6.QtWidgets import (
 from core.batch_dashboard import BatchDashboardBuilder
 from gui import icons
 from gui.theme import COLORS
-from gui.widgets.common import EmptyState, ProgressBar, result_badge
+from gui.widgets.common import EmptyState, ProgressBar, Segmented
 from gui.widgets.panel import Panel
 from gui.widgets.scatter_chart import ImageScatterChart
+from gui.table_models import RowTableModel, StatusFilterProxyModel, TableColumn
 
 
 MONITOR_HISTORY_LIMIT = 200
@@ -43,16 +43,16 @@ class MonitorControlPanel(Panel):
     stop_requested = Signal()
 
     def __init__(self, parent=None):
-        super().__init__(title="Monitor Folder", parent=parent)
+        super().__init__(title="監控資料夾", parent=parent)
         self._folder: str | None = None
 
-        self.folder_label = QLabel("No folder selected")
+        self.folder_label = QLabel("尚未選擇資料夾")
         self.folder_label.setProperty("mono", "true")
         self.folder_label.setWordWrap(True)
         self.folder_label.setStyleSheet(f"color: {COLORS['text_3']}; font-size: 12px;")
         self.add_widget(self.folder_label)
 
-        move_label = QLabel("Processed images stay in monitor folder")
+        move_label = QLabel("處理後影像保留在監控資料夾")
         move_label.setProperty("mono", "true")
         move_label.setWordWrap(True)
         move_label.setStyleSheet(f"color: {COLORS['text_3']}; font-size: 12px;")
@@ -64,21 +64,21 @@ class MonitorControlPanel(Panel):
         button_layout.setContentsMargins(0, 0, 0, 0)
         button_layout.setSpacing(8)
 
-        self.choose_button = QPushButton("Folder")
+        self.choose_button = QPushButton("選擇資料夾")
         self.choose_button.setProperty("variant", "secondary")
         self.choose_button.setProperty("size", "sm")
         self.choose_button.setIcon(icons.icon("folder", size=14, color=COLORS["text_2"]))
         self.choose_button.clicked.connect(self.choose_folder_requested.emit)
         button_layout.addWidget(self.choose_button)
 
-        self.move_folder_button = QPushButton("Move To")
+        self.move_folder_button = QPushButton("搬移至")
         self.move_folder_button.setProperty("variant", "secondary")
         self.move_folder_button.setProperty("size", "sm")
         self.move_folder_button.setIcon(icons.icon("folder", size=14, color=COLORS["text_2"]))
         self.move_folder_button.clicked.connect(self.choose_move_folder_requested.emit)
         button_layout.addWidget(self.move_folder_button)
 
-        self.start_button = QPushButton("Start")
+        self.start_button = QPushButton("啟動")
         self.start_button.setProperty("variant", "primary")
         self.start_button.setProperty("size", "sm")
         self.start_button.setIcon(icons.icon("play", size=14, color="#ffffff"))
@@ -86,7 +86,7 @@ class MonitorControlPanel(Panel):
         self.start_button.clicked.connect(self.start_requested.emit)
         button_layout.addWidget(self.start_button)
 
-        self.stop_button = QPushButton("Stop")
+        self.stop_button = QPushButton("停止")
         self.stop_button.setProperty("variant", "danger-ghost")
         self.stop_button.setProperty("size", "sm")
         self.stop_button.setIcon(icons.icon("x", size=14, color=COLORS["ng"]))
@@ -109,7 +109,7 @@ class MonitorControlPanel(Panel):
         progress_layout.addWidget(self.progress_pct_label)
         self.add_widget(progress_row)
 
-        self.message_label = QLabel("Waiting for folder and Recipe")
+        self.message_label = QLabel("等待選擇資料夾與 Recipe")
         self.message_label.setProperty("mono", "true")
         self.message_label.setWordWrap(True)
         self.message_label.setStyleSheet(f"color: {COLORS['text_2']}; font-size: 11px;")
@@ -117,13 +117,13 @@ class MonitorControlPanel(Panel):
 
     def set_folder(self, folder: str | None) -> None:
         self._folder = folder
-        self.folder_label.setText(folder or "No folder selected")
+        self.folder_label.setText(folder or "尚未選擇資料夾")
         self.folder_label.setStyleSheet(
             f"color: {COLORS['text_2'] if folder else COLORS['text_3']}; font-size: 12px;"
         )
 
     def set_move_folder(self, folder: str | None) -> None:
-        text = f"Move processed images to: {folder}" if folder else "Processed images stay in monitor folder"
+        text = f"處理後影像搬移至：{folder}" if folder else "處理後影像保留在監控資料夾"
         self.move_folder_label.setText(text)
         self.move_folder_label.setStyleSheet(
             f"color: {COLORS['text_2'] if folder else COLORS['text_3']}; font-size: 12px;"
@@ -134,7 +134,7 @@ class MonitorControlPanel(Panel):
         self.move_folder_button.setEnabled(not running)
         self.start_button.setEnabled(ready and not running)
         self.stop_button.setEnabled(running)
-        self.start_button.setText("Monitoring" if running else "Start")
+        self.start_button.setText("監控中" if running else "啟動")
 
     def set_progress(self, pct: int, message: str) -> None:
         pct = max(0, min(100, int(pct)))
@@ -145,13 +145,13 @@ class MonitorControlPanel(Panel):
 
 class MonitorStatsPanel(Panel):
     def __init__(self, parent=None):
-        super().__init__(title="Monitor Status", parent=parent)
+        super().__init__(title="監控狀態", parent=parent)
         row = QWidget()
         layout = QHBoxLayout(row)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(8)
         self._labels: dict[str, QLabel] = {}
-        for key, label in (("processed", "Processed"), ("pass", "PASS"), ("ng", "NG"), ("error", "ERR")):
+        for key, label in (("processed", "已處理"), ("pass", "PASS"), ("ng", "NG"), ("error", "ERROR")):
             cell = QWidget()
             cell_layout = QVBoxLayout(cell)
             cell_layout.setContentsMargins(0, 0, 0, 0)
@@ -184,34 +184,46 @@ class MonitorTablePanel(Panel):
     open_original_requested = Signal(dict)
 
     def __init__(self, parent=None):
-        super().__init__(title="Processed Images", flush=True, parent=parent)
+        self.filter_segmented = Segmented(
+            [("all", "全部"), ("pass", "PASS"), ("ng", "NG"), ("error", "ERROR")],
+            value="all",
+        )
+        super().__init__(title="已處理影像", actions=self.filter_segmented, flush=True, parent=parent)
         self._items: list[dict] = []
-        self.table = QTableWidget(0, 6)
-        self.table.setHorizontalHeaderLabels(["Time", "Image", "Result", "Def", "NG", "Duration"])
+        self.model = RowTableModel(
+            [
+                TableColumn("時間", "processed_at"),
+                TableColumn("影像", "image_name", tooltip_key="image_path"),
+                TableColumn("結果", "final_result"),
+                TableColumn("缺陷", "defect_count", align_right=True),
+                TableColumn("NG", "ng_count", align_right=True),
+                TableColumn("耗時", "duration_sec", formatter=_format_duration, align_right=True),
+            ]
+        )
+        self.proxy = StatusFilterProxyModel(parent=self)
+        self.proxy.setSourceModel(self.model)
+        self.table = QTableView()
+        self.table.setModel(self.proxy)
         self.table.verticalHeader().setVisible(False)
         self.table.setShowGrid(False)
-        self.table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self.table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
-        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setSelectionBehavior(QTableView.SelectionBehavior.SelectRows)
+        self.table.setSelectionMode(QTableView.SelectionMode.SingleSelection)
+        self.table.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
         self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.table.customContextMenuRequested.connect(self._show_context_menu)
+        self.filter_segmented.currentChanged.connect(self._on_filter_changed)
         self.add_widget(self.table, 1)
+        self.table.resizeColumnsToContents()
+        self.table.horizontalHeader().setStretchLastSection(True)
 
     def set_items(self, items: list[dict]) -> None:
         self._items = list(items)
-        self.table.setRowCount(len(items))
-        for row, item in enumerate(items):
-            self._set_row(row, item)
-        self._resize_table()
+        self.model.set_rows(items)
 
     def prepend_item(self, item: dict, limit: int) -> None:
         self._items.insert(0, item)
         self._items = self._items[:limit]
-        self.table.insertRow(0)
-        self._set_row(0, item)
-        while self.table.rowCount() > limit:
-            self.table.removeRow(self.table.rowCount() - 1)
-        self._resize_table()
+        self.model.prepend(item, limit)
 
     def selected_row_index(self) -> int:
         selected = self.table.selectionModel().selectedRows()
@@ -219,36 +231,27 @@ class MonitorTablePanel(Panel):
             return -1
         return selected[0].row()
 
-    def _set_row(self, row: int, item: dict) -> None:
-        time_item = QTableWidgetItem(str(item.get("processed_at", "")))
-        name_item = QTableWidgetItem(str(item.get("image_name", "")))
-        name_item.setToolTip(str(item.get("image_path", "")))
-        defects_item = QTableWidgetItem(str(item.get("defect_count", 0)))
-        ng_item = QTableWidgetItem(str(item.get("ng_count", 0)))
-        duration_item = QTableWidgetItem(_format_duration(item.get("duration_sec")))
-        for table_item in (time_item, name_item, defects_item, ng_item, duration_item):
-            table_item.setFlags(table_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-        self.table.setItem(row, 0, time_item)
-        self.table.setItem(row, 1, name_item)
-        self.table.setCellWidget(row, 2, result_badge(item.get("final_result")))
-        self.table.setItem(row, 3, defects_item)
-        self.table.setItem(row, 4, ng_item)
-        self.table.setItem(row, 5, duration_item)
+    def selected_item(self) -> dict | None:
+        return self.proxy.row_dict(self.selected_row_index())
 
-    def _resize_table(self) -> None:
-        self.table.resizeColumnsToContents()
-        self.table.horizontalHeader().setStretchLastSection(True)
+    def _on_filter_changed(self, status: str) -> None:
+        self.proxy.set_status(status)
+        if self.proxy.rowCount() > 0:
+            self.table.selectRow(0)
+        else:
+            self.table.clearSelection()
 
     def _show_context_menu(self, pos) -> None:
         row = self.table.rowAt(pos.y())
-        if row < 0 or row >= len(self._items):
+        item = self.proxy.row_dict(row)
+        if item is None:
             return
         self.table.selectRow(row)
         menu = QMenu(self.table)
-        open_action = menu.addAction("Open Original Image")
+        open_action = menu.addAction("開啟原始影像")
         action = menu.exec(self.table.viewport().mapToGlobal(pos))
         if action == open_action:
-            self.open_original_requested.emit(dict(self._items[row]))
+            self.open_original_requested.emit(item)
 
 
 class MonitorScreen(QWidget):
@@ -282,17 +285,17 @@ class MonitorScreen(QWidget):
         self.table_panel = MonitorTablePanel()
         self.data_splitter.addWidget(self.table_panel)
 
-        sequence_panel = Panel(title="Monitor Sequence Scatter")
+        sequence_panel = Panel(title="監控序列散佈圖")
         self.sequence_chart = ImageScatterChart(
             x_label="tile x",
             y_label="tile y",
-            empty_text="No cumulative tile points",
+            empty_text="尚無累積切圖點位",
             defect_radius_scale=0,
         )
         sequence_panel.add_widget(self.sequence_chart, 1)
         self.data_splitter.addWidget(sequence_panel)
 
-        scatter_panel = Panel(title="Selected Tile Scatter")
+        scatter_panel = Panel(title="所選影像切圖散佈圖")
         self.scatter_chart = ImageScatterChart()
         scatter_panel.add_widget(self.scatter_chart, 1)
         self.data_splitter.addWidget(scatter_panel)
@@ -302,14 +305,14 @@ class MonitorScreen(QWidget):
         self.empty_state = QFrame()
         empty_layout = QVBoxLayout(self.empty_state)
         empty_layout.setContentsMargins(0, 0, 0, 0)
-        empty_layout.addWidget(EmptyState("eye", "No processed images yet", "Start monitoring, then add images under the selected folder."))
+        empty_layout.addWidget(EmptyState("eye", "尚無已處理影像", "啟動監控後，放入監控資料夾的影像會顯示在這裡。"))
         layout.addWidget(self.empty_state)
 
         self.control_panel.choose_folder_requested.connect(self.choose_folder_requested.emit)
         self.control_panel.choose_move_folder_requested.connect(self.choose_move_folder_requested.emit)
         self.control_panel.start_requested.connect(self.start_requested.emit)
         self.control_panel.stop_requested.connect(self.stop_requested.emit)
-        self.table_panel.table.itemSelectionChanged.connect(self._on_table_selection_changed)
+        self.table_panel.table.selectionModel().selectionChanged.connect(self._on_table_selection_changed)
         self.table_panel.open_original_requested.connect(self.open_original_requested.emit)
         self._refresh()
 
@@ -356,12 +359,11 @@ class MonitorScreen(QWidget):
         else:
             self.scatter_chart.set_model(BatchDashboardBuilder.build_image_scatter(None))
 
-    def _on_table_selection_changed(self) -> None:
+    def _on_table_selection_changed(self, *_args) -> None:
         self._render_selected_scatter()
 
     def _render_selected_scatter(self) -> None:
-        row_index = self.table_panel.selected_row_index()
-        item = self._items[row_index] if 0 <= row_index < len(self._items) else None
+        item = self.table_panel.selected_item()
         self.scatter_chart.set_model(BatchDashboardBuilder.build_image_scatter(item))
 
     def _sequence_items(self) -> list[dict]:

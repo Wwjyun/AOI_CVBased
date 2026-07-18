@@ -77,6 +77,16 @@ Put behavior in the narrowest appropriate module. Do not duplicate pipeline or f
 - Avoid module globals that hold mutable detector, recipe, image, or GPU state.
 - Inject runtime/backend dependencies where tests need CPU, fake DLL, legacy DLL, or failing GPU behavior.
 
+## GUI interaction contract
+
+- Preserve the existing visual language and status hierarchy: TopBar owns global progress and actual backend, operation panels own step detail, and the status bar contains only short events.
+- Backend labels must come from runtime result metadata. Never infer CUDA active from a recipe request; expose CPU fallback reasons in text or a tooltip.
+- Use inline notices for recoverable feedback. Reserve modal dialogs for blocked operations, destructive choices, unsaved-change confirmation, and close prevention while background work is active.
+- Recipe Designer changes must participate in dirty tracking and shared `RecipeManager` validation. Loading programmatic values must not create false dirty state.
+- Persist user working context through `GuiPreferences`/`QSettings`; ignore stale paths safely and keep tests isolated with injected temporary settings.
+- Batch and monitor histories use Qt model/view and bounded incremental updates. Keep status filtering proxy-based and sample oversized scatter data deterministically.
+- New operator-facing text is Traditional Chinese except established industrial abbreviations such as PASS, NG, ERROR, CPU, CUDA, ROI and DLL. Status must remain understandable without color alone and keyboard paths require tests.
+
 ## Future detector development contract
 
 - Every new traditional CV detector must express reusable image preprocessing as a cached immutable `PreprocessPlan`; detector code keeps only detector-specific geometry, filtering, PASS/NG decisions, defect metadata, and deterministic ordering.

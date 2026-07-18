@@ -117,7 +117,7 @@ class BatchInspectionProcessor(LogMixin):
         results_by_index: dict[int, BatchImageResult] = {}
         completed = 0
         worker_count = self._worker_count(total)
-        self._progress(0, f"Batch inspection running with {worker_count} workers")
+        self._progress(0, f"批量檢測執行中，使用 {worker_count} 個 worker")
 
         with self._opencv_thread_budget(worker_count), GpuExecutionSession.from_recipe_path(
             self.recipe_path, workload="throughput"

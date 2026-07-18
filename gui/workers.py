@@ -35,10 +35,10 @@ class ImagePreviewWorker(QObject, LogMixin):
         profiler = PipelineProfiler()
         try:
             self.logger.info("Preview load started: image=%s", self.path)
-            self.progress.emit(0, "Loading image")
+            self.progress.emit(0, "正在載入影像")
             with profiler.measure("image_load"):
                 bgr = self.image_loader.load_bgr(self.path)
-            self.progress.emit(60, "Converting preview")
+            self.progress.emit(60, "正在轉換預覽")
             requested = RecipeManager().gpu_feature_requested(self.gpu_config, "display")
             with profiler.measure("color_conversion"):
                 runtime = GpuRuntime(
@@ -72,7 +72,7 @@ class ImagePreviewWorker(QObject, LogMixin):
             self.failed.emit(self.path, str(exc))
             return
 
-        self.progress.emit(100, "Preview ready")
+        self.progress.emit(100, "預覽已就緒")
         self.logger.info(
             "Preview load completed: image=%s size=%sx%s performance=%s",
             self.path,
@@ -223,9 +223,9 @@ class TilePreviewWorker(QObject, LogMixin):
     def run(self) -> None:
         try:
             self.logger.info("Tile preview started: image=%s config=%s", self.image_path, self.tile_config)
-            self.progress.emit(0, "Loading image for tile preview")
+            self.progress.emit(0, "正在載入切圖預覽影像")
             image = self.image_loader.load_bgr(self.image_path)
-            self.progress.emit(20, "Creating tiler")
+            self.progress.emit(20, "正在建立切圖器")
             requested = RecipeManager().gpu_feature_requested(self.gpu_config, "tiling")
             runtime = GpuRuntime(
                 self.gpu_config.get("dll_path", GpuRuntime.DEFAULT_DLL),
@@ -236,11 +236,11 @@ class TilePreviewWorker(QObject, LogMixin):
                 raise GpuRuntimeError(runtime.unavailable_reason)
             tiler = create_tiler(self.tile_config, gpu_runtime=runtime if requested else None)
             tiles = list(tiler.iter_tiles(image))
-            self.progress.emit(60, f"Drawing {len(tiles)} preview tiles")
+            self.progress.emit(60, f"正在繪製 {len(tiles)} 個預覽切圖")
             preview = self._draw_tiles(image, tiles)
             preview = self._resize_preview(preview)
             rgb = cv2.cvtColor(preview, cv2.COLOR_BGR2RGB)
-            self.progress.emit(80, "Converting tile preview")
+            self.progress.emit(80, "正在轉換切圖預覽")
             rgb = np.ascontiguousarray(rgb)
             height, width, channels = rgb.shape
             image_bytes = rgb.tobytes()
@@ -262,7 +262,7 @@ class TilePreviewWorker(QObject, LogMixin):
             self.failed.emit(str(exc))
             return
 
-        self.progress.emit(100, "Tile preview ready")
+        self.progress.emit(100, "切圖預覽已就緒")
         self.logger.info("Tile preview completed: image=%s tiles=%s", self.image_path, len(tiles))
         self.finished.emit(image_bytes, width, height, bytes_per_line, len(tiles), shape_counts)
 

@@ -154,6 +154,14 @@
 - [x] GUI worker 不在 UI thread 等待 CUDA；monitor 取消、錯誤與進度以 stop callback／Qt signals 保持可回應。
 - [x] GUI 顯示實際 backend，不得因 recipe 勾選 GPU 就顯示 CUDA active。
 - [x] PyInstaller 有 DLL 時條件式包含 `gpu/visionflow_cuda.dll`，無 DLL 時建立 CPU-compatible package 且 runtime 可 fallback。
+- [x] **GUI 狀態層級**：TopBar 只呈現全域進度，操作 panel 顯示目前步驟，Status Bar 僅保留短事件；就緒／執行中／PASS／NG／ERROR 狀態一致且不重複。
+- [x] **實際 backend chip**：TopBar 固定顯示 CPU、CUDA device 或 CPU FALLBACK；fallback 原因可由 tooltip 查看，未實際啟用 CUDA 不得顯示 CUDA active。
+- [x] **非阻塞提示**：可恢復警告與成功訊息改用既有視覺語言的 inline notice，只有阻止操作、不可恢復或離開確認保留 modal dialog。
+- [x] **NG 導航與快捷鍵**：Results 支援上一個／下一個 NG、J／K 切換、Enter 聚焦 bbox，列表與 viewer 選取同步並自動捲動。
+- [x] **Recipe dirty／validation 狀態**：Designer 顯示已儲存、未儲存、驗證失敗；切換 recipe 或關閉時僅在 dirty 狀態詢問，錯誤在畫面內顯示。
+- [x] **GUI 操作環境記憶**：使用 QSettings 保存並恢復上次 recipe、影像／batch／monitor 資料夾、輸出選項、最後畫面、視窗 geometry/state、viewer zoom 與主要 splitter 比例；無效路徑安全忽略。
+- [x] **大量資料操作**：Batch／Monitor 表格使用 model/view 與增量更新，提供 PASS／NG／ERROR 篩選；scatter 超過上限採 deterministic sampling，避免每筆結果重建整表。
+- [x] **繁中一致性與可及性**：操作訊息統一繁體中文，PASS／NG／CPU／CUDA 等工業縮寫保留；狀態不得只依賴顏色，並補 tooltip／文字標籤與鍵盤操作測試。
 - [ ] 有 GPU、無 GPU、DLL 缺少、DLL 版本不符、fallback 開/關各完成一次打包實機測試。（runtime tests 已覆蓋 missing/ABI mismatch/no-device/context-failure 與 fallback policy；無 NVIDIA/CUDA DLL 電腦已完成 CPU-compatible package build 與 5 recipes bundle，packaged smoke 進一步驗證 MainWindow、CPU-only pipeline、缺 DLL fallback 開啟時與 CPU 結果一致且 GPU call count=0、fallback 關閉/strict CUDA 明確失敗，EXE exit 0；有 GPU 與 packaged ABI mismatch 待實機）
 
 ## P7：CI、GitHub Actions 與發布
@@ -301,3 +309,4 @@
 - [x] 2026-07-17：修正 Windows CLI smoke 的 exit code 判斷，明確接受 PASS=0 與 NG=2，並讓未捕捉例外等其他 exit code 正確使 CI 失敗。
 - [x] 2026-07-17：完成 P8 產線安全與持續驗證：strict detector schema/GUI 共用、recipe/build SHA-256/commit provenance、NG dataset sidecar、五配方與每 detector 至少五個合成 golden cases、Python 3.13 Windows lock、RTX 48h heartbeat/P95 15% gate/weekly package smoke、100-case Hypothesis preprocess fuzz，並拆分 GPU ABI 與 metrics；本機 CPU-compatible PyInstaller build 及 packaged smoke exit 0。
 - [x] 2026-07-18：參考 `VisionFlow_GPU_CPU-main.zip` 完成 P9 修正版移植：recipe cache、opt-in CPU tile 平行、batch/OpenCV thread budget 與週期 GC、NG tile 平行寫檔、overlay 格式／品質／縮圖、debug preprocess images、TypedDict 結果契約及 Unicode-safe regression tests；修正參考快照在中文 Windows 路徑以 `cv2.imread` 造成的 3 個假失敗，並補 invalid output config 與 process-wide OpenCV lock。實跑 119 tests、compileall、CUDA preflight、`git diff --check`、4-worker CLI synthetic smoke（9 tiles，PASS）及 GUI offscreen smoke皆通過；RTX 3090 runtime 與 production tuning 仍保留未完成。
+- [x] 2026-07-18：完成 P6 GUI 操作改善：統一全域／步驟／短事件狀態層級、加入實際 backend chip 與 inline notice、Results NG 鍵盤導覽及 bbox 聚焦、Recipe dirty／validation、QSettings 工作環境回復、Batch／Monitor model-view 篩選與 deterministic scatter sampling，並同步繁中、可及性、README、AGENT 與 6 項 GUI 工作流程測試。實跑 125 tests、compileall、CUDA preflight、CLI PASS smoke、GUI offscreen smoke及 `git diff --check` 均通過。

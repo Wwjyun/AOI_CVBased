@@ -4,7 +4,7 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QWidget
 
 from gui.theme import COLORS, TOPBAR_H
-from gui.widgets.common import Chip, ProgressBar, Segmented
+from gui.widgets.common import Badge, Chip, ProgressBar, Segmented
 
 # ============================================================
 # AOI Console top bar
@@ -68,6 +68,11 @@ class TopBar(QWidget):
 
         layout.addStretch(1)
 
+        self.backend_badge = Badge("CPU", kind="neutral")
+        self.backend_badge.setToolTip("目前使用 CPU")
+        self.backend_badge.setAccessibleName("實際運算後端：CPU")
+        layout.addWidget(self.backend_badge)
+
         self.mode_switch = Segmented(MODE_OPTIONS, value="op")
         self.mode_switch.currentChanged.connect(self.mode_changed.emit)
         layout.addWidget(self.mode_switch)
@@ -84,3 +89,24 @@ class TopBar(QWidget):
 
     def set_mode(self, mode: str) -> None:
         self.mode_switch.setCurrent(mode)
+
+    def set_backend_status(self, status: dict | None) -> None:
+        status = status or {}
+        if status.get("active"):
+            device = str(status.get("device_name") or "CUDA").strip()
+            text = f"CUDA · {device}" if device.upper() != "CUDA" else "CUDA"
+            kind = "accent"
+            tooltip = f"目前使用 CUDA\n裝置：{device}"
+        elif status.get("requested"):
+            text = "CPU FALLBACK"
+            kind = "ng"
+            reason = str(status.get("fallback_reason") or status.get("reason") or "CUDA 不可用")
+            tooltip = f"目前使用 CPU fallback\n原因：{reason}"
+        else:
+            text = "CPU"
+            kind = "neutral"
+            tooltip = "目前使用 CPU"
+        self.backend_badge.setText(text)
+        self.backend_badge.set_kind(kind)
+        self.backend_badge.setToolTip(tooltip)
+        self.backend_badge.setAccessibleName(f"實際運算後端：{text}")

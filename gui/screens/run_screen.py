@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QTableView,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -20,8 +21,9 @@ from gui import icons
 from gui.detector_labels import detector_zh_name
 from gui.image_viewer import ImageViewer
 from gui.theme import COLORS
-from gui.widgets.common import Badge, EmptyState, ProgressBar, make_param_widget, result_badge
+from gui.widgets.common import Badge, EmptyState, ProgressBar, Segmented, make_param_widget, result_badge
 from gui.widgets.panel import Panel
+from gui.table_models import RowTableModel, StatusFilterProxyModel, TableColumn
 
 # ============================================================
 # AOI Console — 檢測執行 screen
@@ -246,7 +248,7 @@ class RunControlPanel(Panel):
         stats_layout.setContentsMargins(0, 0, 0, 0)
         stats_layout.setSpacing(0)
         self._stat_value_labels: list[QLabel] = []
-        for stat_name in ("Tiles", "NG Tiles", "缺陷"):
+        for stat_name in ("切圖", "NG 切圖", "缺陷"):
             cell = QWidget()
             cell_layout = QVBoxLayout(cell)
             cell_layout.setContentsMargins(12, 8, 12, 8)
@@ -323,9 +325,9 @@ class BatchFolderPanel(Panel):
     start_batch_requested = Signal()
 
     def __init__(self, parent=None):
-        super().__init__(title="Batch Folder", parent=parent)
+        super().__init__(title="批量資料夾", parent=parent)
 
-        self.folder_label = QLabel("No folder selected")
+        self.folder_label = QLabel("尚未選擇資料夾")
         self.folder_label.setProperty("mono", "true")
         self.folder_label.setWordWrap(True)
         self.folder_label.setStyleSheet(f"color: {COLORS['text_3']}; font-size: 11px;")
@@ -336,20 +338,20 @@ class BatchFolderPanel(Panel):
         button_layout.setContentsMargins(0, 0, 0, 0)
         button_layout.setSpacing(8)
 
-        self.choose_button = QPushButton("Folder")
+        self.choose_button = QPushButton("選擇資料夾")
         self.choose_button.setProperty("variant", "secondary")
         self.choose_button.setProperty("size", "sm")
         self.choose_button.setIcon(icons.icon("folder", size=14, color=COLORS["text_2"]))
         self.choose_button.clicked.connect(self.choose_folder_requested.emit)
         button_layout.addWidget(self.choose_button)
 
-        self.recursive_check = QCheckBox("Recursive")
+        self.recursive_check = QCheckBox("包含子資料夾")
         self.recursive_check.setStyleSheet(f"color: {COLORS['text_2']}; font-size: 12px;")
         button_layout.addWidget(self.recursive_check)
         button_layout.addStretch(1)
         self.add_widget(button_row)
 
-        self.start_button = QPushButton("Start Batch")
+        self.start_button = QPushButton("開始批量檢測")
         self.start_button.setProperty("variant", "primary")
         self.start_button.setProperty("size", "lg")
         self.start_button.setIcon(icons.icon("play", size=17, color="#ffffff"))
@@ -377,7 +379,7 @@ class BatchFolderPanel(Panel):
         self.add_widget(self.message_label)
 
     def set_folder(self, folder: str | None) -> None:
-        self.folder_label.setText(folder or "No folder selected")
+        self.folder_label.setText(folder or "尚未選擇資料夾")
         self.folder_label.setStyleSheet(
             f"color: {COLORS['text_2'] if folder else COLORS['text_3']}; font-size: 11px;"
         )
@@ -386,7 +388,7 @@ class BatchFolderPanel(Panel):
         self.choose_button.setEnabled(not running)
         self.recursive_check.setEnabled(not running)
         self.start_button.setEnabled(ready and not running)
-        self.start_button.setText("Batch Running" if running else "Start Batch")
+        self.start_button.setText("批量檢測中" if running else "開始批量檢測")
 
     def set_progress(self, pct: int, message: str) -> None:
         pct = max(0, min(100, int(pct)))
@@ -400,14 +402,17 @@ class BatchFolderPanel(Panel):
 
 class BatchDataPanel(Panel):
     def __init__(self, parent=None):
-        super().__init__(title="Batch Data", flush=True, parent=parent)
+        self.filter_segmented = Segmented(
+            [("all", "全部"), ("pass", "PASS"), ("ng", "NG"), ("error", "ERROR")], value="all"
+        )
+        super().__init__(title="批量資料", actions=self.filter_segmented, flush=True, parent=parent)
 
         stats = QWidget()
         stats_layout = QHBoxLayout(stats)
         stats_layout.setContentsMargins(12, 10, 12, 10)
         stats_layout.setSpacing(6)
         self._stat_labels: dict[str, QLabel] = {}
-        for key, label in (("total", "Total"), ("pass", "PASS"), ("ng", "NG"), ("error", "ERR")):
+        for key, label in (("total", "總數"), ("pass", "PASS"), ("ng", "NG"), ("error", "ERROR")):
             cell = QWidget()
             cell_layout = QVBoxLayout(cell)
             cell_layout.setContentsMargins(0, 0, 0, 0)
@@ -431,12 +436,24 @@ class BatchDataPanel(Panel):
         self.output_label.setStyleSheet(f"color: {COLORS['text_3']}; font-size: 10px; padding: 0 12px 8px;")
         self.add_widget(self.output_label)
 
-        self.table = QTableWidget(0, 5)
-        self.table.setHorizontalHeaderLabels(["Image", "Result", "Def", "NG", "Time"])
+        self.table_model = RowTableModel(
+            [
+                TableColumn("影像", "image_name", tooltip_key="image_path"),
+                TableColumn("結果", "final_result"),
+                TableColumn("缺陷", "defect_count", align_right=True),
+                TableColumn("NG", "ng_count", align_right=True),
+                TableColumn("耗時", "duration_sec", formatter=_format_duration, align_right=True),
+            ]
+        )
+        self.table_proxy = StatusFilterProxyModel(parent=self)
+        self.table_proxy.setSourceModel(self.table_model)
+        self.table = QTableView()
+        self.table.setModel(self.table_proxy)
         self.table.verticalHeader().setVisible(False)
         self.table.setShowGrid(False)
-        self.table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
-        self.table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self.table.setSelectionMode(QTableView.SelectionMode.NoSelection)
+        self.table.setEditTriggers(QTableView.EditTrigger.NoEditTriggers)
+        self.filter_segmented.currentChanged.connect(self.table_proxy.set_status)
         self.table.setMinimumHeight(170)
         self.add_widget(self.table, 1)
 
@@ -453,23 +470,9 @@ class BatchDataPanel(Panel):
         for key in ("total", "pass", "ng", "error"):
             self._stat_labels[key].setText(str(summary.get(key, 0)))
         batch_duration = _format_duration(result.get("duration_sec") if result else None)
-        self.output_label.setText(f"{output_dir}\nTotal time: {batch_duration}" if output_dir else "")
+        self.output_label.setText(f"{output_dir}\n總耗時：{batch_duration}" if output_dir else "")
 
-        self.table.setRowCount(len(items))
-        for row, item in enumerate(items):
-            name_item = QTableWidgetItem(str(item.get("image_name", "")))
-            name_item.setToolTip(str(item.get("image_path", "")))
-            result_item = QTableWidgetItem(str(item.get("final_result", "")))
-            defects_item = QTableWidgetItem(str(item.get("defect_count", 0)))
-            ng_item = QTableWidgetItem(str(item.get("ng_count", 0)))
-            time_item = QTableWidgetItem(_format_duration(item.get("duration_sec")))
-            for table_item in (name_item, result_item, defects_item, ng_item, time_item):
-                table_item.setFlags(table_item.flags() & ~Qt.ItemFlag.ItemIsEditable)
-            self.table.setItem(row, 0, name_item)
-            self.table.setItem(row, 1, result_item)
-            self.table.setItem(row, 2, defects_item)
-            self.table.setItem(row, 3, ng_item)
-            self.table.setItem(row, 4, time_item)
+        self.table_model.set_rows(items)
         self.table.resizeColumnsToContents()
         self.table.horizontalHeader().setStretchLastSection(True)
 

@@ -5,6 +5,7 @@ from PySide6.QtGui import QColor, QFont, QPainter, QPen
 from PySide6.QtWidgets import QSizePolicy, QWidget
 
 from core.batch_dashboard import ImageScatterModel
+from gui.table_models import deterministic_sample
 from gui.theme import COLORS
 
 
@@ -13,6 +14,7 @@ RESULT_COLORS = {
     "NG": COLORS["ng"],
     "ERROR": COLORS["warn"],
 }
+MAX_SCATTER_POINTS = 1000
 
 
 class ImageScatterChart(QWidget):
@@ -21,7 +23,7 @@ class ImageScatterChart(QWidget):
         parent=None,
         x_label: str = "tile x",
         y_label: str = "tile y",
-        empty_text: str = "No tile points",
+        empty_text: str = "尚無切圖點位",
         y_origin_bottom: bool = False,
         defect_radius_scale: int = 8,
     ):
@@ -36,7 +38,14 @@ class ImageScatterChart(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
     def set_model(self, model: ImageScatterModel) -> None:
-        self._model = model
+        points = deterministic_sample(model.points, MAX_SCATTER_POINTS)
+        self._model = ImageScatterModel(model.image_name, model.width, model.height, points)
+        sampled = len(points) < len(model.points)
+        self.setToolTip(
+            f"顯示 {len(points)} / {len(model.points)} 個點位（等距抽樣）"
+            if sampled
+            else f"顯示 {len(points)} 個點位"
+        )
         self.update()
 
     def paintEvent(self, _event) -> None:
