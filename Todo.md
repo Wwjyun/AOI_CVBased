@@ -173,6 +173,7 @@
 - [x] **NG 導航與快捷鍵**：Results 支援上一個／下一個 NG、J／K 切換、Enter 聚焦 bbox，列表與 viewer 選取同步並自動捲動。
 - [x] **Recipe dirty／validation 狀態**：Designer 顯示已儲存、未儲存、驗證失敗；切換 recipe 或關閉時僅在 dirty 狀態詢問，錯誤在畫面內顯示。
 - [x] **GUI 操作環境記憶**：使用 QSettings 保存並恢復上次 recipe、影像／batch／monitor 資料夾、輸出選項、最後畫面、視窗 geometry/state、viewer zoom 與主要 splitter 比例；無效路徑安全忽略。
+- [x] **GUI 權限管理器**：每次啟動固定進入 OP；工程／管理模式分別以預設密碼 `1234`／`5678` 驗證，驗證邏輯與密碼提示視窗採獨立 OOP 元件且可注入替換。
 - [x] **大量資料操作**：Batch／Monitor 表格使用 model/view 與增量更新，提供 PASS／NG／ERROR 篩選；scatter 超過上限採 deterministic sampling，避免每筆結果重建整表。
 - [x] **繁中一致性與可及性**：操作訊息統一繁體中文，PASS／NG／CPU／CUDA 等工業縮寫保留；狀態不得只依賴顏色，並補 tooltip／文字標籤與鍵盤操作測試。
 - [ ] 有 GPU、無 GPU、DLL 缺少、DLL 版本不符、fallback 開/關各完成一次打包實機測試。（runtime tests 已覆蓋 missing/ABI mismatch/no-device/context-failure 與 fallback policy；無 NVIDIA/CUDA DLL 電腦已完成 CPU-compatible package build 與 5 recipes bundle，packaged smoke 進一步驗證 MainWindow、CPU-only pipeline、缺 DLL fallback 開啟時與 CPU 結果一致且 GPU call count=0、fallback 關閉/strict CUDA 明確失敗，EXE exit 0；有 GPU 與 packaged ABI mismatch 待實機）
@@ -326,3 +327,4 @@
 - [x] 2026-07-20：新增 Detector 401 Template Anchor Grid 專用 profiling harness；分離 template match/ROI generation，opt-in 累計整張圖所有 ROI 的 native CUDA events、kernel launches 與 peak persistent working set，輸出 CPU 10 次、cold GPU、warm GPU 10 次及 mean/median/P95/min/max，strict CUDA 禁止 silent fallback。已完成 CPU/fake-DLL/source 測試；目前機器無 `nvidia-smi`、`nvcc`、CUDA device，且未提供本次真實影像與 anchor-grid recipe，因此 RTX 3090 baseline、瓶頸結論與 kernel/架構優化仍保持未完成。
 - [x] 2026-07-20：新增 `analyze_401_profile.py` 離線判讀器；無須上傳 production JSON 即可驗證座標/PASS-NG/fallback gate，比較 CPU、GPU cold/warm median/P95 與 2/3.3 秒門檻，依 launch/ROI、同步、Morphology、D2H、resident gather、Adaptive Mean、Gaussian、CPU contours、warm allocation 輸出證據與優化優先序，並明確避免把重疊 CUDA events 相加。規則已用有效、fallback、錯誤 schema 合成報告測試；實際瓶頸結論仍待 RTX 3090 profiler JSON。
 - [x] 2026-07-20：依 Detector 401 profiling 執行順序完成 GUI 單張 `GpuExecutionSession` cache；相同 Recipe 後續執行重用 context，Recipe path/mtime/size 改變時失效，視窗關閉時釋放，resident image 仍逐次建立。GUI 顯示 user-wait，profiler/analyzer 分列 detector、pipeline-before-report、reporting、end-to-end、outer wall 與 non-detector overhead。專案虛擬環境完整 137 tests、compileall、CUDA source preflight、CLI synthetic smoke、GUI offscreen smoke 與 diff check 通過；本機仍無 `nvidia-smi`、`nvcc`、MSVC `cl`，下一步 RTX cold/warm/GUI 10 次實測保持未完成。
+- [x] 2026-07-20：新增 OOP GUI 權限管理器與獨立密碼提示器；程式啟動不再恢復高權限模式，固定從 OP 開始，切換工程／管理模式分別驗證預設密碼 `1234`／`5678`，取消或密碼錯誤會維持原模式。專案虛擬環境完整 139 tests、compileall、CUDA source preflight、GUI offscreen smoke 與 diff check 通過。

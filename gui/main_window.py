@@ -26,6 +26,7 @@ from core.logging_system import LogMixin, configure_logging
 from core.gpu_session import GpuExecutionSessionCache
 from core.recipe_manager import RecipeError, RecipeManager
 from gui import theme
+from gui.permission_manager import MODE_LABELS, ModePasswordPrompt, PermissionManager
 from gui.preferences import GuiPreferences
 from gui.screens.batch_dashboard_screen import BatchDashboardScreen
 from gui.screens.designer_screen import DesignerScreen
@@ -44,11 +45,6 @@ from gui.workers import BatchInspectionWorker, FolderMonitorWorker, ImagePreview
 
 SCREEN_INDEX = {"run": 0, "monitor": 1, "designer": 2, "results": 3, "batch_dashboard": 4}
 ALL_SCREENS = set(SCREEN_INDEX)
-MODE_LABELS = {
-    "op": "操作員模式",
-    "eng": "工程師模式",
-    "admin": "管理員模式",
-}
 HISTORY_LIMIT = 6
 
 OUTPUT_TOGGLE_LABELS = {
@@ -111,7 +107,12 @@ class _RecipePanelCompatibility:
 
 
 class MainWindow(QMainWindow, LogMixin):
-    def __init__(self, settings: QSettings | None = None):
+    def __init__(
+        self,
+        settings: QSettings | None = None,
+        permission_manager: PermissionManager | None = None,
+        password_prompt: ModePasswordPrompt | None = None,
+    ):
         super().__init__()
         app = QApplication.instance()
         if app is not None:
@@ -121,9 +122,10 @@ class MainWindow(QMainWindow, LogMixin):
 
         # ---- state ----
         self.preferences = GuiPreferences(settings)
-        self.mode = str(self.preferences.value("ui/mode", "eng"))
-        if self.mode not in MODE_LABELS:
-            self.mode = "eng"
+        self.permission_manager = permission_manager or PermissionManager()
+        self.password_prompt = password_prompt or ModePasswordPrompt()
+        self.permission_manager.switch_mode("op")
+        self.mode = self.permission_manager.current_mode
         self.image_path: Path | None = None
         self.recipe_path: Path | None = None
         self.recipe: dict | None = None
@@ -350,7 +352,17 @@ class MainWindow(QMainWindow, LogMixin):
             self._restored_batch_splitter_sizes = None
 
     def _on_mode_changed(self, mode: str) -> None:
-        self.mode = mode
+        if mode == "op":
+            self.permission_manager.switch_mode(mode)
+        else:
+            password, accepted = self.password_prompt.request_password(self, mode)
+            if not accepted or not self.permission_manager.switch_mode(mode, password):
+                self.topbar.set_mode(self.mode)
+                if accepted:
+                    self._notice(f"{MODE_LABELS[mode]}密碼錯誤，權限未變更。", "error")
+                return
+        self.mode = self.permission_manager.current_mode
+        self.topbar.set_mode(self.mode)
         self._apply_mode_permissions()
 
     def _visible_screens_for_mode(self) -> set[str]:
@@ -411,7 +423,6 @@ class MainWindow(QMainWindow, LogMixin):
             QTimer.singleShot(0, lambda path=image_path: self.load_image(path))
 
     def _save_preferences(self) -> None:
-        self.preferences.set_value("ui/mode", self.mode)
         self.preferences.set_value("ui/last_screen", self._current_screen)
         self.preferences.set_value("ui/geometry", self.saveGeometry())
         self.preferences.set_value("ui/window_state", self.saveState())

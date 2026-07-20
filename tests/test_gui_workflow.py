@@ -14,6 +14,7 @@ from PySide6.QtWidgets import QApplication
 
 from core.recipe_manager import RecipeManager
 from gui.main_window import MainWindow, _backend_status_from_result
+from gui.permission_manager import ModePasswordPrompt, PermissionManager
 from gui.workers import InspectionWorker
 from gui.preferences import GuiPreferences
 from gui.screens.designer_screen import DesignerScreen
@@ -53,6 +54,47 @@ class GuiWorkflowTests(unittest.TestCase):
         )
         self.assertTrue(status["active"])
         self.assertEqual(status["device_name"], "RTX 3090")
+
+    def test_permission_manager_defaults_to_op_and_checks_each_privileged_password(self):
+        permissions = PermissionManager()
+
+        self.assertEqual(permissions.current_mode, "op")
+        self.assertFalse(permissions.switch_mode("eng", "wrong"))
+        self.assertEqual(permissions.current_mode, "op")
+        self.assertTrue(permissions.switch_mode("eng", "1234"))
+        self.assertEqual(permissions.current_mode, "eng")
+        self.assertFalse(permissions.switch_mode("admin", "1234"))
+        self.assertEqual(permissions.current_mode, "eng")
+        self.assertTrue(permissions.switch_mode("admin", "5678"))
+        self.assertTrue(permissions.switch_mode("op"))
+        self.assertEqual(permissions.current_mode, "op")
+
+    def test_main_window_requires_password_for_privileged_modes(self):
+        prompt = Mock(spec=ModePasswordPrompt)
+        prompt.request_password.side_effect = [
+            ("", False),
+            ("wrong", True),
+            ("1234", True),
+            ("5678", True),
+        ]
+        window = MainWindow(password_prompt=prompt)
+
+        self.assertEqual(window.mode, "op")
+        window._on_mode_changed("eng")
+        self.assertEqual(window.mode, "op")
+        window._on_mode_changed("eng")
+        self.assertEqual(window.mode, "op")
+        self.assertEqual(window.topbar.mode_switch.value(), "op")
+        window._on_mode_changed("eng")
+        self.assertEqual(window.mode, "eng")
+        self.assertIn("designer", window._visible_screens_for_mode())
+        window._on_mode_changed("admin")
+        self.assertEqual(window.mode, "admin")
+        window._on_mode_changed("op")
+        self.assertEqual(window.mode, "op")
+        self.assertEqual(prompt.request_password.call_count, 4)
+        window._inspection_gpu_sessions.close()
+        window.deleteLater()
 
     def test_single_inspection_displays_user_wait_and_preserves_pipeline_duration(self):
         window = MainWindow()
@@ -179,8 +221,8 @@ class GuiWorkflowTests(unittest.TestCase):
             window = MainWindow(settings=settings)
             window.show()
             self.app.processEvents()
-            self.assertEqual(window.mode, "admin")
-            self.assertEqual(window._current_screen, "results")
+            self.assertEqual(window.mode, "op")
+            self.assertEqual(window._current_screen, "monitor")
             self.assertEqual(window.output_dir, "custom-output")
             window._set_screen("monitor")
             self.app.processEvents()
