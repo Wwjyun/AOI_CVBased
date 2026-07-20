@@ -74,3 +74,46 @@ class GpuExecutionSession:
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
         self.close()
+
+
+class GpuExecutionSessionCache:
+    """Lazily reuse one GUI-style session until the recipe identity changes."""
+
+    def __init__(self, workload: str = "latency"):
+        self.workload = workload
+        self._lock = threading.RLock()
+        self._key: tuple[str, int, int] | None = None
+        self._session: GpuExecutionSession | None = None
+
+    @staticmethod
+    def _recipe_key(recipe_path: Path) -> tuple[str, int, int]:
+        resolved = Path(recipe_path).resolve()
+        stat = resolved.stat()
+        return str(resolved), int(stat.st_mtime_ns), int(stat.st_size)
+
+    def session_for(self, recipe_path: Path) -> GpuExecutionSession:
+        key = self._recipe_key(recipe_path)
+        with self._lock:
+            if self._session is not None and self._key == key:
+                return self._session
+            self._close_locked()
+            session = GpuExecutionSession.from_recipe_path(
+                Path(recipe_path), workload=self.workload
+            )
+            self._session = session
+            self._key = key
+            return session
+
+    def invalidate(self) -> None:
+        with self._lock:
+            self._close_locked()
+
+    def close(self) -> None:
+        self.invalidate()
+
+    def _close_locked(self) -> None:
+        session = self._session
+        self._session = None
+        self._key = None
+        if session is not None:
+            session.close()

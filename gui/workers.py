@@ -10,6 +10,7 @@ import numpy as np
 
 from core.image_loader import ImageLoader
 from core.gpu_runtime import GpuRuntime, GpuRuntimeError
+from core.gpu_session import GpuExecutionSessionCache
 from core.batch_processor import BatchInspectionProcessor
 from core.logging_system import LogMixin
 from core.monitor_processor import FolderMonitorProcessor
@@ -88,22 +89,36 @@ class InspectionWorker(QObject, LogMixin):
     failed = Signal(str)
     progress = Signal(int, str)
 
-    def __init__(self, image_path: Path, recipe_path: Path, output_dir: Path, output_overrides: dict | None = None):
+    def __init__(
+        self,
+        image_path: Path,
+        recipe_path: Path,
+        output_dir: Path,
+        output_overrides: dict | None = None,
+        gpu_session_cache: GpuExecutionSessionCache | None = None,
+    ):
         super().__init__()
         self.image_path = Path(image_path)
         self.recipe_path = Path(recipe_path)
         self.output_dir = Path(output_dir)
         self.output_overrides = output_overrides
+        self.gpu_session_cache = gpu_session_cache
 
     @Slot()
     def run(self) -> None:
         try:
             self.logger.info("GUI inspection worker started: image=%s recipe=%s", self.image_path, self.recipe_path)
+            gpu_session = (
+                self.gpu_session_cache.session_for(self.recipe_path)
+                if self.gpu_session_cache is not None
+                else None
+            )
             pipeline = AOIPipeline(
                 recipe_path=self.recipe_path,
                 output_dir=self.output_dir,
                 progress_callback=self.progress.emit,
                 output_overrides=self.output_overrides,
+                gpu_session=gpu_session,
             )
             result = pipeline.run(self.image_path)
         except Exception as exc:

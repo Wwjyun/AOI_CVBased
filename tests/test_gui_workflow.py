@@ -4,6 +4,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import Mock, patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -13,6 +14,7 @@ from PySide6.QtWidgets import QApplication
 
 from core.recipe_manager import RecipeManager
 from gui.main_window import MainWindow, _backend_status_from_result
+from gui.workers import InspectionWorker
 from gui.preferences import GuiPreferences
 from gui.screens.designer_screen import DesignerScreen
 from gui.screens.results_screen import ResultsScreen
@@ -51,6 +53,43 @@ class GuiWorkflowTests(unittest.TestCase):
         )
         self.assertTrue(status["active"])
         self.assertEqual(status["device_name"], "RTX 3090")
+
+    def test_single_inspection_displays_user_wait_and_preserves_pipeline_duration(self):
+        window = MainWindow()
+        result = {
+            "duration_sec": 1.4,
+            "final_result": "PASS",
+            "summary": {"tile_count": 0, "ng_count": 0, "defect_count": 0},
+            "tiles": [],
+            "outputs": {},
+            "execution": {"gpu": {}},
+        }
+        window._run_started_at = 10.0
+        with patch("gui.main_window.time.perf_counter", return_value=13.0):
+            window._on_inspection_finished(result)
+
+        self.assertEqual(result["duration_sec"], 1.4)
+        self.assertEqual(result["execution"]["performance"]["gui_user_wait_sec"], 3.0)
+        window._inspection_gpu_sessions.close()
+        window.deleteLater()
+
+    def test_single_inspection_worker_injects_cached_gpu_session(self):
+        session = Mock()
+        cache = Mock()
+        cache.session_for.return_value = session
+        pipeline = Mock()
+        pipeline.run.return_value = {"final_result": "PASS"}
+        worker = InspectionWorker(
+            Path("input.png"), Path("recipe.yaml"), Path("outputs"),
+            gpu_session_cache=cache,
+        )
+
+        with patch("gui.workers.AOIPipeline", return_value=pipeline) as pipeline_type:
+            worker.run()
+
+        cache.session_for.assert_called_once_with(Path("recipe.yaml"))
+        self.assertIs(pipeline_type.call_args.kwargs["gpu_session"], session)
+        pipeline.run.assert_called_once_with(Path("input.png"))
 
     def test_results_keyboard_navigation_and_focus_signal(self):
         screen = ResultsScreen()

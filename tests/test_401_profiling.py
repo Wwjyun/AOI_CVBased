@@ -47,6 +47,10 @@ class Detector401ProfilingTests(unittest.TestCase):
             "roi_count": metric(100.0),
             "kernel_launch_count": metric(2800.0),
             "peak_vram_bytes": metric(1024.0 * 1024.0 * 2.0),
+            "pipeline_before_reporting_ms": metric(gpu_ms + 700.0),
+            "reporting_ms": metric(200.0),
+            "pipeline_end_to_end_ms": metric(gpu_ms + 900.0),
+            "profile_host_wall_ms": metric(gpu_ms + 950.0),
         }
         return {
             "schema_version": 1,
@@ -55,12 +59,20 @@ class Detector401ProfilingTests(unittest.TestCase):
                 "final_pass_ng_identical": valid,
                 "no_silent_fallback": valid,
             },
-            "cpu": {"summary": {"total_detector_ms": metric(3300.0)}},
+            "cpu": {"summary": {
+                "total_detector_ms": metric(3300.0),
+                "pipeline_before_reporting_ms": metric(3900.0),
+                "pipeline_end_to_end_ms": metric(4100.0),
+            }},
             "warm_gpu": {
                 "summary": warm,
                 "runs": [{"gpu_backend_active": valid, "fallback_reason": "" if valid else "CPU"}],
             },
-            "cold_gpu": {"total_detector_ms": 15000.0},
+            "cold_gpu": {
+                "total_detector_ms": 15000.0,
+                "pipeline_before_reporting_ms": 17000.0,
+                "pipeline_end_to_end_ms": 17300.0,
+            },
         }
 
     def test_native_timings_accumulate_all_rois_and_peak_memory(self):
@@ -147,6 +159,8 @@ class Detector401ProfilingTests(unittest.TestCase):
         self.assertEqual(analysis["target"], "miss")
         self.assertAlmostEqual(analysis["speedup"], 3300.0 / 14000.0)
         self.assertGreater(analysis["metrics"]["morphology_share"], 0.6)
+        self.assertEqual(analysis["scopes_ms"]["gpu_warm_pipeline_end_to_end"], 14900.0)
+        self.assertEqual(analysis["scopes_ms"]["gpu_warm_non_detector_overhead"], 900.0)
         recommendations = " ".join(analysis["recommendations"])
         self.assertIn("ROI batch", recommendations)
         self.assertIn("synchronize", recommendations)
@@ -155,6 +169,7 @@ class Detector401ProfilingTests(unittest.TestCase):
         self.assertIn("GPU 相對 CPU：慢", rendered)
         self.assertIn("未達最低目標", rendered)
         self.assertIn("不可再相加", rendered)
+        self.assertIn("計時口徑（請勿混用）", rendered)
 
     def test_profile_analyzer_rejects_fallback_evidence(self):
         analysis = analyze_report(self._analysis_report(valid=False))

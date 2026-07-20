@@ -26,7 +26,9 @@ NUMERIC_FIELDS = (
     "morphology_erode_ms", "morphology_dilate_ms", "morphology_total_ms",
     "grayscale_ms", "adaptive_mean_ms", "d2h_ms", "cuda_synchronize_ms",
     "cpu_find_contours_ms", "detector_postprocess_ms", "total_gpu_pipeline_ms",
-    "total_detector_ms", "roi_count", "kernel_launch_count", "peak_vram_bytes",
+    "total_detector_ms", "pipeline_before_reporting_ms", "reporting_ms",
+    "pipeline_end_to_end_ms", "profile_host_wall_ms", "roi_count",
+    "kernel_launch_count", "peak_vram_bytes",
 )
 
 
@@ -125,6 +127,10 @@ def _run_metrics(result: dict, previous_gpu: dict | None = None) -> tuple[dict, 
         "detector_postprocess_ms": float(detector_stages.get("geometry_analysis", 0.0)) * 1000.0,
         "total_gpu_pipeline_ms": float(detector_stages.get("preprocess", 0.0)) * 1000.0,
         "total_detector_ms": float(detectors.get("401", 0.0)) * 1000.0,
+        "pipeline_before_reporting_ms": float(result.get("duration_sec", 0.0)) * 1000.0,
+        "reporting_ms": float(stages.get("reporting_total", 0.0)) * 1000.0,
+        "pipeline_end_to_end_ms": float(pipeline.get("end_to_end_sec", 0.0)) * 1000.0,
+        "profile_host_wall_ms": float(result.get("profile_host_wall_ms", 0.0)),
         "roi_count": len(result.get("tiles", [])),
         "kernel_launch_count": launches,
         "fallback_reason": str(detector_status.get("fallback_reason", "")),

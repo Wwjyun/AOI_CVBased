@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.logging_system import LogMixin, configure_logging
+from core.gpu_session import GpuExecutionSessionCache
 from core.recipe_manager import RecipeError, RecipeManager
 from gui import theme
 from gui.preferences import GuiPreferences
@@ -154,7 +155,7 @@ class MainWindow(QMainWindow, LogMixin):
 
         self._defects: list[dict] = []
         self._current_image = None
-        self._run_started_at: datetime.datetime | None = None
+        self._run_started_at: float | None = None
         self._batch_started_at: datetime.datetime | None = None
 
         self._preview_thread: QThread | None = None
@@ -163,6 +164,7 @@ class MainWindow(QMainWindow, LogMixin):
         self._preview_started_at: float | None = None
         self._inspection_thread: QThread | None = None
         self._inspection_worker: InspectionWorker | None = None
+        self._inspection_gpu_sessions = GpuExecutionSessionCache(workload="latency")
         self._batch_thread: QThread | None = None
         self._batch_worker: BatchInspectionWorker | None = None
         self._monitor_thread: QThread | None = None
@@ -834,7 +836,7 @@ class MainWindow(QMainWindow, LogMixin):
             return
 
         self._set_inspection_running(True)
-        self._run_started_at = datetime.datetime.now()
+        self._run_started_at = time.perf_counter()
         self.statusBar().showMessage("檢測執行中...")
         self._inspection_thread = QThread(self)
         self._inspection_worker = InspectionWorker(
@@ -842,6 +844,7 @@ class MainWindow(QMainWindow, LogMixin):
             recipe_path=self.recipe_path,
             output_dir=Path(self.output_dir or "outputs"),
             output_overrides=dict(self.output_opts),
+            gpu_session_cache=self._inspection_gpu_sessions,
         )
         self._inspection_worker.moveToThread(self._inspection_thread)
         self._inspection_thread.started.connect(self._inspection_worker.run)
@@ -872,10 +875,14 @@ class MainWindow(QMainWindow, LogMixin):
         self.run_screen.image_viewer.set_defects(viewer_overlays)
         self.run_screen.image_viewer.set_selected_defect(None)
 
-        duration = _format_duration(result.get("duration_sec"))
-        if not duration and self._run_started_at is not None:
-            elapsed = (datetime.datetime.now() - self._run_started_at).total_seconds()
-            duration = f"{elapsed:.1f}s"
+        user_wait_sec = None
+        if self._run_started_at is not None:
+            user_wait_sec = max(0.0, time.perf_counter() - self._run_started_at)
+            performance = result.setdefault("execution", {}).setdefault("performance", {})
+            performance["gui_user_wait_sec"] = user_wait_sec
+        duration = _format_duration(user_wait_sec)
+        if not duration:
+            duration = _format_duration(result.get("duration_sec"))
 
         self.run_screen.run_control_panel.show_result(result, duration)
         self.results_screen.set_result(result, self._current_image, duration)
@@ -907,6 +914,7 @@ class MainWindow(QMainWindow, LogMixin):
         self._set_inspection_running(False)
         self._inspection_thread = None
         self._inspection_worker = None
+        self._run_started_at = None
         self._update_run_ready()
         self.run_screen.run_control_panel.set_progress(False, self.result is not None, 0, "")
         self.run_screen.op_panel.set_state(self._is_ready(), False, 0, "", self.result)
@@ -994,6 +1002,7 @@ class MainWindow(QMainWindow, LogMixin):
         if not self._confirm_discard_designer_changes():
             event.ignore()
             return
+        self._inspection_gpu_sessions.close()
         self._save_preferences()
         super().closeEvent(event)
 

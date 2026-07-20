@@ -11,7 +11,7 @@ import numpy as np
 
 from core.batch_processor import BatchImageResult, BatchInspectionProcessor
 from core.gpu_runtime import GpuResidentImage, GpuRuntimeError
-from core.gpu_session import GpuExecutionSession
+from core.gpu_session import GpuExecutionSession, GpuExecutionSessionCache
 from core.monitor_processor import FolderMonitorProcessor
 from core.pipeline import AOIPipeline
 
@@ -82,6 +82,43 @@ class _RoiCapturingDetector:
 
 
 class GpuExecutionSessionTests(unittest.TestCase):
+    def test_gui_session_cache_reuses_unchanged_recipe_and_invalidates_changed_recipe(self):
+        first_session = Mock()
+        second_session = Mock()
+        with tempfile.TemporaryDirectory(prefix="visionflow_gui_session_") as temporary:
+            recipe_path = Path(temporary) / "recipe.yaml"
+            recipe_path.write_text("name: first\n", encoding="utf-8")
+            cache = GpuExecutionSessionCache()
+            with patch.object(
+                GpuExecutionSession,
+                "from_recipe_path",
+                side_effect=[first_session, second_session],
+            ) as factory:
+                self.assertIs(cache.session_for(recipe_path), first_session)
+                self.assertIs(cache.session_for(recipe_path), first_session)
+                recipe_path.write_text("name: second-and-longer\n", encoding="utf-8")
+                self.assertIs(cache.session_for(recipe_path), second_session)
+                cache.close()
+
+        self.assertEqual(factory.call_count, 2)
+        first_session.close.assert_called_once_with()
+        second_session.close.assert_called_once_with()
+
+    def test_gui_session_cache_explicit_invalidation_closes_once(self):
+        fake_session = Mock()
+        with tempfile.TemporaryDirectory(prefix="visionflow_gui_session_close_") as temporary:
+            recipe_path = Path(temporary) / "recipe.yaml"
+            recipe_path.write_text("name: recipe\n", encoding="utf-8")
+            cache = GpuExecutionSessionCache()
+            with patch.object(
+                GpuExecutionSession, "from_recipe_path", return_value=fake_session
+            ):
+                cache.session_for(recipe_path)
+                cache.invalidate()
+                cache.close()
+
+        fake_session.close.assert_called_once_with()
+
     def test_pipeline_uploads_grid_source_once_and_routes_device_rois_to_tiles(self):
         recipe_path = ROOT / "recipes" / "PRODUCT_A_NEGATIVE_401_AOI_01.yaml"
         recipe = deepcopy(AOIPipeline(recipe_path, ROOT / "outputs").recipe_manager.load(recipe_path))

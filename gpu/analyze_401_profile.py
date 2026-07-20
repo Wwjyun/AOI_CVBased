@@ -77,6 +77,14 @@ def analyze_report(report: dict) -> dict:
     gpu_total = _median(warm, "total_detector_ms")
     gpu_p95 = float(warm["total_detector_ms"].get("p95", gpu_total))
     cold_total = float(cold.get("total_detector_ms", 0.0))
+    cpu_pipeline = _optional_median(cpu, "pipeline_before_reporting_ms")
+    cpu_end_to_end = _optional_median(cpu, "pipeline_end_to_end_ms")
+    gpu_pipeline = _optional_median(warm, "pipeline_before_reporting_ms")
+    gpu_reporting = _optional_median(warm, "reporting_ms")
+    gpu_end_to_end = _optional_median(warm, "pipeline_end_to_end_ms")
+    gpu_profile_wall = _optional_median(warm, "profile_host_wall_ms")
+    cold_pipeline = float(cold.get("pipeline_before_reporting_ms", 0.0))
+    cold_end_to_end = float(cold.get("pipeline_end_to_end_ms", 0.0))
     preprocess = _median(warm, "total_gpu_pipeline_ms")
     morphology = _optional_median(warm, "morphology_total_ms") or 0.0
     gaussian = _optional_median(warm, "gaussian_ms") or 0.0
@@ -104,6 +112,14 @@ def analyze_report(report: dict) -> dict:
     cpu_tail_share = _ratio(contours + postprocess, gpu_total)
     preprocess_share = _ratio(preprocess, gpu_total)
     launches_per_roi = launches / roi_count if roi_count > 0 else 0.0
+    non_detector_overhead = (
+        max(0.0, gpu_end_to_end - gpu_total)
+        if gpu_end_to_end is not None else None
+    )
+    non_detector_share = (
+        _ratio(non_detector_overhead, gpu_end_to_end)
+        if non_detector_overhead is not None and gpu_end_to_end is not None else None
+    )
 
     if gpu_total < TARGET_IDEAL_MS:
         target = "ideal"
@@ -164,6 +180,15 @@ def analyze_report(report: dict) -> dict:
         evidence.append(f"GPU P95/median={stability_ratio:.2f}，執行時間抖動明顯。")
         recommendations.append("在相同溫度/功耗條件下檢查同步、配置、GC 與其他 GPU 工作負載。")
 
+    if non_detector_share is not None and non_detector_share >= 0.30:
+        evidence.append(
+            f"Non-detector pipeline overhead is {_ms(non_detector_overhead)} "
+            f"({_percent(non_detector_share)} of end-to-end)."
+        )
+        recommendations.append(
+            "Separate GUI user-wait, pipeline-before-reporting, reporting, and detector timings before optimizing CUDA kernels."
+        )
+
     if not evidence:
         evidence.append("現有分項沒有單一階段超過預設判定門檻，需要用 Nsight Systems/CUDA events 深入分析。")
     if not recommendations:
@@ -176,10 +201,25 @@ def analyze_report(report: dict) -> dict:
         "failed_checks": failed_checks,
         "inactive_or_fallback_warm_runs": inactive_rows,
         "target": target,
+        "target_scope": "total_detector_ms",
         "cpu_total_ms": cpu_total,
         "gpu_warm_median_ms": gpu_total,
         "gpu_warm_p95_ms": gpu_p95,
         "gpu_cold_ms": cold_total,
+        "scopes_ms": {
+            "cpu_detector": cpu_total,
+            "cpu_pipeline_before_reporting": cpu_pipeline,
+            "cpu_pipeline_end_to_end": cpu_end_to_end,
+            "gpu_cold_detector": cold_total,
+            "gpu_cold_pipeline_before_reporting": cold_pipeline,
+            "gpu_cold_pipeline_end_to_end": cold_end_to_end,
+            "gpu_warm_detector": gpu_total,
+            "gpu_warm_pipeline_before_reporting": gpu_pipeline,
+            "gpu_warm_reporting": gpu_reporting,
+            "gpu_warm_pipeline_end_to_end": gpu_end_to_end,
+            "gpu_warm_profile_host_wall": gpu_profile_wall,
+            "gpu_warm_non_detector_overhead": non_detector_overhead,
+        },
         "speedup": speedup,
         "stability_ratio": stability_ratio,
         "metrics": {
@@ -235,7 +275,24 @@ def render_analysis(analysis: dict) -> str:
         "minimum": "達成最低目標（< 3300 ms），尚未達理想目標",
         "miss": "未達最低目標（>= 3300 ms）",
     }[analysis["target"]]
-    lines.append("效能門檻：" + target_text)
+    lines.append("效能門檻（detector-only）：" + target_text)
+
+    scopes = analysis.get("scopes_ms", {})
+    lines.extend((
+        "",
+        "--- 計時口徑（請勿混用）---",
+        f"CPU detector：                 {_ms(scopes.get('cpu_detector'))}",
+        f"CPU pipeline before reporting：{_ms(scopes.get('cpu_pipeline_before_reporting'))}",
+        f"CPU pipeline end-to-end：       {_ms(scopes.get('cpu_pipeline_end_to_end'))}",
+        f"GPU cold detector：             {_ms(scopes.get('gpu_cold_detector'))}",
+        f"GPU cold pipeline end-to-end：  {_ms(scopes.get('gpu_cold_pipeline_end_to_end'))}",
+        f"GPU warm detector：             {_ms(scopes.get('gpu_warm_detector'))}",
+        f"GPU warm pipeline before report：{_ms(scopes.get('gpu_warm_pipeline_before_reporting'))}",
+        f"GPU warm reporting：            {_ms(scopes.get('gpu_warm_reporting'))}",
+        f"GPU warm pipeline end-to-end：  {_ms(scopes.get('gpu_warm_pipeline_end_to_end'))}",
+        f"GPU warm profiler wall：        {_ms(scopes.get('gpu_warm_profile_host_wall'))}",
+        f"GPU warm 非 detector 額外耗時：{_ms(scopes.get('gpu_warm_non_detector_overhead'))}",
+    ))
 
     metrics = analysis["metrics"]
     lines.extend((

@@ -122,6 +122,19 @@
 
 ## P4：Tiling、ROI、Batch 與跨圖片重用
 
+### Detector 401 GPU 效能執行順序（2026-07-20）
+
+- [x] 建立 Template Anchor Grid 專用 profiler 與離線分析器，分離 detector、pipeline、CUDA events、CPU contours、fallback 與座標/PASS-NG gate；目前 RTX 回報 CPU detector median 約 1205 ms、GPU warm median 約 1400 ms（GPU 慢約 1.18x），GUI 約 3 秒因量測範圍與 cold session 不同，尚不能據此指定 kernel 瓶頸。
+- [x] GUI 單張檢測跨相同 recipe 重用 `GpuExecutionSession`；首次 cold、後續 warm，recipe 路徑/mtime/size（涵蓋已儲存的 GPU 設定）改變時安全失效，關閉視窗時釋放 context，不跨執行共用 resident image generation；cache reuse/invalidation/close 測試已通過。
+- [x] GUI 顯示實際使用者等待時間，並保留現有 `duration_sec` schema；profiler 同時輸出 detector-only、pipeline-before-report、reporting、end-to-end 與外層 wall time，避免把 401 1.4 秒和 GUI 3 秒直接比較。
+- [x] 離線分析器新增「計時口徑（請勿混用）」與 `scopes_ms`，比較 CPU/GPU detector、cold/warm pipeline、reporting、end-to-end 與非 detector overhead；重疊 CUDA events 仍只作瓶頸占比，不相加為總時間。
+- [ ] 在 RTX 3090 以相同 image/recipe 重新執行 cold 1 次、warm 10 次與 GUI 連續 10 次；確認第二次以後 context/allocation 接近 0、GPU active、無 fallback、ROI/PASS-NG 完全一致，再決定下列分支。
+- [ ] 若 launch/synchronize/ROI gather/D2H 為主：實作 detector-neutral `execute_plan_roi_batch` optional ABI，resident image 唯讀共享、一次提交一批 ROI、一次同步及批次 masks 下載；測 batch size 1/4/8/16/32/全部。
+- [ ] 若 Morphology 為主：先以等價測試驗證 5x5 open iterations=10，再比較 separable/shared-memory 與合併有效 kernel 演算法；不得減少 iterations 或改變 border/channel/order。
+- [ ] Batch 單 stream 仍無法達標時才建立 2/4 execution slots；每 slot 獨立 stream/scratch/events/pinned output，縮小 Python lock 至 metadata/context lifecycle，不接受仍被全域 lock 序列化的 worker 數字。
+- [ ] 以相同 ROI/輸入/輸出條件比較 OpenCV CPU、自製 CUDA、OpenCV CUDA/hybrid；Gray-first 僅作 feature-flag 實驗，golden mask/PASS-NG 不等價時不得採用。
+- [ ] 最終 RTX 驗收：GPU warm median < 3.3 秒、目標 < 2 秒；ROI 座標與 PASS/NG 100% 相同、binary agreement >= 99.99%、無 silent fallback，完成 batch/stream/VRAM/100 次一致性/error/leak 報告後才調整 production backend。
+
 - [x] 偵測重複 GPU crop round trips，記錄傳輸量並輸出負優化警告。
 - [x] production/benchmark 在 device tiling 改善前預設關閉 GPU crop。
 - [x] 原圖一次 upload，以 device offset/view 表示 grid ROI，不再每 tile 上傳完整原圖。
@@ -312,3 +325,4 @@
 - [x] 2026-07-18：完成 P6 GUI 操作改善：統一全域／步驟／短事件狀態層級、加入實際 backend chip 與 inline notice、Results NG 鍵盤導覽及 bbox 聚焦、Recipe dirty／validation、QSettings 工作環境回復、Batch／Monitor model-view 篩選與 deterministic scatter sampling，並同步繁中、可及性、README、AGENT 與 6 項 GUI 工作流程測試。實跑 125 tests、compileall、CUDA preflight、CLI PASS smoke、GUI offscreen smoke及 `git diff --check` 均通過。
 - [x] 2026-07-20：新增 Detector 401 Template Anchor Grid 專用 profiling harness；分離 template match/ROI generation，opt-in 累計整張圖所有 ROI 的 native CUDA events、kernel launches 與 peak persistent working set，輸出 CPU 10 次、cold GPU、warm GPU 10 次及 mean/median/P95/min/max，strict CUDA 禁止 silent fallback。已完成 CPU/fake-DLL/source 測試；目前機器無 `nvidia-smi`、`nvcc`、CUDA device，且未提供本次真實影像與 anchor-grid recipe，因此 RTX 3090 baseline、瓶頸結論與 kernel/架構優化仍保持未完成。
 - [x] 2026-07-20：新增 `analyze_401_profile.py` 離線判讀器；無須上傳 production JSON 即可驗證座標/PASS-NG/fallback gate，比較 CPU、GPU cold/warm median/P95 與 2/3.3 秒門檻，依 launch/ROI、同步、Morphology、D2H、resident gather、Adaptive Mean、Gaussian、CPU contours、warm allocation 輸出證據與優化優先序，並明確避免把重疊 CUDA events 相加。規則已用有效、fallback、錯誤 schema 合成報告測試；實際瓶頸結論仍待 RTX 3090 profiler JSON。
+- [x] 2026-07-20：依 Detector 401 profiling 執行順序完成 GUI 單張 `GpuExecutionSession` cache；相同 Recipe 後續執行重用 context，Recipe path/mtime/size 改變時失效，視窗關閉時釋放，resident image 仍逐次建立。GUI 顯示 user-wait，profiler/analyzer 分列 detector、pipeline-before-report、reporting、end-to-end、outer wall 與 non-detector overhead。專案虛擬環境完整 137 tests、compileall、CUDA source preflight、CLI synthetic smoke、GUI offscreen smoke 與 diff check 通過；本機仍無 `nvidia-smi`、`nvcc`、MSVC `cl`，下一步 RTX cold/warm/GUI 10 次實測保持未完成。
