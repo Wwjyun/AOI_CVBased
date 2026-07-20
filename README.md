@@ -569,6 +569,16 @@ detectors:
 
 JSON 會輸出整張圖所有 ROI 的 template match、ROI generation、context/allocation、H2D、resident ROI D2D gather、Gaussian、Morphology total、Gray、Adaptive Mean、D2H、synchronize、CPU findContours、後處理、detector total、ROI/launch 數、peak context working set、backend/fallback 狀態，以及 mean/median/P95/min/max。ABI v1 尚未拆出 erosion/dilation 各自的 CUDA event，因此兩欄明確為 `null`，不以理論比例估算；正式優化前應先用這份報告確認實際瓶頸。
 
+若 profiler JSON 不方便傳出，可在同一台電腦直接執行離線分析器。它會先檢查 ROI、PASS/NG、GPU active 與 silent fallback，再輸出 CPU/GPU 比較、效能門檻、各階段占比、證據式瓶頸及建議優化順序：
+
+```powershell
+.\env\Scripts\python.exe .\gpu\analyze_401_profile.py `
+  .\outputs_validation\401_profile_baseline.json `
+  --output .\outputs_validation\401_profile_analysis.txt
+```
+
+終端會直接顯示完整繁中判讀，並另存 `401_profile_analysis.txt`。資料有效時 exit code 為 `0`；任何座標/PASS-NG/fallback gate 失敗時仍會輸出原因，但 exit code 為 `2`，不可用該次報告進行效能決策。若另需機器可讀結果，可加上 `--json-output .\outputs_validation\401_profile_analysis.json`。
+
 CUDA 詳細架構及操作請參考 [`gpu/README.md`](gpu/README.md)，完整實機驗收矩陣請參考 [`Todo.md`](Todo.md)。
 
 ## 獨立匯出工具
