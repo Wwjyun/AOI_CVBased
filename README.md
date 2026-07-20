@@ -556,6 +556,19 @@ detectors:
   -Recipe .\recipes\PRODUCT_A_AOI_01.yaml
 ```
 
+針對 Detector 401 的 Template Anchor Grid 整張圖效能，可使用專用 profiler。它會保留原 Recipe 的 template match、offset、rows/cols、gap 與 ROI 尺寸，只啟用 401，分別執行 10 次 CPU、1 次 cold GPU 與 10 次共用 context/plan/buffer 的 warm GPU；CUDA 使用 strict mode，任何 fallback 都會使命令失敗：
+
+```powershell
+.\env\Scripts\python.exe .\gpu\profile_401_pipeline.py `
+  --image C:\AOI_TEST\negative.png `
+  --recipe C:\AOI_TEST\negative_anchor_grid.yaml `
+  --dll .\gpu\visionflow_cuda.dll `
+  --runs 10 `
+  --output .\outputs_validation\401_profile_baseline.json
+```
+
+JSON 會輸出整張圖所有 ROI 的 template match、ROI generation、context/allocation、H2D、resident ROI D2D gather、Gaussian、Morphology total、Gray、Adaptive Mean、D2H、synchronize、CPU findContours、後處理、detector total、ROI/launch 數、peak context working set、backend/fallback 狀態，以及 mean/median/P95/min/max。ABI v1 尚未拆出 erosion/dilation 各自的 CUDA event，因此兩欄明確為 `null`，不以理論比例估算；正式優化前應先用這份報告確認實際瓶頸。
+
 CUDA 詳細架構及操作請參考 [`gpu/README.md`](gpu/README.md)，完整實機驗收矩陣請參考 [`Todo.md`](Todo.md)。
 
 ## 獨立匯出工具

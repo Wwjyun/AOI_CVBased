@@ -128,6 +128,13 @@ class AOIPipeline(LogMixin):
 
         with profiler.measure("tiling"):
             tiles = list(tiler.iter_tiles(image))
+        tiler_profile = getattr(tiler, "last_profile_ms", {})
+        profiler.add_duration(
+            "template_match", float(tiler_profile.get("template_match_ms", 0.0)) / 1000.0
+        )
+        profiler.add_duration(
+            "roi_generation", float(tiler_profile.get("roi_generation_ms", 0.0)) / 1000.0
+        )
         tiling_gpu_metrics = gpu_runtime.performance_stats()
         crop_metrics = tiling_gpu_metrics.get("functions", {}).get("vf_crop_u8", {})
         if tiling_gpu_requested and crop_metrics.get("calls", 0) > 1:

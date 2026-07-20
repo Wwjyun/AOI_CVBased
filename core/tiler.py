@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import time
 from typing import Iterator
 
 import cv2
@@ -437,6 +438,7 @@ class Tiler:
         self.image_loader = ImageLoader()
         self.gpu_runtime = gpu_runtime
         self.resident_image = resident_image
+        self.last_profile_ms = {"template_match_ms": 0.0, "roi_generation_ms": 0.0}
 
     @classmethod
     def from_config(cls, config: dict, gpu_runtime=None, resident_image=None) -> "Tiler":
@@ -458,6 +460,7 @@ class Tiler:
             yield from self._iter_anchor_grid_tiles(image)
             return
 
+        generation_started = time.perf_counter()
         image_height, image_width = image.shape[:2]
         y_positions = self._positions(image_height, self.height, self.step_y)
         x_positions = self._positions(image_width, self.width, self.step_x)
@@ -482,6 +485,10 @@ class Tiler:
                         if self.resident_image is not None else None
                     ),
                 )
+        self.last_profile_ms = {
+            "template_match_ms": 0.0,
+            "roi_generation_ms": (time.perf_counter() - generation_started) * 1000.0,
+        }
 
     def _iter_anchor_grid_tiles(self, image) -> Iterator[Tile]:
         config = self.anchor_config
@@ -495,49 +502,60 @@ class Tiler:
             raise ValueError("Grid gaps cannot be negative.")
 
         image_height, image_width = image.shape[:2]
+        match_started = time.perf_counter()
         anchor = self._find_grid_anchor(image, config)
+        template_match_ms = (time.perf_counter() - match_started) * 1000.0
         base_x = anchor["x"] + config.offset_x
         base_y = anchor["y"] + config.offset_y
 
-        for row in range(config.rows):
-            for col in range(config.cols):
-                x = int(base_x + col * (config.roi_w + config.gap_x))
-                y = int(base_y + row * (config.roi_h + config.gap_y))
-                x1 = max(0, x)
-                y1 = max(0, y)
-                x2 = min(image_width, x + config.roi_w)
-                y2 = min(image_height, y + config.roi_h)
-                if x2 <= x1 or y2 <= y1:
-                    continue
-                tile_image = _crop_image(image, x1, y1, x2, y2, self.gpu_runtime)
-                yield Tile(
-                    tile_id=f"r{row:04d}_c{col:04d}",
-                    x=x1,
-                    y=y1,
-                    width=x2 - x1,
-                    height=y2 - y1,
-                    row=row,
-                    col=col,
-                    image=tile_image,
-                    device_roi=(
-                        self.resident_image.roi(x1, y1, x2 - x1, y2 - y1)
-                        if self.resident_image is not None else None
-                    ),
-                    metadata={
-                        "mode": "grid",
-                        "grid_anchor": "template_match",
-                        "search_roi": anchor["search_roi"],
-                        "match_bbox": [anchor["x"], anchor["y"], anchor["width"], anchor["height"]],
-                        "score": float(anchor["score"]),
-                        "base_roi": [
-                            int(base_x),
-                            int(base_y),
-                            int(config.cols * config.roi_w + max(0, config.cols - 1) * config.gap_x),
-                            int(config.rows * config.roi_h + max(0, config.rows - 1) * config.gap_y),
-                        ],
-                        "template_path": config.template_path,
-                    },
-                )
+        generation_started = time.perf_counter()
+        try:
+            for row in range(config.rows):
+                for col in range(config.cols):
+                    x = int(base_x + col * (config.roi_w + config.gap_x))
+                    y = int(base_y + row * (config.roi_h + config.gap_y))
+                    x1 = max(0, x)
+                    y1 = max(0, y)
+                    x2 = min(image_width, x + config.roi_w)
+                    y2 = min(image_height, y + config.roi_h)
+                    if x2 <= x1 or y2 <= y1:
+                        continue
+                    tile_image = _crop_image(image, x1, y1, x2, y2, self.gpu_runtime)
+                    yield Tile(
+                        tile_id=f"r{row:04d}_c{col:04d}",
+                        x=x1,
+                        y=y1,
+                        width=x2 - x1,
+                        height=y2 - y1,
+                        row=row,
+                        col=col,
+                        image=tile_image,
+                        device_roi=(
+                            self.resident_image.roi(x1, y1, x2 - x1, y2 - y1)
+                            if self.resident_image is not None else None
+                        ),
+                        metadata={
+                            "mode": "grid",
+                            "grid_anchor": "template_match",
+                            "search_roi": anchor["search_roi"],
+                            "match_bbox": [
+                                anchor["x"], anchor["y"], anchor["width"], anchor["height"]
+                            ],
+                            "score": float(anchor["score"]),
+                            "base_roi": [
+                                int(base_x),
+                                int(base_y),
+                                int(config.cols * config.roi_w + max(0, config.cols - 1) * config.gap_x),
+                                int(config.rows * config.roi_h + max(0, config.rows - 1) * config.gap_y),
+                            ],
+                            "template_path": config.template_path,
+                        },
+                    )
+        finally:
+            self.last_profile_ms = {
+                "template_match_ms": template_match_ms,
+                "roi_generation_ms": (time.perf_counter() - generation_started) * 1000.0,
+            }
 
     def _find_grid_anchor(self, image, config: GridAnchorConfig) -> dict:
         template_path = config.template_path.strip()

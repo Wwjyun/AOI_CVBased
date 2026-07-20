@@ -124,6 +124,7 @@ class GpuRuntime:
         self.native_dag_plan_unavailable_reason = ""
         self._performance_recorder = GpuPerformanceRecorder()
         self._performance = self._performance_recorder.values
+        self._capture_native_cumulative = False
         if enabled:
             self._load()
             self._performance["load_sec"] = time.perf_counter() - load_started
@@ -370,6 +371,8 @@ class GpuRuntime:
                 "vf_context_upload_u8", int(source.nbytes), 0,
                 completed - lock_acquired, lock_acquired - queued,
             )
+            if result == 0 and self._capture_native_cumulative:
+                self._record_native_performance_unlocked()
         if result != 0 or generation.value == 0:
             raise GpuRuntimeError(
                 f"vf_context_upload_u8 failed with CUDA DLL error {result}: {self._error_message(result)}"
@@ -610,6 +613,10 @@ class GpuRuntime:
                 completed - lock_acquired,
                 lock_acquired - queued,
             )
+            if result == 0 and self._capture_native_cumulative:
+                self._record_native_performance_unlocked(
+                    kernel_launch_count=self._plan_kernel_launch_count(plan, src_channels)
+                )
         if result != 0:
             raise GpuRuntimeError(
                 f"{function_name} failed with CUDA DLL error {result}: {self._error_message(result)}"
@@ -1104,6 +1111,43 @@ class GpuRuntime:
             for name, _ctype in _VfCudaTimingsV1._fields_
             if name not in {"struct_size", "version"}
         }
+
+    def _record_native_performance_unlocked(self, kernel_launch_count: int = 0) -> None:
+        timings = self._native_timings_unlocked()
+        context_stats = self._context_stats_unlocked()
+        self._performance_recorder.record_native(
+            timings,
+            kernel_launch_count=kernel_launch_count,
+            reserved_bytes=int(context_stats.get("reserved_bytes") or 0),
+        )
+
+    def enable_cumulative_profiling(self, enabled: bool = True) -> None:
+        """Opt in to per-plan native event aggregation used by the 401 profiler."""
+        with self._lock:
+            self._capture_native_cumulative = bool(enabled)
+
+    @staticmethod
+    def _plan_kernel_launch_count(plan, input_channels: int) -> int:
+        """Return launches implied by the current native-plan implementation."""
+        launches = 0
+        channels = int(input_channels)
+        for operator in plan.operations:
+            name = type(operator).__name__
+            if name == "Gray":
+                if channels == 3:
+                    launches += 1
+                    channels = 1
+            elif name == "Gaussian":
+                launches += 2
+            elif name in {"Threshold", "Resize"}:
+                launches += 1
+            elif name == "AdaptiveMean":
+                launches += 5
+            elif name == "Morphology":
+                operation = str(operator.operation).lower()
+                iterations = max(0, int(operator.iterations))
+                launches += iterations * (2 if operation in {"open", "close"} else 1)
+        return launches
 
     def _call_image(self, function_name: str, source: np.ndarray, output: np.ndarray, *extra) -> None:
         if not self.available:
