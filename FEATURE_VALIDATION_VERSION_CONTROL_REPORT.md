@@ -1,7 +1,9 @@
 # VisionFlow AOI 功能、驗證與版本控制報告
 
-> 報告日期：2026-07-21  
-> 專案版本基準：Git `main` 分支，commit `05c89d6`  
+> 報告日期：2026-07-21
+>
+> 專案版本基準：Git `main` 分支，commit `05c89d6`
+>
 > 專案定位：以 Python、OpenCV、PySide6 與可選 CUDA DLL 建置的配方驅動 AOI（自動光學檢測）系統
 
 ## 一、專案摘要
