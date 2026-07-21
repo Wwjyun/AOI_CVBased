@@ -332,3 +332,4 @@
 - [x] 2026-07-21：依操作確認將 401-2 恢復為既有逐 contour 白像素比例定義；同步恢復 `contour_mode`、`min_area`、`max_area`、輪廓 bbox／area／metadata、recipe 0.1.0、CPU/CUDA 共用後處理說明與原始回歸測試。此回復會重新允許單一 tile 產生多筆 contour defects。
 - [x] 2026-07-21：修正新版 generic native plan 在 401-1 預設 `morph_operation: none` 時誤報不支援；Python runtime 現在會在建立 native descriptor 前略過 `none`、零 iterations 與 1x1 kernel 等 morphology no-op，並重新編排線性節點，維持 CPU／primitive 語意且不需重編 CUDA DLL。完整 142 tests、compileall、CUDA source preflight、401-1 CLI PASS smoke、GUI offscreen smoke與 `git diff --check` 均通過；本機無 `nvidia-smi`、`nvcc`、MSVC `cl`，RTX 實機仍待使用者環境確認。
 - [x] 2026-07-21：使用者於具 NVIDIA GPU 的實機確認 GPU 模式與 CPU 模式皆可正常執行；本次觀察兩者整體耗時相差無幾，尚未呈現明顯 GPU 加速。因未提供固定測試集、重複次數、median／P95 與完整硬體／環境數據，可信的 CPU／GPU benchmark 與至少 1.5 倍效能門檻仍維持未完成。
+- [x] 2026-07-21：新增 `FEATURE_VALIDATION_VERSION_CONTROL_REPORT.md` 報告稿，依目前 codebase 與驗證證據整理專案架構、各功能、四種 Detector、GUI、輸出追溯、CPU／GPU／fallback、142 項測試、CI、打包、Git 版本控制、實機結果、限制及後續規劃；未將 GPU 可執行誤列為已達效能門檻。
