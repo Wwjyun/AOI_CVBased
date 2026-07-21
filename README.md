@@ -375,9 +375,11 @@ tile:
 ### `401-2`：自適應白像素比例檢測
 
 - 檔案：`detectors/detector_401_2.py`
-- 用途：計算輪廓範圍內的白像素比例，超過 `white_pixel_ratio_threshold` 時判定 NG。
-- 主要參數：`blur_size`、`adaptive_block_size`、`adaptive_c`、`roi_inset_px`、`min_area`、`max_area`、`white_pixel_ratio_threshold`。
-- 預設白像素比例門檻：`0.625`
+- 用途：每張 tile 經自適應二值化後，計算有效 ROI 內的整體白像素比例；達到或超過 `white_pixel_ratio_threshold` 時判定 NG。
+- 每張 tile 最多產生一筆缺陷，缺陷框涵蓋該 tile 的有效 ROI，不會把個別白點輪廓各自計為缺陷。
+- CPU 與 CUDA 共用相同的整體比例後處理；CUDA fused/native plan 負責產生 binary mask，下載後只執行一次整張 ROI 的白像素計數。
+- 主要參數：`blur_size`、`adaptive_block_size`、`adaptive_c`、`roi_inset_px`、`white_pixel_ratio_threshold`。
+- 預設白像素比例門檻：`0.625`，沿用既有的 `0～1` 比例定義，代表 `62.5%`；白像素比例 `>= 0.625` 為 NG，低於門檻為 PASS。
 - 缺陷類型：`401_2_white_pixel_ratio_ng`
 - 範例配方：`recipes/PRODUCT_A_WHITE_RATIO_401_2_AOI_01.yaml`
 
