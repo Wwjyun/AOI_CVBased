@@ -318,12 +318,13 @@ class Detector401PlanMigrationTests(unittest.TestCase):
         self.assertIn("injected 401 morphology failure", execution["fallback_reason"])
 
 
-class Detector4012TileWhiteRatioTests(unittest.TestCase):
-    def test_white_ratio_work_is_profiled(self):
+class Detector4012LocalContourMaskTests(unittest.TestCase):
+    def test_white_ratio_work_is_profiled_separately_from_geometry(self):
         detector = Detector401_2(params={
             "blur_size": 3,
             "adaptive_block_size": 3,
             "adaptive_c": 0.0,
+            "contour_mode": "external",
             "white_pixel_ratio_threshold": 0.0,
         })
         image = np.zeros((32, 32, 3), dtype=np.uint8)
@@ -333,49 +334,101 @@ class Detector4012TileWhiteRatioTests(unittest.TestCase):
 
         stages = result["execution"]["performance"]["stages_sec"]
         self.assertIn("white_ratio_analysis", stages)
+        self.assertIn("geometry_analysis", stages)
         self.assertGreaterEqual(stages["white_ratio_analysis"], 0.0)
+        self.assertGreaterEqual(stages["geometry_analysis"], 0.0)
 
-    def test_whole_tile_ratio_returns_at_most_one_defect(self):
-        binary = np.zeros((60, 76), dtype=np.uint8)
-        binary[:, :38] = 255
-        detector = Detector401_2(
-            params={"roi_inset_px": 2, "white_pixel_ratio_threshold": 0.5}
+    @staticmethod
+    def _full_roi_stats(binary, contour):
+        mask = np.zeros(binary.shape, dtype=np.uint8)
+        cv2.drawContours(mask, [contour], -1, 255, thickness=cv2.FILLED)
+        x, y, w, h = cv2.boundingRect(contour)
+        return (
+            x,
+            y,
+            w,
+            h,
+            int(np.count_nonzero((binary == 255) & (mask > 0))),
+            int(np.count_nonzero(mask)),
         )
 
-        with patch.object(detector, "_make_binary", return_value=binary):
+    def test_bbox_mask_statistics_match_full_roi_reference(self):
+        binary = np.random.default_rng(4012).choice(
+            np.array([0, 255], dtype=np.uint8), size=(80, 100)
+        )
+        contours = (
+            np.array([[[0, 0]], [[17, 0]], [[17, 13]], [[0, 13]]], dtype=np.int32),
+            np.array(
+                [[[22, 11]], [[54, 11]], [[54, 38]], [[39, 24]], [[22, 38]]],
+                dtype=np.int32,
+            ),
+            np.array([[[71, 52]], [[99, 61]], [[91, 79]], [[68, 70]]], dtype=np.int32),
+        )
+
+        for contour in contours:
+            with self.subTest(contour=contour.tolist()):
+                original = contour.copy()
+                expected = self._full_roi_stats(binary, contour)
+                actual = Detector401_2._contour_white_pixel_stats(binary, contour)
+                self.assertEqual(actual, expected)
+                np.testing.assert_array_equal(contour, original)
+
+    def test_mask_allocation_uses_contour_bbox_shape(self):
+        binary = np.zeros((120, 160), dtype=np.uint8)
+        contour = np.array(
+            [[[31, 42]], [[48, 42]], [[48, 53]], [[31, 53]]], dtype=np.int32
+        )
+        original_zeros = np.zeros
+
+        with patch("detectors.detector_401_2.np.zeros", wraps=original_zeros) as zeros_mock:
+            stats = Detector401_2._contour_white_pixel_stats(binary, contour)
+
+        self.assertEqual(stats[:4], (31, 42, 18, 12))
+        self.assertEqual(zeros_mock.call_count, 1)
+        self.assertEqual(zeros_mock.call_args.args[0], (12, 18))
+        self.assertNotEqual(zeros_mock.call_args.args[0], binary.shape)
+
+    def test_detect_preserves_ratio_order_and_offset_metadata(self):
+        binary = np.zeros((60, 76), dtype=np.uint8)
+        low_ratio = np.array(
+            [[[5, 7]], [[25, 7]], [[25, 27]], [[5, 27]]], dtype=np.int32
+        )
+        high_ratio = np.array(
+            [[[40, 30]], [[56, 30]], [[56, 46]], [[40, 46]]], dtype=np.int32
+        )
+        cv2.rectangle(binary, (40, 30), (56, 46), 255, thickness=cv2.FILLED)
+        cv2.rectangle(binary, (5, 7), (14, 27), 255, thickness=cv2.FILLED)
+        expected_high = self._full_roi_stats(binary, high_ratio)
+        expected_low = self._full_roi_stats(binary, low_ratio)
+        detector = Detector401_2(
+            params={"roi_inset_px": 2, "white_pixel_ratio_threshold": 0.0}
+        )
+
+        with (
+            patch.object(detector, "_make_binary", return_value=binary),
+            patch(
+                "detectors.detector_401_2.cv2.findContours",
+                return_value=([low_ratio, high_ratio], None),
+            ),
+        ):
             defects = detector.detect(np.zeros((64, 80), dtype=np.uint8))
 
-        self.assertEqual(len(defects), 1)
-        defect = defects[0]
-        self.assertEqual(defect["bbox_local"], [2, 2, 76, 60])
-        self.assertEqual(defect["area"], 4560.0)
-        self.assertEqual(defect["metadata"]["shape"], "tile_roi")
-        self.assertEqual(defect["metadata"]["white_pixel_count"], 2280)
-        self.assertEqual(defect["metadata"]["total_pixel_count"], 4560)
-        self.assertEqual(defect["metadata"]["white_pixel_ratio"], 0.5)
-        self.assertEqual(defect["metadata"]["roi_offset_local"], [2, 2])
-        self.assertEqual(defect["metadata"]["roi_size"], [76, 60])
-
-    def test_ratio_below_threshold_passes(self):
-        binary = np.zeros((20, 20), dtype=np.uint8)
-        binary[:10, :10] = 255
-        detector = Detector401_2(params={"white_pixel_ratio_threshold": 0.251})
-
-        with patch.object(detector, "_make_binary", return_value=binary):
-            defects = detector.detect(np.zeros((20, 20), dtype=np.uint8))
-
-        self.assertEqual(defects, [])
-
-    def test_many_disconnected_white_points_still_return_one_defect(self):
-        binary = np.zeros((128, 128), dtype=np.uint8)
-        binary[::2, ::2] = 255
-        detector = Detector401_2(params={"white_pixel_ratio_threshold": 0.2})
-
-        with patch.object(detector, "_make_binary", return_value=binary):
-            defects = detector.detect(np.zeros((128, 128), dtype=np.uint8))
-
-        self.assertEqual(len(defects), 1)
-        self.assertEqual(defects[0]["metadata"]["white_pixel_count"], 4096)
+        self.assertEqual(len(defects), 2)
+        self.assertGreater(
+            defects[0]["metadata"]["white_pixel_ratio"],
+            defects[1]["metadata"]["white_pixel_ratio"],
+        )
+        self.assertEqual(defects[0]["bbox_local"], [42, 32, 17, 17])
+        self.assertEqual(defects[1]["bbox_local"], [7, 9, 21, 21])
+        self.assertEqual(defects[0]["metadata"]["roi_offset_local"], [2, 2])
+        self.assertEqual(
+            defects[0]["metadata"]["white_pixel_count"], expected_high[4]
+        )
+        self.assertEqual(
+            defects[0]["metadata"]["contour_pixel_count"], expected_high[5]
+        )
+        self.assertEqual(defects[1]["metadata"]["white_pixel_count"], expected_low[4])
+        self.assertEqual(defects[1]["metadata"]["contour_pixel_count"], expected_low[5])
 
 
 class Detector900DagMigrationTests(unittest.TestCase):

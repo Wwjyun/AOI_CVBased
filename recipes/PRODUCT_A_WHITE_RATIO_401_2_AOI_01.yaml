@@ -1,7 +1,7 @@
 recipe_name: "PRODUCT_A_WHITE_RATIO_401_2_AOI_01"
 product_id: "PRODUCT_A"
 machine_id: "AOI_01"
-version: "0.2.0"
+version: "0.1.0"
 
 gpu:
   tiling: false
@@ -33,6 +33,9 @@ detectors:
       adaptive_block_size: 35
       adaptive_c: -2.0
       roi_inset_px: 0
+      contour_mode: "list"
+      min_area: 0
+      max_area: 0
       white_pixel_ratio_threshold: 0.625
 
 output:
