@@ -60,6 +60,12 @@ class StrictRecipeContractTests(unittest.TestCase):
         self.assertTrue(definition["param_spec"]["morph_kernel"]["odd"])
         self.assertFalse(definition["param_spec"]["morph_kernel"]["engineer_visible"])
 
+        ratio_definition = DetectorManager().definitions()["401-2"]
+        self.assertEqual(set(ratio_definition["param_spec"]), set(ratio_definition["default_params"]))
+        self.assertNotIn("contour_mode", ratio_definition["param_spec"])
+        self.assertNotIn("min_area", ratio_definition["param_spec"])
+        self.assertNotIn("max_area", ratio_definition["param_spec"])
+
 
 class ContinuousValidationContractTests(unittest.TestCase):
     def test_benchmark_gate_rejects_p95_regression_above_fifteen_percent(self):
@@ -195,7 +201,11 @@ class ProductionGoldenDefectTests(unittest.TestCase):
                 cv2.circle(image, (256, 256), 12, (0, 0, 0), -1)
             return image
         if detector_id == "401-2":
-            return np.zeros((512 if defect else 1, 512, 3), np.uint8)
+            if defect:
+                return np.zeros((512, 512, 3), np.uint8)
+            rows, cols = np.indices((512, 512))
+            checker = (((rows // 16) + (cols // 16)) % 2 * 255).astype(np.uint8)
+            return np.dstack((checker, checker, checker))
         image = np.zeros((1300, 1200, 3), np.uint8)
         if not defect:
             cv2.rectangle(image, (80, 40), (1112, 1250), (255, 255, 255), -1)
@@ -224,13 +234,14 @@ class ProductionGoldenDefectTests(unittest.TestCase):
         if detector_id == "401-2":
             gradient = np.tile(np.arange(256, dtype=np.uint8), (512, 2))
             gradient = np.dstack((gradient, gradient, gradient))
-            rectangle = np.zeros((512, 512, 3), np.uint8)
-            cv2.rectangle(rectangle, (200, 200), (260, 250), (255, 255, 255), -1)
+            rows, cols = np.indices((512, 512))
+            checker_16 = (((rows // 16) + (cols // 16)) % 2 * 255).astype(np.uint8)
+            checker_32 = (((rows // 32) + (cols // 32)) % 2 * 255).astype(np.uint8)
             return [
-                ("single_row_no_polygon", np.zeros((1, 512, 3), np.uint8), True),
+                ("checker_16_pass", np.dstack((checker_16, checker_16, checker_16)), True),
+                ("checker_32_pass", np.dstack((checker_32, checker_32, checker_32)), True),
                 ("uniform_black", np.zeros((512, 512, 3), np.uint8), False),
                 ("uniform_white", np.full((512, 512, 3), 255, np.uint8), False),
-                ("white_rectangle", rectangle, False),
                 ("gradient", gradient, False),
             ]
         correct = cls._frame_image(80, 40, 1033, 1211, 98, 63, 998, 1164)
