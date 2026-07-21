@@ -310,6 +310,14 @@ class _FusedRuntimeStub:
         return np.zeros(image.shape[:2], dtype=np.uint8)
 
 
+class _FusedWhitePointsRuntimeStub(_FusedRuntimeStub):
+    def preprocess_401_2(self, image, *_args):
+        self.calls += 1
+        binary = np.zeros(image.shape[:2], dtype=np.uint8)
+        binary[::2, ::2] = 255
+        return binary
+
+
 class _FailingFusedRuntimeStub:
     available = True
     supports_fused_401_2 = True
@@ -809,6 +817,26 @@ class DetectorFusedRoutingTests(unittest.TestCase):
         self.assertEqual(binary.shape, image.shape[:2])
         self.assertEqual(runtime.calls, 1)
         self.assertEqual(detector.last_preprocess_capability["route"], "fused")
+
+    def test_detector_401_2_fused_gpu_mask_uses_one_whole_tile_ratio_result(self):
+        runtime = _FusedWhitePointsRuntimeStub()
+        detector = Detector401_2(
+            use_gpu=True,
+            gpu_runtime=runtime,
+            params={"white_pixel_ratio_threshold": 0.2},
+        )
+
+        result = detector.run(np.zeros((128, 128, 3), dtype=np.uint8))
+
+        self.assertEqual(runtime.calls, 1)
+        self.assertTrue(result["execution"]["gpu_active"])
+        self.assertEqual(result["execution"]["preprocess_capability"]["route"], "fused")
+        self.assertEqual(len(result["defects"]), 1)
+        metadata = result["defects"][0]["metadata"]
+        self.assertEqual(metadata["shape"], "tile_roi")
+        self.assertEqual(metadata["white_pixel_count"], 4096)
+        self.assertEqual(metadata["total_pixel_count"], 16384)
+        self.assertEqual(metadata["white_pixel_ratio"], 0.25)
 
     def test_detector_401_2_fused_failure_restarts_entire_detector_on_cpu(self):
         detector = Detector401_2(
