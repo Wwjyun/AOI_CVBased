@@ -970,10 +970,16 @@ class GpuRuntime:
         morphology_operations = {"open": 0, "close": 1, "dilate": 2, "erode": 3}
         encoded = []
         previous_node = -1
-        for index, operator in enumerate(plan.operations):
+        for operator in plan.operations:
             name = type(operator).__name__
             if name not in kinds:
                 raise GpuRuntimeError(f"Generic native plan does not support {name}")
+            if name == "Morphology" and (
+                str(operator.operation).lower() in {"", "none"}
+                or int(operator.iterations) <= 0
+                or int(operator.kernel_size) <= 1
+            ):
+                continue
             int_params = [0, 0, 0, 0]
             float_params = [0.0, 0.0]
             if name == "Gaussian":
@@ -998,15 +1004,18 @@ class GpuRuntime:
                     int(operator.kernel_size),
                     int(operator.iterations),
                 ]
+            output_node = len(encoded)
             encoded.append(_VfPlanOperatorV1(
                 ctypes.sizeof(_VfPlanOperatorV1),
                 kinds[name],
                 previous_node,
-                index,
+                output_node,
                 (ctypes.c_int32 * 4)(*int_params),
                 (ctypes.c_float * 2)(*float_params),
             ))
-            previous_node = index
+            previous_node = output_node
+        if not encoded:
+            raise GpuRuntimeError("Generic native plan contains only no-op operators")
         array_type = _VfPlanOperatorV1 * len(encoded)
         operators = array_type(*encoded)
         input_channels = 1 if image.ndim == 2 else int(image.shape[2])

@@ -330,3 +330,4 @@
 - [x] 2026-07-20：新增 OOP GUI 權限管理器與獨立密碼提示器；程式啟動不再恢復高權限模式，固定從 OP 開始，切換工程／管理模式分別驗證預設密碼 `1234`／`5678`，取消或密碼錯誤會維持原模式。專案虛擬環境完整 139 tests、compileall、CUDA source preflight、GUI offscreen smoke 與 diff check 通過。
 - [x] 2026-07-20：彙整 2026-07-16 至 2026-07-20 的 48 筆提交與驗證證據，產出本週進度報告；區分已完成的 CPU／靜態／打包驗證與仍待 RTX 3090、真實 production 影像執行的項目，未將缺少硬體的 CUDA 工作誤列為完成。
 - [x] 2026-07-21：依操作確認將 401-2 恢復為既有逐 contour 白像素比例定義；同步恢復 `contour_mode`、`min_area`、`max_area`、輪廓 bbox／area／metadata、recipe 0.1.0、CPU/CUDA 共用後處理說明與原始回歸測試。此回復會重新允許單一 tile 產生多筆 contour defects。
+- [x] 2026-07-21：修正新版 generic native plan 在 401-1 預設 `morph_operation: none` 時誤報不支援；Python runtime 現在會在建立 native descriptor 前略過 `none`、零 iterations 與 1x1 kernel 等 morphology no-op，並重新編排線性節點，維持 CPU／primitive 語意且不需重編 CUDA DLL。完整 142 tests、compileall、CUDA source preflight、401-1 CLI PASS smoke、GUI offscreen smoke與 `git diff --check` 均通過；本機無 `nvidia-smi`、`nvcc`、MSVC `cl`，RTX 實機仍待使用者環境確認。

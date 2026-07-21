@@ -602,6 +602,31 @@ class GpuRuntimeMetricsTests(unittest.TestCase):
         self.assertEqual([operators[index].kind for index in range(2)], [1, 6])
         self.assertEqual(list(operators[1].int_params)[:2], [11, 7])
 
+    def test_native_descriptor_skips_noop_morphology_and_repairs_linear_nodes(self):
+        image = np.zeros((24, 32, 3), dtype=np.uint8)
+        plan = PreprocessPlan((
+            Gray(),
+            Morphology("none", 3, 1),
+            Gaussian(5),
+            Morphology("open", 1, 1),
+            AdaptiveMean(11, -2.0),
+        ))
+
+        descriptor, operators = GpuRuntime._native_plan_descriptor(plan, image)
+
+        self.assertEqual(descriptor.operator_count, 3)
+        self.assertEqual(descriptor.output_node, 2)
+        self.assertEqual([operators[index].kind for index in range(3)], [1, 2, 4])
+        self.assertEqual([operators[index].input_node for index in range(3)], [-1, 0, 1])
+        self.assertEqual([operators[index].output_node for index in range(3)], [0, 1, 2])
+
+    def test_native_descriptor_rejects_plan_containing_only_noops(self):
+        image = np.zeros((24, 32), dtype=np.uint8)
+        plan = PreprocessPlan((Morphology("none", 3, 1),))
+
+        with self.assertRaisesRegex(GpuRuntimeError, "only no-op operators"):
+            GpuRuntime._native_plan_descriptor(plan, image)
+
     def test_generic_native_dag_is_cached_multi_output_and_destroyed_first(self):
         runtime = GpuRuntime(enabled=False)
         dll = _NativeDagPlanDll()
