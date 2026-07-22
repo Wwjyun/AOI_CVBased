@@ -292,7 +292,7 @@ class MainWindow(QMainWindow, LogMixin):
         machine_id_edit.setReadOnly(True)
         machine_form.addRow("Machine ID", machine_id_edit)
 
-        pipeline_version_edit = QLineEdit("0.4.2 (MVP)")
+        pipeline_version_edit = QLineEdit("1.1.1")
         pipeline_version_edit.setProperty("mono", "true")
         pipeline_version_edit.setReadOnly(True)
         machine_form.addRow("Pipeline 版本", pipeline_version_edit)
