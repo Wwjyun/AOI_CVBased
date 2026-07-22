@@ -172,6 +172,7 @@
 - [x] **非阻塞提示**：可恢復警告與成功訊息改用既有視覺語言的 inline notice，只有阻止操作、不可恢復或離開確認保留 modal dialog。
 - [x] **NG 導航與快捷鍵**：Results 支援上一個／下一個 NG、J／K 切換、Enter 聚焦 bbox，列表與 viewer 選取同步並自動捲動。
 - [x] **Recipe dirty／validation 狀態**：Designer 顯示已儲存、未儲存、驗證失敗；切換 recipe 或關閉時僅在 dirty 狀態詢問，錯誤在畫面內顯示。
+- [x] **CSV 面積精度換算**：Recipe Designer 可設定 `1 px = n µm` 並保存至 recipe；所有執行模式的缺陷 CSV 集中換算為 µm²並標示單位，留空及舊 recipe 維持 px²，Detector 判定門檻不變。
 - [x] **GUI 操作環境記憶**：使用 QSettings 保存並恢復上次 recipe、影像／batch／monitor 資料夾、輸出選項、最後畫面、視窗 geometry/state、viewer zoom 與主要 splitter 比例；無效路徑安全忽略。
 - [x] **GUI 權限管理器**：每次啟動固定進入 OP；工程／管理模式分別以預設密碼 `1234`／`5678` 驗證，驗證邏輯與密碼提示視窗採獨立 OOP 元件且可注入替換。
 - [x] **大量資料操作**：Batch／Monitor 表格使用 model/view 與增量更新，提供 PASS／NG／ERROR 篩選；scatter 超過上限採 deterministic sampling，避免每筆結果重建整表。
@@ -333,3 +334,4 @@
 - [x] 2026-07-21：修正新版 generic native plan 在 401-1 預設 `morph_operation: none` 時誤報不支援；Python runtime 現在會在建立 native descriptor 前略過 `none`、零 iterations 與 1x1 kernel 等 morphology no-op，並重新編排線性節點，維持 CPU／primitive 語意且不需重編 CUDA DLL。完整 142 tests、compileall、CUDA source preflight、401-1 CLI PASS smoke、GUI offscreen smoke與 `git diff --check` 均通過；本機無 `nvidia-smi`、`nvcc`、MSVC `cl`，RTX 實機仍待使用者環境確認。
 - [x] 2026-07-21：使用者於具 NVIDIA GPU 的實機確認 GPU 模式與 CPU 模式皆可正常執行；本次觀察兩者整體耗時相差無幾，尚未呈現明顯 GPU 加速。因未提供固定測試集、重複次數、median／P95 與完整硬體／環境數據，可信的 CPU／GPU benchmark 與至少 1.5 倍效能門檻仍維持未完成。
 - [x] 2026-07-21：新增 `FEATURE_VALIDATION_VERSION_CONTROL_REPORT.md` 報告稿，依目前 codebase 與驗證證據整理專案架構、各功能、四種 Detector、GUI、輸出追溯、CPU／GPU／fallback、142 項測試、CI、打包、Git 版本控制、實機結果、限制及後續規劃；未將 GPU 可執行誤列為已達效能門檻。
+- [x] 2026-07-22：新增 Recipe Designer「精度 (µm/px)」與 `output.pixel_size_um_per_px`；缺陷 CSV 依 `area_px × n²` 集中換算為 `um^2` 並新增 `area_unit`，未填及舊 recipe 維持 `px^2`，不改變 Detector 面積篩選、PASS／NG、JSON 或 GUI 結果。完整 146 tests、compileall、CUDA source preflight、GUI offscreen smoke、`git diff --check` 及精度 4 µm/px 的 CLI NG CSV smoke 均通過。

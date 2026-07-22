@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 from copy import deepcopy
 import json
 from pathlib import Path
@@ -14,6 +15,7 @@ from core.detector_manager import DetectorManager
 from core.pipeline import AOIPipeline
 from core.provenance import canonical_sha256, inspection_provenance, sha256_bytes
 from core.recipe_manager import RecipeError, RecipeManager
+from core.reporter import Reporter
 from gpu.benchmark_gate import compare_p95
 
 
@@ -59,6 +61,66 @@ class StrictRecipeContractTests(unittest.TestCase):
         self.assertEqual(set(definition["param_spec"]), set(definition["default_params"]))
         self.assertTrue(definition["param_spec"]["morph_kernel"]["odd"])
         self.assertFalse(definition["param_spec"]["morph_kernel"]["engineer_visible"])
+
+    def test_pixel_size_is_optional_positive_and_backward_compatible(self):
+        self.recipe["output"].pop("pixel_size_um_per_px", None)
+        RecipeManager().validate(self.recipe)
+
+        self.recipe["output"]["pixel_size_um_per_px"] = None
+        RecipeManager().validate(self.recipe)
+
+        self.recipe["output"]["pixel_size_um_per_px"] = 4.5
+        RecipeManager().validate(self.recipe)
+
+        for invalid in (0, -1, "4.5", True, float("nan")):
+            with self.subTest(invalid=invalid):
+                self.recipe["output"]["pixel_size_um_per_px"] = invalid
+                with self.assertRaises(RecipeError):
+                    RecipeManager().validate(self.recipe)
+
+
+class ReporterAreaCalibrationTests(unittest.TestCase):
+    RESULT = {
+        "image_name": "input.png",
+        "recipe_name": "recipe",
+        "machine_id": "AOI_01",
+        "product_id": "PRODUCT_A",
+        "final_result": "NG",
+        "tiles": [{
+            "tile": {"tile_id": "T1"},
+            "detectors": [{
+                "detector_id": "401",
+                "score": 0.9,
+                "defects": [{
+                    "type": "dark_region",
+                    "bbox_global": [1, 2, 3, 4],
+                    "bbox_local": [1, 2, 3, 4],
+                    "tile_id": "T1",
+                    "area": 250.0,
+                }],
+            }],
+        }],
+    }
+
+    def test_csv_converts_pixel_area_to_square_micrometers(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "converted.csv"
+            Reporter(Path(temporary), {"pixel_size_um_per_px": 4.0})._write_csv(path, self.RESULT)
+            with path.open(encoding="utf-8-sig", newline="") as handle:
+                row = next(csv.DictReader(handle))
+
+        self.assertEqual(float(row["area"]), 4000.0)
+        self.assertEqual(row["area_unit"], "um^2")
+
+    def test_csv_keeps_pixel_area_when_precision_is_missing(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "pixels.csv"
+            Reporter(Path(temporary), {})._write_csv(path, self.RESULT)
+            with path.open(encoding="utf-8-sig", newline="") as handle:
+                row = next(csv.DictReader(handle))
+
+        self.assertEqual(float(row["area"]), 250.0)
+        self.assertEqual(row["area_unit"], "px^2")
 
 
 class ContinuousValidationContractTests(unittest.TestCase):

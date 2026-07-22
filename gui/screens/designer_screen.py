@@ -5,7 +5,7 @@ from pathlib import Path
 
 import yaml
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QImage, QPainter, QPixmap
+from PySide6.QtGui import QDoubleValidator, QImage, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QFileDialog,
     QFormLayout,
@@ -262,11 +262,19 @@ class DesignerScreen(QWidget):
         self.machine_id_edit.setProperty("mono", "true")
         self.version_edit = QLineEdit("0.1.0")
         self.version_edit.setProperty("mono", "true")
+        self.pixel_size_um_edit = QLineEdit()
+        self.pixel_size_um_edit.setProperty("mono", "true")
+        self.pixel_size_um_edit.setPlaceholderText("未填則 CSV 保持 px²")
+        pixel_size_validator = QDoubleValidator(0.000000001, 1_000_000_000.0, 9, self.pixel_size_um_edit)
+        pixel_size_validator.setNotation(QDoubleValidator.Notation.StandardNotation)
+        self.pixel_size_um_edit.setValidator(pixel_size_validator)
+        self.pixel_size_um_edit.setToolTip("1 px 對應的微米數；CSV 面積會乘上此數值的平方。")
 
         form.addRow(_label("Recipe 名稱"), self.recipe_name_edit)
         form.addRow(_label("產品 Product"), self.product_id_edit)
         form.addRow(_label("機台 Machine"), self.machine_id_edit)
         form.addRow(_label("版本 Version"), self.version_edit)
+        form.addRow(_label("精度 (µm/px)"), self.pixel_size_um_edit)
 
         panel.add_layout(form)
         return panel
@@ -488,6 +496,8 @@ class DesignerScreen(QWidget):
             self.product_id_edit.setText(str(recipe.get("product_id", "")))
             self.machine_id_edit.setText(str(recipe.get("machine_id", "")))
             self.version_edit.setText(str(recipe.get("version", "")))
+            pixel_size = (recipe.get("output", {}) or {}).get("pixel_size_um_per_px")
+            self.pixel_size_um_edit.setText("" if pixel_size is None else str(pixel_size))
 
             self._set_tile_config(recipe.get("tile", {}), recipe.get("assets", {}))
             gpu = recipe.get("gpu", {}) or {}
@@ -970,9 +980,19 @@ class DesignerScreen(QWidget):
                 "save_csv": True,
                 "save_matrix_csv": True,
                 "save_json": True,
+                "pixel_size_um_per_px": self._pixel_size_um_per_px(),
             },
         }
         return RecipeTemplatePathSync(self._active_template_path()).apply(recipe)
+
+    def _pixel_size_um_per_px(self) -> float | None:
+        text = self.pixel_size_um_edit.text().strip()
+        if not text:
+            return None
+        value = float(text)
+        if value <= 0:
+            raise ValueError("精度必須大於 0 µm/px，或留空以維持 px²。")
+        return value
 
     def build_gpu_config(self) -> dict:
         return {

@@ -185,6 +185,21 @@ class GuiWorkflowTests(unittest.TestCase):
         screen._save_recipe()
         self.assertIn("驗證失敗", screen.editor_state_badge.text())
 
+    def test_designer_round_trips_optional_pixel_size(self):
+        screen = DesignerScreen()
+        recipe = RecipeManager().load(Path("recipes/PRODUCT_A_AOI_01.yaml"))
+
+        recipe["output"]["pixel_size_um_per_px"] = 3.45
+        screen.set_recipe(recipe)
+        self.assertEqual(screen.pixel_size_um_edit.text(), "3.45")
+        self.assertEqual(screen.build_recipe()["output"]["pixel_size_um_per_px"], 3.45)
+        self.assertFalse(screen.is_dirty())
+
+        recipe["output"]["pixel_size_um_per_px"] = None
+        screen.set_recipe(recipe)
+        self.assertEqual(screen.pixel_size_um_edit.text(), "")
+        self.assertIsNone(screen.build_recipe()["output"]["pixel_size_um_per_px"])
+
     def test_preferences_ignore_stale_paths_and_round_trip_typed_values(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

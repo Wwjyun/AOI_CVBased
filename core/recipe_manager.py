@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import threading
 from copy import deepcopy
 from pathlib import Path
@@ -123,7 +124,21 @@ class RecipeManager:
                 raise RecipeError(f"Recipe detector {detector_id} must be a mapping.")
             if "use_gpu" in config and not isinstance(config["use_gpu"], bool):
                 raise RecipeError(f"Recipe detector {detector_id}.use_gpu must be true or false.")
+        self._validate_output(recipe["output"])
         self._validate_detector_parameters(recipe["detectors"])
+
+    @staticmethod
+    def _validate_output(output: Any) -> None:
+        if not isinstance(output, dict):
+            raise RecipeError("Recipe output section must be a mapping.")
+
+        pixel_size = output.get("pixel_size_um_per_px")
+        if pixel_size is None:
+            return
+        if type(pixel_size) not in {int, float}:
+            raise RecipeError("Recipe output.pixel_size_um_per_px must be a positive number or null.")
+        if not math.isfinite(float(pixel_size)) or float(pixel_size) <= 0:
+            raise RecipeError("Recipe output.pixel_size_um_per_px must be greater than 0.")
 
     @staticmethod
     def _validate_detector_parameters(detectors: dict[str, Any]) -> None:

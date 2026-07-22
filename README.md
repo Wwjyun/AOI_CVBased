@@ -259,6 +259,7 @@ detectors:
       max_fill_ratio: 1.20
 
 output:
+  pixel_size_um_per_px: null  # 1 px = n µm；未填時 CSV 面積維持 px²
   save_overlay: true
   save_ng_tiles: true
   save_csv: true
@@ -485,6 +486,8 @@ outputs/
 ### 缺陷 CSV
 
 包含影像、配方、機台、產品、最終結果、Detector、缺陷類型、全域／區域 bbox、Tile ID、分數與面積。檔案使用帶 BOM 的 UTF-8（`utf-8-sig`），方便 Excel 直接開啟。
+
+Recipe Designer 的「精度 (µm/px)」會儲存在 `output.pixel_size_um_per_px`。填入 `n` 時，CSV 的 `area` 會以 `area_px × n²` 換算為 `um^2`；留空或舊 recipe 未含此欄位時維持像素面積。`area_unit` 欄會分別標示 `um^2` 或 `px^2`。Detector 的面積篩選參數仍使用 px²，因此不影響 PASS／NG 判定。
 
 ### 矩陣 CSV
 

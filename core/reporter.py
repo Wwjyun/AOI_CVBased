@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import math
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import nullcontext
@@ -566,8 +567,8 @@ class Reporter(LogMixin):
         except OSError as exc:
             raise OSError(f"Failed to write PNG image to {path}: {exc}") from exc
 
-    @staticmethod
-    def _write_csv(path: Path, result: dict) -> None:
+    def _write_csv(self, path: Path, result: dict) -> None:
+        pixel_size_um_per_px = self._resolve_pixel_size_um_per_px(self.output_config)
         fields = [
             "image_name",
             "recipe_name",
@@ -581,6 +582,7 @@ class Reporter(LogMixin):
             "tile_id",
             "score",
             "area",
+            "area_unit",
         ]
         with path.open("w", encoding="utf-8-sig", newline="") as handle:
             writer = csv.DictWriter(handle, fieldnames=fields)
@@ -588,6 +590,9 @@ class Reporter(LogMixin):
             for tile_result in result["tiles"]:
                 for detector_result in tile_result["detectors"]:
                     for defect in detector_result.get("defects", []):
+                        area, area_unit = self._csv_area(
+                            defect.get("area"), pixel_size_um_per_px
+                        )
                         writer.writerow(
                             {
                                 "image_name": result["image_name"],
@@ -601,9 +606,31 @@ class Reporter(LogMixin):
                                 "bbox_local": defect.get("bbox_local"),
                                 "tile_id": defect.get("tile_id"),
                                 "score": detector_result.get("score"),
-                                "area": defect.get("area"),
+                                "area": area,
+                                "area_unit": area_unit,
                             }
                         )
+
+    @staticmethod
+    def _resolve_pixel_size_um_per_px(output_config: dict) -> float | None:
+        value = output_config.get("pixel_size_um_per_px")
+        if value is None or value == "":
+            return None
+        if type(value) not in {int, float}:
+            raise ValueError("output.pixel_size_um_per_px must be a positive number or null")
+        pixel_size = float(value)
+        if not math.isfinite(pixel_size) or pixel_size <= 0:
+            raise ValueError("output.pixel_size_um_per_px must be greater than 0")
+        return pixel_size
+
+    @staticmethod
+    def _csv_area(area: object, pixel_size_um_per_px: float | None) -> tuple[object, str]:
+        if pixel_size_um_per_px is None:
+            return area, "px^2"
+        if area is None:
+            return None, "um^2"
+        converted = float(area) * pixel_size_um_per_px * pixel_size_um_per_px
+        return float(f"{converted:.12g}"), "um^2"
 
     @staticmethod
     def _write_matrix_csv(path: Path, result: dict) -> None:

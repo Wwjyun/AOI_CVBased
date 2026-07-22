@@ -47,6 +47,7 @@ detectors:
       max_fill_ratio: 1.20
 
 output:
+  pixel_size_um_per_px: null
   save_overlay: true
   save_ng_tiles: true
   save_csv: true

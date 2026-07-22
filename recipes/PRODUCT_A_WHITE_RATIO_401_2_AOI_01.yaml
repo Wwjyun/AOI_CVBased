@@ -39,6 +39,7 @@ detectors:
       white_pixel_ratio_threshold: 0.625
 
 output:
+  pixel_size_um_per_px: null
   save_overlay: true
   save_ng_tiles: true
   save_csv: true
