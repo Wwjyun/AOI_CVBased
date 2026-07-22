@@ -491,6 +491,8 @@ Recipe Designer 的「精度 (µm/px)」會儲存在 `output.pixel_size_um_per_p
 
 可另外執行 `.\env\Scripts\python.exe export_ng_tiles_by_area.py` 開啟「NG Tile 面積分類工具」。選擇包含 `csv/` 與 `ng_tiles/` 的根資料夾，逐行輸入 `200-400`、`401-500` 等區間後，工具會往下搜尋 CSV，依 `tile_id` 對應並複製 NG Tile 至 `area_classified/<面積區間>/`。同一 Tile 有多筆缺陷時可選最大值、總和或最小值；預設採最大面積。原始 CSV 與圖片不會被移動，未落入區間的圖片預設放入 `_未落入區間/`；若同一根資料夾混有 px² 與 µm²，輸出會先分為 `px2/` 與 `um2/`，避免不同單位混在一起。
 
+若要建立可獨立攜帶的單檔 Windows EXE，可執行 `.\build_ng_tile_area_tool.ps1`。輸出位於 `dist\NG-Tile-Area-Tool\`；此後處理工具不執行 AOI Detector，也不需要 CUDA DLL。發布檔採獨立的 `ng-tile-area-tool-vX.Y.Z` Tag，不與 VisionFlow AOI 主程式的 `vX.Y.Z` Tag 混用。
+
 ### 矩陣 CSV
 
 將具列欄資訊的 Tile NG 狀態轉成矩陣，欄位為 `c1`、`c2` 等，NG 儲存格以勾號標示，適合對照產品的實體排列。

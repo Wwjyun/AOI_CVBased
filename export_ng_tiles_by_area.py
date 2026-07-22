@@ -13,7 +13,7 @@ from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QThread, Signal, Slot
+from PySide6.QtCore import QObject, QThread, QTimer, Signal, Slot
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -33,6 +33,7 @@ from PySide6.QtWidgets import (
 
 
 DEFAULT_RANGES = "200-400\n401-500"
+TOOL_VERSION = "1.0.0"
 UNMATCHED_FOLDER = "_未落入區間"
 RANGE_RE = re.compile(
     r"^\s*(\d+(?:\.\d+)?)\s*(?:-|~|～|—)\s*(\d+(?:\.\d+)?)\s*$"
@@ -398,7 +399,7 @@ class ClassificationWorker(QObject):
 class NgTileAreaClassifierWindow(QWidget):
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("NG Tile 面積分類工具")
+        self.setWindowTitle(f"NG Tile 面積分類工具 v{TOOL_VERSION}")
         self.resize(760, 560)
         self.setMinimumSize(680, 520)
         self._thread: QThread | None = None
@@ -567,6 +568,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="依缺陷 CSV 面積分類 AOI NG Tile 圖片。")
     parser.add_argument("--input", "-i", type=Path, help="包含 csv 與 ng_tiles 的根資料夾。")
     parser.add_argument("--output", "-o", type=Path, help="分類輸出資料夾。")
+    parser.add_argument("--smoke-test", action="store_true", help="建立 GUI 後立即結束，供打包驗證。")
+    parser.add_argument("--version", action="version", version=f"%(prog)s {TOOL_VERSION}")
     parser.add_argument(
         "--ranges",
         default=DEFAULT_RANGES.replace("\n", ","),
@@ -580,6 +583,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv or sys.argv[1:])
+    if args.smoke_test:
+        app = QApplication.instance() or QApplication(sys.argv)
+        window = NgTileAreaClassifierWindow()
+        window.show()
+        QTimer.singleShot(0, app.quit)
+        return app.exec()
     if args.input:
         output_dir = args.output or args.input / "area_classified"
         summary = classify_ng_tiles(

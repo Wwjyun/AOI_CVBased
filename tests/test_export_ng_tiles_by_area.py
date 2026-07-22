@@ -13,6 +13,7 @@ from PySide6.QtWidgets import QApplication
 from export_ng_tiles_by_area import (
     DEFAULT_RANGES,
     NgTileAreaClassifierWindow,
+    TOOL_VERSION,
     UNMATCHED_FOLDER,
     classify_ng_tiles,
     parse_ranges,
@@ -24,7 +25,7 @@ class NgTileAreaClassifierTests(unittest.TestCase):
     def test_gui_constructs_with_default_ranges(self):
         app = QApplication.instance() or QApplication([])
         window = NgTileAreaClassifierWindow()
-        self.assertEqual(window.windowTitle(), "NG Tile 面積分類工具")
+        self.assertEqual(window.windowTitle(), f"NG Tile 面積分類工具 v{TOOL_VERSION}")
         self.assertEqual(window.range_text.toPlainText(), DEFAULT_RANGES)
         self.assertTrue(window.include_unmatched.isChecked())
         window.close()
