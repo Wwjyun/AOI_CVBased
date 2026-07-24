@@ -10,7 +10,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import QSettings
 from PySide6.QtGui import QImage
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QComboBox
 
 from core.recipe_manager import RecipeManager
 from gui.main_window import MainWindow, _backend_status_from_result
@@ -199,6 +199,116 @@ class GuiWorkflowTests(unittest.TestCase):
         screen.set_recipe(recipe)
         self.assertEqual(screen.pixel_size_um_edit.text(), "")
         self.assertIsNone(screen.build_recipe()["output"]["pixel_size_um_per_px"])
+
+    def test_yolox_designer_uses_model_selector_labels_tooltips_and_dirty_tracking(self):
+        screen = DesignerScreen()
+        screen._select_detector("yolox")
+
+        model_widget = screen._param_widgets["yolox"]["model_id"]
+        labels = [
+            label.text()
+            for label in screen.param_form_container.findChildren(
+                type(screen.active_id_label)
+            )
+        ]
+
+        self.assertIsInstance(model_widget, QComboBox)
+        self.assertEqual(model_widget.currentData(), "yolox_tiny_fixture")
+        self.assertIn("模型", labels)
+        self.assertIn("信心門檻", labels)
+        self.assertIn("NMS 重疊率 (IoU)", labels)
+        self.assertIn("NG 類別 ID", labels)
+        self.assertIn("最大偵測數", labels)
+        self.assertIn("最小框面積 (px²)", labels)
+        self.assertNotIn("推論後端", labels)
+        self.assertIn(
+            "交集除以聯集",
+            screen._param_widgets["yolox"]["nms_iou_threshold"].toolTip(),
+        )
+        self.assertTrue(screen.yolox_model_info_edit.isReadOnly())
+        self.assertIn("輸入 32 × 32", screen.yolox_model_info_edit.text())
+        self.assertIn("測試模型", screen.detector_notice_label.text())
+
+        screen._set_dirty(False)
+        confidence = screen._param_widgets["yolox"]["confidence_threshold"]
+        confidence.edit.setText("0.4")
+        confidence.edit.editingFinished.emit()
+        self.assertTrue(screen.is_dirty())
+        self.assertEqual(screen.editor_state_badge.text(), "未儲存")
+
+        screen.set_mode("admin")
+        labels = [
+            label.text()
+            for label in screen.param_form_container.findChildren(
+                type(screen.active_id_label)
+            )
+        ]
+        self.assertIn("推論後端", labels)
+        self.assertIn("推論精度", labels)
+        self.assertIn("跨類別 NMS", labels)
+
+    def test_yolox_unsupported_backend_is_inline_and_blocks_recipe_save(self):
+        screen = DesignerScreen()
+        screen.set_mode("admin")
+        screen._select_detector("yolox")
+        screen._row_widgets["yolox"]["toggle"].setChecked(True)
+        backend = screen._param_widgets["yolox"]["inference_backend"]
+        backend.setCurrentIndex(backend.findData("onnxruntime_cuda"))
+
+        self.assertIn("不支援推論後端", screen.detector_notice_label.text())
+        self.assertIn("YOLOX 設定錯誤", screen.editor_state_badge.text())
+        with patch(
+            "gui.screens.designer_screen.QFileDialog.getSaveFileName"
+        ) as save_dialog:
+            screen._save_recipe()
+        save_dialog.assert_not_called()
+        self.assertIn("驗證失敗", screen.editor_state_badge.text())
+
+    def test_yolox_missing_model_is_inline_and_invalid_after_recipe_load(self):
+        screen = DesignerScreen()
+        screen._select_detector("yolox")
+        recipe = RecipeManager().load(
+            Path("recipes/examples/YOLOX_TINY_REFERENCE_AOI_01.yaml")
+        )
+        recipe["detectors"]["yolox"]["params"]["model_id"] = "missing_model"
+
+        screen.set_recipe(recipe)
+
+        selector = screen._param_widgets["yolox"]["model_id"]
+        self.assertEqual(selector.currentData(), "missing_model")
+        self.assertIn("找不到 model_id", screen.detector_notice_label.text())
+        self.assertIn("YOLOX 設定錯誤", screen.editor_state_badge.text())
+
+    def test_yolox_checksum_error_keeps_designer_open_and_blocks_save(self):
+        model_root = Path("models/yolox")
+        with tempfile.TemporaryDirectory(prefix="visionflow_yolox_gui_") as temporary:
+            root = Path(temporary)
+            (root / "fixture.onnx").write_bytes(
+                (model_root / "yolox_tiny_fixture.onnx").read_bytes()
+            )
+            registry = (model_root / "registry.yaml").read_text(encoding="utf-8")
+            registry = registry.replace(
+                "38d2c79bf140c829ffef9fcd264bb5fb630bdc280a7a1a5ec27911888ada8188",
+                "0" * 64,
+            ).replace("yolox_tiny_fixture.onnx", "fixture.onnx")
+            (root / "registry.yaml").write_text(registry, encoding="utf-8")
+
+            with patch.dict(
+                os.environ, {"VISIONFLOW_YOLOX_MODEL_DIR": str(root)}
+            ):
+                screen = DesignerScreen()
+                screen._select_detector("yolox")
+                screen._row_widgets["yolox"]["toggle"].setChecked(True)
+
+                selector = screen._param_widgets["yolox"]["model_id"]
+                self.assertFalse(selector.isEnabled())
+                self.assertIn("SHA-256 驗證失敗", screen.detector_notice_label.text())
+                with patch(
+                    "gui.screens.designer_screen.QFileDialog.getSaveFileName"
+                ) as save_dialog:
+                    screen._save_recipe()
+                save_dialog.assert_not_called()
+                self.assertIn("驗證失敗", screen.editor_state_badge.text())
 
     def test_preferences_ignore_stale_paths_and_round_trip_typed_values(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -255,15 +255,15 @@
 
 - [x] 定義 detector ID 為 `yolox`、顯示名稱為「YOLOX 物件偵測」，輸入語意為目前 tile／ROI 的 BGR `uint8` 影像；命中指定缺陷類別即產生 defect，零筆 defect 為 PASS。
 - [x] 建立受控的 YOLOX model registry；Recipe 只保存穩定的 `model_id`，不可直接依賴使用者電腦上的任意絕對路徑。每個模型 manifest 至少記錄模型名稱、版本、格式、SHA-256、class names、輸入尺寸、色彩順序、正規化方式、letterbox padding、輸出節點與 decoder/stride 規格。
-- [ ] 第一版工程模式可調參數固定為：
+- [x] 第一版工程模式可調參數固定為：
   - `model_id`：從已驗證的 model registry 下拉選擇模型。
   - `confidence_threshold`：信心門檻，範圍 `0.0～1.0`，建議預設 `0.25`。
   - `nms_iou_threshold`：NMS 重疊率門檻，範圍 `0.0～1.0`，建議預設 `0.45`。
   - `target_class_ids`：要判定為 NG 的類別；空值代表模型 manifest 內全部類別。
   - `max_detections`：單張 tile／ROI 最大保留筆數，正整數，建議預設 `300`。
   - `min_box_area_px`：濾除過小 bbox，`0` 代表停用；此參數與 NMS IoU 分開定義。
-- [ ] GUI 將 `nms_iou_threshold` 標示為「NMS 重疊率 (IoU)」，tooltip 說明其值為兩框交集除以聯集，不是像素交集面積；抑制規則固定為同類別較低分框在 `IoU > threshold` 時移除，邊界等於門檻時保留。
-- [ ] 管理模式才顯示進階參數：`inference_backend`（`auto`／`onnxruntime_cpu`／`onnxruntime_cuda`／`tensorrt`）、`precision`（`fp32`／`fp16`／`int8`）與 `class_agnostic_nms`；模型輸入寬高由 manifest 唯讀帶入，不讓 Recipe 任意改成模型不支援的尺寸。
+- [x] GUI 將 `nms_iou_threshold` 標示為「NMS 重疊率 (IoU)」，tooltip 說明其值為兩框交集除以聯集，不是像素交集面積；抑制規則固定為同類別較低分框在 `IoU > threshold` 時移除，邊界等於門檻時保留。
+- [x] 管理模式才顯示進階參數：`inference_backend`（`auto`／`onnxruntime_cpu`／`onnxruntime_cuda`／`tensorrt`）、`precision`（`fp32`／`fp16`／`int8`）與 `class_agnostic_nms`；模型輸入寬高由 manifest 唯讀帶入，不讓 Recipe 任意改成模型不支援的尺寸。
 - [x] `ParameterSpec`／Recipe validation 驗證數值範圍、model ID 存在、類別 ID、backend/precision 相容性及 `max_detections > 0`；舊 Recipe 不含 YOLOX 時行為完全不變。
 
 ### 前處理、推論與結果契約
@@ -287,7 +287,7 @@
 
 - [x] M0：完成 model manifest/schema、model registry、ONNX Runtime CPU session cache、獨立前處理/後處理單元測試與一個可散佈的 tiny 測試模型；此階段不接 GUI、不預設 GPU。
 - [x] M1：新增 `DetectorYolox`、DetectorManager registration、Recipe round trip、繁中 detector label 與合成 CLI smoke；驗證 PASS/NG、defect count、class、confidence、bbox、area、metadata 與排序。
-- [ ] M2：Recipe Designer 加入模型下拉、信心門檻、NMS 重疊率、NG 類別、最大筆數與最小 bbox 面積；模型不存在、checksum 錯誤或 backend 不可用時使用 inline notice，Recipe 不可在錯誤狀態下儲存。
+- [x] M2：Recipe Designer 加入模型下拉、信心門檻、NMS 重疊率、NG 類別、最大筆數與最小 bbox 面積；模型不存在、checksum 錯誤或 backend 不可用時使用 inline notice，Recipe 不可在錯誤狀態下儲存。
 - [ ] M3：接入 ONNX Runtime CUDA，再以相同 ONNX 模型比較 CPU/CUDA 的前處理、raw output、NMS 後 class/數量/座標/分數；先定義 bbox 與 confidence 容差，任何不等價都不得預設啟用。
 - [ ] M4：需要效能時才加入 TensorRT FP32/FP16；以固定資料集比較 ONNX Runtime CPU、ONNX Runtime CUDA 與 TensorRT 的 cold/warm median、P95、吞吐、peak VRAM、模型載入時間與端到端時間。
 - [ ] 測試 invalid model/manifest、缺少 execution provider、CUDA OOM、推論中斷、輸出 shape 錯誤、空 detection、單框、多框、高重疊同類／跨類、邊界框、非方形影像、極小 ROI、灰階輸入及 Unicode 路徑。
@@ -313,6 +313,7 @@
 
 ## 完成紀錄
 
+- [x] 2026-07-24：完成 YOLOX M2 Recipe Designer 整合：動態讀取已驗證 model registry 建立模型下拉，工程模式顯示信心、NMS IoU、NG 類別、最大筆數與最小框面積，管理模式才顯示 backend／precision／class-agnostic NMS；模型輸入尺寸與 class mapping 唯讀顯示，NMS tooltip 固定嚴格 `IoU > threshold` 語意。遺失模型、SHA-256 錯誤及不支援 backend 皆以繁中 inline notice 顯示並阻止 Recipe 儲存，YOLOX CUDA toggle 在 M3 前維持停用，動態參數也已納入 dirty tracking。
 - [x] 2026-07-24：完成 YOLOX M0/M1 CPU reference 垂直切片：新增 checksum model registry、固定輸出 tiny ONNX fixture、ONNX Runtime CPU session cache、manifest-driven letterbox/NCHW 前處理、raw YOLOX decode、class-aware NMS、座標還原、`DetectorYolox`、Recipe/DetectorManager/繁中標籤整合、結果與 execution metadata、reference Recipe 及 9 項專屬測試；合成 CLI smoke 固定輸出 2 筆 NG。GUI 模型下拉、跨工作模式 session、CUDA、TensorRT 與 production 模型驗收仍未完成。
 - [x] 2026-07-24：完成 YOLOX Detector 分階段規劃；固定 model registry、信心門檻、NMS IoU 重疊率、NG 類別、最大筆數與最小 bbox 面積等參數語意，並定義前後處理、結果 metadata、共享 session、CPU reference、GPU fallback、GUI、測試及 production acceptance 順序；尚未實作 detector 或導入模型。
 - [x] 2026-07-13：建立 `cuda_practice/`、RTX 3090 `sm_86` 練習與編譯說明。

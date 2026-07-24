@@ -14,6 +14,7 @@ class ParameterSpec:
     odd: bool = False
     engineer_visible: bool = True
     label: str = ""
+    tooltip: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         data = asdict(self)

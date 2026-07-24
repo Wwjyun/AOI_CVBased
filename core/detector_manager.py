@@ -62,9 +62,10 @@ class DetectorManager:
             for detector in detectors
         }
 
-    def definitions(self) -> dict[str, dict]:
-        return {
-            detector_id: {
+    def definitions(self, include_runtime_metadata: bool = False) -> dict[str, dict]:
+        definitions = {}
+        for detector_id, detector_cls in self._registry.items():
+            definition = {
                 "display_name": detector_cls.display_name,
                 "detector_name": detector_cls.detector_name,
                 "default_params": deepcopy(detector_cls.default_params),
@@ -72,8 +73,10 @@ class DetectorManager:
                     key: spec.to_dict() for key, spec in detector_cls.PARAM_SPEC.items()
                 },
             }
-            for detector_id, detector_cls in self._registry.items()
-        }
+            if detector_cls is DetectorYolox and include_runtime_metadata:
+                definition.update(self._yolox_definition_metadata())
+            definitions[detector_id] = definition
+        return definitions
 
     def parameter_specs(self, detector_id: str):
         detector_cls = self._registry.get(str(detector_id))
@@ -95,3 +98,28 @@ class DetectorManager:
 
             self._ai_session_manager = AiModelSessionManager()
         return self._ai_session_manager
+
+    def _yolox_definition_metadata(self) -> dict:
+        try:
+            registry = self._ai_manager().registry
+            models = []
+            for model_id in registry.model_ids():
+                manifest = registry.get(model_id)
+                models.append(
+                    {
+                        "model_id": manifest.model_id,
+                        "label": (
+                            f"{manifest.name} · v{manifest.version}"
+                            f"{' · 測試用' if manifest.test_only else ''}"
+                        ),
+                        "version": manifest.version,
+                        "input_size": [manifest.input_width, manifest.input_height],
+                        "class_names": list(manifest.class_names),
+                        "allowed_backends": list(manifest.allowed_backends),
+                        "allowed_precisions": list(manifest.allowed_precisions),
+                        "test_only": manifest.test_only,
+                    }
+                )
+            return {"model_options": models, "model_registry_error": ""}
+        except RuntimeError as exc:
+            return {"model_options": [], "model_registry_error": str(exc)}

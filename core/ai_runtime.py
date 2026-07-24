@@ -80,12 +80,12 @@ class YoloXModelRegistry:
         except KeyError as exc:
             available = ", ".join(self.model_ids()) or "(none)"
             raise AiModelError(
-                f"Unknown YOLOX model_id {normalized!r}; available: {available}"
+                f"找不到 YOLOX model_id {normalized!r}；可用模型：{available}"
             ) from exc
 
     def _load(self) -> dict[str, YoloXModelManifest]:
         if not self.registry_path.is_file():
-            raise AiModelError(f"YOLOX model registry does not exist: {self.registry_path}")
+            raise AiModelError(f"找不到 YOLOX 模型 registry：{self.registry_path}")
         try:
             document = yaml.safe_load(self.registry_path.read_text(encoding="utf-8")) or {}
         except (OSError, yaml.YAMLError) as exc:
@@ -120,8 +120,8 @@ class YoloXModelRegistry:
         actual_sha256 = _sha256_file(model_path)
         if len(expected_sha256) != 64 or actual_sha256 != expected_sha256:
             raise AiModelError(
-                f"YOLOX model {model_id} SHA-256 mismatch: "
-                f"expected={expected_sha256 or '(missing)'} actual={actual_sha256}"
+                f"YOLOX 模型 {model_id} SHA-256 驗證失敗："
+                f"預期={expected_sha256 or '(缺少)'} 實際={actual_sha256}"
             )
 
         class_names = self._string_tuple(config.get("class_names"), "class_names", model_id)
@@ -339,12 +339,12 @@ def validate_yolox_parameters(
     effective_backend = "onnxruntime_cpu" if backend == "auto" else backend
     if effective_backend not in manifest.allowed_backends:
         raise AiBackendUnavailable(
-            f"YOLOX model {model_id} does not support backend {effective_backend}"
+            f"YOLOX 模型 {model_id} 不支援推論後端 {effective_backend}"
         )
     precision = str(params.get("precision", "fp32")).lower()
     if precision not in manifest.allowed_precisions:
         raise AiBackendUnavailable(
-            f"YOLOX model {model_id} does not support precision {precision}"
+            f"YOLOX 模型 {model_id} 不支援推論精度 {precision}"
         )
     return manifest
 

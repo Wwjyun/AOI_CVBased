@@ -62,7 +62,7 @@ class YoloXRegistryAndSessionTests(unittest.TestCase):
                 "0" * 64,
             ).replace("yolox_tiny_fixture.onnx", "fixture.onnx")
             (root / "registry.yaml").write_text(registry, encoding="utf-8")
-            with self.assertRaisesRegex(AiModelError, "SHA-256 mismatch"):
+            with self.assertRaisesRegex(AiModelError, "SHA-256 驗證失敗"):
                 YoloXModelRegistry(root)
 
 
@@ -216,7 +216,7 @@ class DetectorYoloXIntegrationTests(unittest.TestCase):
         )
         invalid = deepcopy(recipe)
         invalid["detectors"]["yolox"]["params"]["model_id"] = "missing_model"
-        with self.assertRaisesRegex(RecipeError, "Unknown YOLOX model_id"):
+        with self.assertRaisesRegex(RecipeError, "找不到 YOLOX model_id"):
             RecipeManager().validate(invalid)
 
         with tempfile.TemporaryDirectory(prefix="visionflow_yolox_pipeline_") as temporary:

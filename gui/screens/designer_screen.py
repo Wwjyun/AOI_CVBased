@@ -199,7 +199,10 @@ class DesignerScreen(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.image_path: Path | None = None
-        self.detector_definitions = DetectorManager().definitions()
+        self.detector_manager = DetectorManager()
+        self.detector_definitions = self.detector_manager.definitions(
+            include_runtime_metadata=True
+        )
         self._param_widgets: dict[str, dict[str, QWidget]] = {}
         self._enabled: dict[str, bool] = {detector_id: False for detector_id in self.detector_definitions}
         self._gpu_enabled: dict[str, bool] = {detector_id: False for detector_id in self.detector_definitions}
@@ -513,35 +516,40 @@ class DesignerScreen(QWidget):
             self._loading_recipe = False
         self._set_dirty(False)
         self._set_editor_state("saved", "已儲存")
+        self._refresh_active_detector_status()
 
     def is_dirty(self) -> bool:
         return self._dirty
 
     def _bind_dirty_tracking(self) -> None:
         for widget in self.findChildren(QWidget):
-            if widget.property("dirtyTracked"):
-                continue
-            connected = True
-            if isinstance(widget, QLineEdit):
-                widget.textChanged.connect(self._mark_dirty)
-            elif isinstance(widget, QComboBox):
-                widget.currentIndexChanged.connect(self._mark_dirty)
-            elif isinstance(widget, Toggle):
-                widget.toggled.connect(self._mark_dirty)
-            elif isinstance(widget, NumStepper):
-                widget.valueChanged.connect(self._mark_dirty)
-            elif isinstance(widget, Segmented):
-                widget.currentChanged.connect(self._mark_dirty)
-            else:
-                connected = False
-            if connected:
-                widget.setProperty("dirtyTracked", True)
+            self._track_dirty_widget(widget)
+
+    def _track_dirty_widget(self, widget: QWidget) -> None:
+        if widget.property("dirtyTracked"):
+            return
+        connected = True
+        if isinstance(widget, QLineEdit) and not widget.isReadOnly():
+            widget.textChanged.connect(self._mark_dirty)
+        elif isinstance(widget, QComboBox):
+            widget.currentIndexChanged.connect(self._mark_dirty)
+        elif isinstance(widget, Toggle):
+            widget.toggled.connect(self._mark_dirty)
+        elif isinstance(widget, NumStepper):
+            widget.valueChanged.connect(self._mark_dirty)
+        elif isinstance(widget, Segmented):
+            widget.currentChanged.connect(self._mark_dirty)
+        else:
+            connected = False
+        if connected:
+            widget.setProperty("dirtyTracked", True)
 
     def _mark_dirty(self, *_args) -> None:
         if self._loading_recipe:
             return
         self._set_dirty(True)
         self._set_editor_state("dirty", "未儲存")
+        self._refresh_active_detector_status()
 
     def _set_dirty(self, dirty: bool) -> None:
         dirty = bool(dirty)
@@ -632,7 +640,9 @@ class DesignerScreen(QWidget):
             for key, value in values.items():
                 widget = widgets.get(key)
                 if widget is None:
-                    widget = make_param_widget(value, spec=param_spec.get(key))
+                    widget = self._make_detector_param_widget(
+                        detector_id, key, value, param_spec.get(key, {})
+                    )
                     widgets[key] = widget
                 else:
                     _set_widget_value(widget, value)
@@ -731,6 +741,11 @@ class DesignerScreen(QWidget):
         header_row.addStretch(1)
         params_outer.addLayout(header_row)
 
+        self.detector_notice_label = QLabel("")
+        self.detector_notice_label.setWordWrap(True)
+        self.detector_notice_label.setVisible(False)
+        params_outer.addWidget(self.detector_notice_label)
+
         self.param_form_container = QWidget()
         self.param_form_container.setMaximumWidth(420)
         self.param_form = _form_grid()
@@ -761,7 +776,11 @@ class DesignerScreen(QWidget):
         row_layout.addWidget(toggle)
 
         gpu_toggle = Toggle(checked=self._gpu_enabled.get(detector_id, False))
-        gpu_toggle.setToolTip("此 detector 使用 CUDA DLL")
+        if detector_id == "yolox":
+            gpu_toggle.setEnabled(False)
+            gpu_toggle.setToolTip("YOLOX CUDA 尚未開放；目前固定使用 ONNX Runtime CPU。")
+        else:
+            gpu_toggle.setToolTip("此 detector 使用 CUDA DLL")
         gpu_toggle.toggled.connect(lambda checked, did=detector_id: self._on_detector_gpu_toggled(did, checked))
 
         text_col = QVBoxLayout()
@@ -802,6 +821,8 @@ class DesignerScreen(QWidget):
             self.active_badge.setText("啟用" if checked else "停用")
             self.active_badge.set_kind("accent" if checked else "neutral")
         self._refresh_enabled_count()
+        if detector_id == "yolox":
+            self._refresh_active_detector_status()
 
     def _on_detector_gpu_toggled(self, detector_id: str, checked: bool) -> None:
         self._gpu_enabled[detector_id] = checked
@@ -829,9 +850,26 @@ class DesignerScreen(QWidget):
                 continue
             widget = widgets.get(key)
             if widget is None:
-                widget = make_param_widget(default_value, spec=param_spec.get(key))
+                widget = self._make_detector_param_widget(
+                    detector_id, key, default_value, param_spec.get(key, {})
+                )
                 widgets[key] = widget
-            self.param_form.addRow(_label(key, mono=True), widget)
+            spec = param_spec.get(key, {})
+            label = _label(spec.get("label") or key, mono=not bool(spec.get("label")))
+            tooltip = str(spec.get("tooltip", "")).strip()
+            if tooltip:
+                label.setToolTip(tooltip)
+                widget.setToolTip(tooltip)
+            self.param_form.addRow(label, widget)
+
+        if detector_id == "yolox":
+            self.yolox_model_info_edit = QLineEdit()
+            self.yolox_model_info_edit.setReadOnly(True)
+            self.yolox_model_info_edit.setProperty("mono", "true")
+            self.param_form.addRow(_label("模型資訊"), self.yolox_model_info_edit)
+        else:
+            self.yolox_model_info_edit = None
+        self._refresh_active_detector_status()
 
     def _param_values_for_detector(self, detector_id: str) -> dict:
         values = deepcopy(self.detector_definitions[detector_id]["default_params"])
@@ -846,6 +884,103 @@ class DesignerScreen(QWidget):
             for item in (row.labelItem, row.fieldItem):
                 if item and item.widget():
                     item.widget().setParent(None)
+
+    def _make_detector_param_widget(
+        self, detector_id: str, key: str, value, spec: dict
+    ) -> QWidget:
+        if detector_id == "yolox" and key == "model_id":
+            combo = QComboBox()
+            options = self.detector_definitions[detector_id].get("model_options", [])
+            for option in options:
+                combo.addItem(str(option["label"]), str(option["model_id"]))
+            selected = str(value or "")
+            index = combo.findData(selected)
+            if selected and index < 0:
+                combo.addItem(f"遺失的模型 · {selected}", selected)
+                index = combo.count() - 1
+            if combo.count() == 0:
+                combo.addItem("沒有可用的 YOLOX 模型", "")
+                combo.setEnabled(False)
+                index = 0
+            combo.setCurrentIndex(max(0, index))
+            combo.setAccessibleName("YOLOX 模型")
+            widget = combo
+        else:
+            widget = make_param_widget(value, spec=spec)
+        self._track_dirty_widget(widget)
+        return widget
+
+    def _refresh_active_detector_status(self) -> None:
+        if not hasattr(self, "detector_notice_label"):
+            return
+        self.detector_notice_label.setVisible(False)
+        self.detector_notice_label.setText("")
+        if self._active_detector != "yolox":
+            return
+
+        definition = self.detector_definitions["yolox"]
+        registry_error = str(definition.get("model_registry_error", "")).strip()
+        model_widget = self._param_widgets.get("yolox", {}).get("model_id")
+        model_id = str(param_value(model_widget) or "") if model_widget else ""
+        option = next(
+            (
+                item
+                for item in definition.get("model_options", [])
+                if str(item.get("model_id")) == model_id
+            ),
+            None,
+        )
+        info_edit = getattr(self, "yolox_model_info_edit", None)
+        if info_edit is not None:
+            if option is None:
+                info_edit.setText("無法讀取模型資訊")
+                info_edit.setToolTip("")
+            else:
+                width, height = option["input_size"]
+                class_text = "、".join(
+                    f"{index}:{name}"
+                    for index, name in enumerate(option["class_names"])
+                )
+                info_edit.setText(f"輸入 {width} × {height} · 類別 {class_text}")
+                info_edit.setToolTip(
+                    "後端："
+                    + ", ".join(option["allowed_backends"])
+                    + "\n精度："
+                    + ", ".join(option["allowed_precisions"])
+                )
+
+        error = registry_error
+        if not error and option is None:
+            error = f"找不到 model_id：{model_id or '(未選擇)'}"
+        if not error and self._enabled.get("yolox", False):
+            try:
+                self.detector_manager.validate_parameters(
+                    "yolox", self._params_for_detector("yolox")
+                )
+            except (RuntimeError, TypeError, ValueError) as exc:
+                error = str(exc)
+        if error:
+            message = f"YOLOX 設定錯誤：{error}"
+            self.detector_notice_label.setText(message)
+            self.detector_notice_label.setStyleSheet(
+                f"color: {COLORS['ng']}; background: rgba(255,70,70,0.08); "
+                "border: 1px solid rgba(255,70,70,0.25); "
+                "border-radius: 6px; padding: 8px;"
+            )
+            self.detector_notice_label.setVisible(True)
+            if self._enabled.get("yolox", False) and not self._loading_recipe:
+                self._set_editor_state("invalid", message)
+            return
+        if option and option.get("test_only"):
+            self.detector_notice_label.setText(
+                "目前選擇的是固定輸出的測試模型，只能驗證流程，不可用於量產判定。"
+            )
+            self.detector_notice_label.setStyleSheet(
+                f"color: {COLORS['warn']}; background: rgba(255,180,60,0.08); "
+                "border: 1px solid rgba(255,180,60,0.25); "
+                "border-radius: 6px; padding: 8px;"
+            )
+            self.detector_notice_label.setVisible(True)
 
     # ------------------------------------------------------------------
     # action bar
@@ -1066,6 +1201,8 @@ def _set_widget_value(widget: QWidget, value) -> None:
         widget.setValue(float(value))
     elif isinstance(widget, QLineEdit):
         widget.setText(str(value))
+    elif isinstance(widget, QComboBox):
+        _set_combo_data(widget, value)
 
 
 def _set_combo_data(combo: QComboBox, value) -> None:

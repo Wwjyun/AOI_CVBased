@@ -32,25 +32,38 @@ class DetectorYolox(BaseDetector):
     PARAM_SPEC = specs_from_defaults(
         default_params,
         {
-            "model_id": {"label": "模型"},
+            "model_id": {
+                "label": "模型",
+                "tooltip": "從已通過 manifest 與 SHA-256 驗證的 YOLOX 模型中選擇。",
+            },
             "confidence_threshold": {
                 "minimum": 0.0,
                 "maximum": 1.0,
                 "label": "信心門檻",
+                "tooltip": "只保留 objectness × class probability 達到此值的框。",
             },
             "nms_iou_threshold": {
                 "minimum": 0.0,
                 "maximum": 1.0,
                 "label": "NMS 重疊率 (IoU)",
+                "tooltip": (
+                    "兩框交集除以聯集，不是像素交集面積；同類別較低分框在 "
+                    "IoU > threshold 時移除，等於 threshold 時保留。"
+                ),
             },
-            "target_class_ids": {"label": "NG 類別 ID"},
+            "target_class_ids": {
+                "label": "NG 類別 ID",
+                "tooltip": "以逗號分隔，例如 0,2；留空代表模型全部類別。",
+            },
             "max_detections": {
                 "minimum": 1,
                 "label": "最大偵測數",
+                "tooltip": "單一 Tile／ROI 經 NMS 後最多保留的缺陷數。",
             },
             "min_box_area_px": {
                 "minimum": 0.0,
                 "label": "最小框面積 (px²)",
+                "tooltip": "濾除過小 bbox；0 代表停用。",
             },
             "inference_backend": {
                 "choices": (
@@ -61,15 +74,18 @@ class DetectorYolox(BaseDetector):
                 ),
                 "engineer_visible": False,
                 "label": "推論後端",
+                "tooltip": "Auto 在目前 CPU reference 階段會選擇 ONNX Runtime CPU。",
             },
             "precision": {
                 "choices": ("fp32", "fp16", "int8"),
                 "engineer_visible": False,
                 "label": "推論精度",
+                "tooltip": "FP16／INT8 必須先通過後續精度驗收。",
             },
             "class_agnostic_nms": {
                 "engineer_visible": False,
                 "label": "跨類別 NMS",
+                "tooltip": "啟用後，不同類別的重疊框也會互相抑制。",
             },
         },
     )
