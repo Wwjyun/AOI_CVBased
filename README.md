@@ -431,6 +431,8 @@ Reference 配方使用的 `yolox_tiny_fixture.onnx` 只會輸出固定測試 ten
 .\env\Scripts\python.exe gpu\validate_yolox_stability.py --model-id yolox_tiny_fixture --backend onnxruntime_cpu --warmup 5 --iterations 1000 --checkpoints 10,100,1000 --allow-test-model --output outputs_validation\yolox_cpu_stability_1000.json
 ```
 
+既有 `RTX 3090 validation` workflow 會安裝 `onnxruntime-gpu`，依序執行 M3 CPU/CUDA 等價及 CUDA 1000 次穩定性；手動 dispatch 時可傳入 runner 可存取的 `yolox_acceptance_manifest`，再執行 production CPU/CUDA acceptance。runner 離線時 workflow 會維持 queued，不能視為硬體驗收通過。
+
 ## GUI 使用方式
 
 主視窗標題為 `VisionFlow AOI`，包含下列畫面：

@@ -7,6 +7,10 @@ on:
         description: Optional PASS/NG production manifest path available on the runner
         required: false
         type: string
+      yolox_acceptance_manifest:
+        description: Optional labeled YOLOX acceptance manifest path available on the runner
+        required: false
+        type: string
   schedule:
     - cron: "0 18 * * *"
 
@@ -26,6 +30,8 @@ jobs:
         run: |
           python -m venv env
           .\env\Scripts\python.exe -m pip install -r requirements.lock.txt
+          .\env\Scripts\python.exe -m pip uninstall --yes onnxruntime
+          .\env\Scripts\python.exe -m pip install onnxruntime-gpu==1.27.0
       - name: Record GPU toolchain
         shell: pwsh
         run: |
@@ -66,6 +72,36 @@ jobs:
           }
           & .\env\Scripts\python.exe @arguments
           if ($LASTEXITCODE -ne 0) { throw "CUDA validator failed with exit code $LASTEXITCODE" }
+      - name: YOLOX ONNX Runtime CUDA equivalence and stability
+        shell: pwsh
+        run: |
+          .\env\Scripts\python.exe gpu\validate_yolox_ort.py `
+            --model-id yolox_tiny_fixture `
+            --iterations 20 `
+            --output outputs_validation\yolox_ort_cuda.json
+          if ($LASTEXITCODE -ne 0) { throw "YOLOX ORT CPU/CUDA equivalence failed with exit code $LASTEXITCODE" }
+          .\env\Scripts\python.exe gpu\validate_yolox_stability.py `
+            --model-id yolox_tiny_fixture `
+            --backend onnxruntime_cuda `
+            --warmup 5 `
+            --iterations 1000 `
+            --checkpoints 10,100,1000 `
+            --allow-test-model `
+            --output outputs_validation\yolox_cuda_stability_1000.json
+          if ($LASTEXITCODE -ne 0) { throw "YOLOX CUDA stability failed with exit code $LASTEXITCODE" }
+      - name: Optional YOLOX production acceptance
+        if: inputs.yolox_acceptance_manifest != ''
+        shell: pwsh
+        run: |
+          $manifest = "${{ inputs.yolox_acceptance_manifest }}"
+          .\env\Scripts\python.exe gpu\validate_yolox_acceptance.py $manifest `
+            --backend onnxruntime_cpu `
+            --output outputs_validation\yolox_acceptance_cpu.json
+          if ($LASTEXITCODE -ne 0) { throw "YOLOX CPU production acceptance failed with exit code $LASTEXITCODE" }
+          .\env\Scripts\python.exe gpu\validate_yolox_acceptance.py $manifest `
+            --backend onnxruntime_cuda `
+            --output outputs_validation\yolox_acceptance_cuda.json
+          if ($LASTEXITCODE -ne 0) { throw "YOLOX CUDA production acceptance failed with exit code $LASTEXITCODE" }
       - name: Gate benchmark P95 regression
         shell: pwsh
         run: |
@@ -112,6 +148,10 @@ jobs:
             outputs_validation/cuda_build.log
             outputs_validation/gpu_environment.txt
             outputs_validation/rtx3090_benchmark.json
+            outputs_validation/yolox_ort_cuda.json
+            outputs_validation/yolox_cuda_stability_1000.json
+            outputs_validation/yolox_acceptance_cpu.json
+            outputs_validation/yolox_acceptance_cuda.json
             outputs_validation/nsight_status.txt
             outputs_validation/**/*.nsys-rep
           if-no-files-found: warn

@@ -292,6 +292,7 @@
 - [x] M2：Recipe Designer 加入模型下拉、信心門檻、NMS 重疊率、NG 類別、最大筆數與最小 bbox 面積；模型不存在、checksum 錯誤或 backend 不可用時使用 inline notice，Recipe 不可在錯誤狀態下儲存。
 - [ ] M3：接入 ONNX Runtime CUDA，再以相同 ONNX 模型比較 CPU/CUDA 的前處理、raw output、NMS 後 class/數量/座標/分數；先定義 bbox 與 confidence 容差，任何不等價都不得預設啟用。
   - [x] M3 軟體接入：provider 探測、CPU/CUDA 分離 session cache、禁止 CUDA EP 靜默 CPU fallback、初始化／OOM／推論失敗完整 CPU 重跑、strict CUDA 明確失敗及實機 validator 已完成。
+  - [x] RTX workflow 接線：runner 環境會以 `onnxruntime-gpu==1.27.0` 執行 M3 等價、CUDA 1000 次 stability，並可選擇執行 production acceptance；JSON 全部上傳為 workflow artifact。
   - [ ] M3 RTX 3090 驗收：使用 `gpu/validate_yolox_ort.py` 實測 raw tensor `atol=1e-5`／`rtol=1e-5`、bbox 最大差 1 px、confidence 最大差 `1e-4`，且 class／數量／排序完全相同。
 - [ ] M4：需要效能時才加入 TensorRT FP32/FP16；以固定資料集比較 ONNX Runtime CPU、ONNX Runtime CUDA 與 TensorRT 的 cold/warm median、P95、吞吐、peak VRAM、模型載入時間與端到端時間。
 - [x] 測試 invalid model/manifest、缺少 execution provider、CUDA OOM、推論中斷、輸出 shape 錯誤、空 detection、單框、多框、高重疊同類／跨類、邊界框、非方形影像、極小 ROI、灰階輸入及 Unicode 路徑。
@@ -321,6 +322,7 @@
 
 ## 完成紀錄
 
+- [x] 2026-07-24：YOLOX 已接入既有 RTX 3090 workflow：先將 CPU 版 ONNX Runtime 換成 `onnxruntime-gpu==1.27.0`，執行 M3 CPU/CUDA raw/NMS 等價與 CUDA warm-up 5＋1000 次 stability，並接受可選 `yolox_acceptance_manifest` 產生 CPU/CUDA production 指標；所有 JSON 納入 artifact。最新 RTX job `30037233901` 仍因 self-hosted runner 離線而 queued，heartbeat `30041558647` 失敗，故硬體項目保持未勾選。
 - [x] 2026-07-24：完成 YOLOX session 治理與 CPU 交付驗證：加入 bounded inference queue、LRU session cache、模型/backend invalidation、安全 close、pipeline AI metrics；新增 production acceptance manifest/validator（precision、recall、mAP50、誤殺率、漏檢率、per-class/confusion matrix）及 stability validator。本機 fixture warm-up 5 後執行 1000 次維持單一 session/load、輸出 deterministic、RSS 僅增加 307,200 bytes；batch/monitor 共用 session 與 Unicode 路徑測試通過。CPU-compatible PyInstaller package 已重建為 288 個檔案、確認不含 CUDA DLL，bundled YOLOX registry／ONNX model／Recipe 存在且 EXE smoke exit 0。RTX 3090、production 權重與標註資料仍待外部資產驗收。
 - [x] 2026-07-24：完成 YOLOX M3 軟體接入：新增 ONNX Runtime CUDA FP32 session、provider/active EP 驗證與 CPU/CUDA 分離 cache，CUDA session 明確停用 CPU EP fallback；`gpu.mode=auto` 在 provider 缺少、初始化失敗、OOM 或推論失敗時完整以 CPU 重跑，`gpu.mode=cuda` 維持嚴格失敗。GUI 單張、batch、monitor 透過既有 execution session 共用 AI manager，YOLOX 不再誤載 `visionflow_cuda.dll`；Recipe Designer 開放 YOLOX GPU toggle 並在 provider 不可用時阻止儲存。新增 raw/NMS 等價性容差與 `gpu/validate_yolox_ort.py`，本機僅有 CPUExecutionProvider，因此 RTX 3090 實機 M3 驗收仍未勾選。
 - [x] 2026-07-24：完成 YOLOX M2 Recipe Designer 整合：動態讀取已驗證 model registry 建立模型下拉，工程模式顯示信心、NMS IoU、NG 類別、最大筆數與最小框面積，管理模式才顯示 backend／precision／class-agnostic NMS；模型輸入尺寸與 class mapping 唯讀顯示，NMS tooltip 固定嚴格 `IoU > threshold` 語意。遺失模型、SHA-256 錯誤及不支援 backend 皆以繁中 inline notice 顯示並阻止 Recipe 儲存；當時 YOLOX CUDA toggle 在 M3 前維持停用，後續已由 M3 軟體接入開放，動態參數也已納入 dirty tracking。

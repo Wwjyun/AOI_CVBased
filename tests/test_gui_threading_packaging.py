@@ -78,6 +78,12 @@ class GuiThreadingPackagingContractTests(unittest.TestCase):
         self.assertIn("Get-Command nsys", workflow)
         self.assertIn("nsys.Source profile", workflow)
         self.assertIn("outputs_validation/**/*.nsys-rep", workflow)
+        self.assertIn("onnxruntime-gpu==1.27.0", workflow)
+        self.assertIn("validate_yolox_ort.py", workflow)
+        self.assertIn("validate_yolox_stability.py", workflow)
+        self.assertIn("--iterations 1000", workflow)
+        self.assertIn("yolox_acceptance_manifest", workflow)
+        self.assertIn("validate_yolox_acceptance.py", workflow)
 
 
 if __name__ == "__main__":
