@@ -25,12 +25,20 @@ class BaseDetector:
     default_params: dict = {}
     PARAM_SPEC: dict = {}
 
-    def __init__(self, display_name: str | None = None, params: dict | None = None, use_gpu: bool = False, gpu_runtime=None):
+    def __init__(
+        self,
+        display_name: str | None = None,
+        params: dict | None = None,
+        use_gpu: bool = False,
+        gpu_runtime=None,
+        ai_session_manager=None,
+    ):
         self.display_name = display_name or self.display_name or self.detector_name
         self.params = deepcopy(self.default_params)
         self.params.update(params or {})
         self.use_gpu = bool(use_gpu)
         self.gpu_runtime = gpu_runtime
+        self.ai_session_manager = ai_session_manager
         self.gpu_fallback_reason = ""
         if self.use_gpu and (gpu_runtime is None or not gpu_runtime.available):
             self.gpu_fallback_reason = getattr(gpu_runtime, "unavailable_reason", "CUDA runtime was not created")

@@ -1,0 +1,48 @@
+recipe_name: "YOLOX_TINY_REFERENCE_AOI_01"
+product_id: "REFERENCE_ONLY"
+machine_id: "AOI_01"
+version: "0.1.0"
+
+gpu:
+  mode: "cpu"
+  tiling: false
+  display: false
+  dll_path: "gpu/visionflow_cuda.dll"
+  fallback_to_cpu: true
+
+tile:
+  mode: "grid"
+  width: 32
+  height: 32
+  overlap_x: 0
+  overlap_y: 0
+
+decision:
+  mode: "all_detectors_must_pass"
+  important_detectors:
+    - "yolox"
+  max_ng_count: 0
+
+detectors:
+  "yolox":
+    enabled: true
+    use_gpu: false
+    display_name: "YOLOX object detector"
+    params:
+      model_id: "yolox_tiny_fixture"
+      confidence_threshold: 0.25
+      nms_iou_threshold: 0.45
+      target_class_ids: ""
+      max_detections: 300
+      min_box_area_px: 0.0
+      inference_backend: "onnxruntime_cpu"
+      precision: "fp32"
+      class_agnostic_nms: false
+
+output:
+  pixel_size_um_per_px: null
+  save_overlay: false
+  save_ng_tiles: false
+  save_csv: false
+  save_matrix_csv: false
+  save_json: true

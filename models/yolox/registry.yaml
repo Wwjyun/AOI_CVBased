@@ -1,0 +1,34 @@
+schema_version: 1
+
+models:
+  yolox_tiny_fixture:
+    name: "VisionFlow YOLOX tiny fixture"
+    version: "1.0.0"
+    format: "onnx"
+    file: "yolox_tiny_fixture.onnx"
+    sha256: "38d2c79bf140c829ffef9fcd264bb5fb630bdc280a7a1a5ec27911888ada8188"
+    class_names:
+      - "scratch"
+      - "stain"
+    allowed_backends:
+      - "onnxruntime_cpu"
+    allowed_precisions:
+      - "fp32"
+    test_only: true
+    input:
+      name: "images"
+      width: 32
+      height: 32
+      color_order: "BGR"
+      normalization:
+        pixel_scale: 1.0
+        mean: [0.0, 0.0, 0.0]
+        std: [1.0, 1.0, 1.0]
+      letterbox:
+        value: 114
+        placement: "top_left"
+    output:
+      name: "output"
+      decoder: "yolox_raw"
+      strides: [8, 16, 32]
+      scores_are_probabilities: true

@@ -1,0 +1,14 @@
+# YOLOX model registry
+
+`registry.yaml` is the only supported entry point for YOLOX models. Recipes store a
+stable `model_id`; the registry resolves the model file and verifies its SHA-256
+before ONNX Runtime creates a session.
+
+`yolox_tiny_fixture.onnx` is a 758-byte deterministic test fixture. It returns a
+fixed raw YOLOX tensor for CPU reference, NMS, coordinate, recipe, and CLI tests.
+It is marked `test_only` and must not be used as a production inspection model.
+
+Production model entries must define their own class names, input preprocessing,
+letterbox behavior, output decoder/strides, supported backends, precision, version,
+and checksum. Do not overwrite an existing model file while keeping the same
+version or checksum.

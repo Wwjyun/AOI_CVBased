@@ -352,7 +352,11 @@ class AOIPipeline(LogMixin):
     def _tile_worker_count(recipe, detectors, resident_image, tile_count) -> int:
         if tile_count <= 1 or not detectors or resident_image is not None:
             return 1
-        if any(getattr(detector, "gpu_active", False) for detector in detectors):
+        if any(
+            getattr(detector, "gpu_active", False)
+            or getattr(detector, "requires_serial_inference", False)
+            for detector in detectors
+        ):
             return 1
         configured = (recipe.get("performance", {}) or {}).get("tile_workers")
         if configured is None:

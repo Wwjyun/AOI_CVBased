@@ -145,7 +145,8 @@ class RecipeManager:
         from core.detector_manager import DetectorManager
         from core.parameter_schema import validate_parameter_mapping
 
-        definitions = DetectorManager().definitions()
+        manager = DetectorManager()
+        definitions = manager.definitions()
         for detector_id, config in detectors.items():
             detector_id = str(detector_id)
             if detector_id not in definitions:
@@ -157,10 +158,13 @@ class RecipeManager:
                 )
             try:
                 validate_parameter_mapping(
-                    config.get("params", {}), DetectorManager().parameter_specs(detector_id),
+                    config.get("params", {}), manager.parameter_specs(detector_id),
                     f"detectors.{detector_id}.params"
                 )
+                manager.validate_parameters(detector_id, config.get("params", {}))
             except ValueError as exc:
+                raise RecipeError(str(exc)) from exc
+            except RuntimeError as exc:
                 raise RecipeError(str(exc)) from exc
 
     @staticmethod
