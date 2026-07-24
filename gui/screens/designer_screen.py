@@ -307,6 +307,9 @@ class DesignerScreen(QWidget):
         self.gpu_dll_path_edit.editingFinished.connect(self._refresh_gpu_status)
         self.gpu_tiling_toggle.toggled.connect(lambda _checked: self._refresh_gpu_status())
         self.gpu_display_toggle.toggled.connect(lambda _checked: self._refresh_gpu_status())
+        self.gpu_fallback_toggle.toggled.connect(
+            lambda _checked: self._refresh_active_detector_status()
+        )
         self.gpu_mode_combo.currentIndexChanged.connect(lambda _index: self._refresh_gpu_status())
         self._refresh_gpu_status()
         return panel
@@ -314,18 +317,43 @@ class DesignerScreen(QWidget):
     def _refresh_gpu_status(self) -> None:
         mode = str(self.gpu_mode_combo.currentData() or "auto")
         self.gpu_fallback_toggle.setEnabled(mode != "cuda")
+        self._refresh_active_detector_status()
+        yolox_status = self._yolox_cuda_provider_status()
         if mode == "cpu":
-            self.gpu_status_label.setText("CPU mode · 不載入 CUDA DLL")
+            self.gpu_status_label.setText(
+                "CPU mode · 不載入 CUDA DLL"
+                + (f"\n{yolox_status}" if yolox_status else "")
+            )
             self.gpu_status_label.setStyleSheet(f"color: {COLORS['text_3']}; font-size: 11px;")
             return
         with GpuRuntime(self.gpu_dll_path_edit.text().strip() or GpuRuntime.DEFAULT_DLL) as runtime:
             if runtime.available:
-                self.gpu_status_label.setText(f"CUDA 可用 · {runtime.device_name} · mode={mode}")
+                self.gpu_status_label.setText(
+                    f"CUDA DLL 可用 · {runtime.device_name} · mode={mode}"
+                    + (f"\n{yolox_status}" if yolox_status else "")
+                )
                 self.gpu_status_label.setStyleSheet(f"color: {COLORS['accent_text']}; font-size: 11px;")
             else:
                 suffix = "將回退 CPU" if mode == "auto" else "執行時將明確失敗"
-                self.gpu_status_label.setText(f"CUDA 不可用 · {suffix} · {runtime.unavailable_reason}")
+                self.gpu_status_label.setText(
+                    f"CUDA DLL 不可用 · {suffix} · {runtime.unavailable_reason}"
+                    + (f"\n{yolox_status}" if yolox_status else "")
+                )
                 self.gpu_status_label.setStyleSheet(f"color: {COLORS['text_3']}; font-size: 11px;")
+
+    def _yolox_cuda_provider_status(self) -> str:
+        if not self._gpu_enabled.get("yolox", False):
+            return ""
+        try:
+            providers = self.detector_manager.ai_available_providers()
+        except RuntimeError as exc:
+            return f"YOLOX ORT CUDA 狀態錯誤 · {exc}"
+        if "CUDAExecutionProvider" in providers:
+            return "YOLOX ORT CUDA 可用 · CUDAExecutionProvider"
+        return (
+            "YOLOX ORT CUDA 不可用 · providers="
+            + (", ".join(providers) or "(none)")
+        )
 
     # ------------------------------------------------------------------
     # tiling
@@ -777,8 +805,10 @@ class DesignerScreen(QWidget):
 
         gpu_toggle = Toggle(checked=self._gpu_enabled.get(detector_id, False))
         if detector_id == "yolox":
-            gpu_toggle.setEnabled(False)
-            gpu_toggle.setToolTip("YOLOX CUDA 尚未開放；目前固定使用 ONNX Runtime CPU。")
+            gpu_toggle.setToolTip(
+                "啟用後，Auto backend 會優先使用 ONNX Runtime CUDA；"
+                "是否可回退 CPU 由 GPU mode 決定。"
+            )
         else:
             gpu_toggle.setToolTip("此 detector 使用 CUDA DLL")
         gpu_toggle.toggled.connect(lambda checked, did=detector_id: self._on_detector_gpu_toggled(did, checked))
@@ -826,6 +856,8 @@ class DesignerScreen(QWidget):
 
     def _on_detector_gpu_toggled(self, detector_id: str, checked: bool) -> None:
         self._gpu_enabled[detector_id] = checked
+        if detector_id == "yolox":
+            self._refresh_gpu_status()
 
     def _select_detector(self, detector_id: str) -> None:
         self._active_detector = detector_id
@@ -954,8 +986,12 @@ class DesignerScreen(QWidget):
             error = f"找不到 model_id：{model_id or '(未選擇)'}"
         if not error and self._enabled.get("yolox", False):
             try:
-                self.detector_manager.validate_parameters(
-                    "yolox", self._params_for_detector("yolox")
+                self.detector_manager.validate_runtime_parameters(
+                    "yolox",
+                    self._params_for_detector("yolox"),
+                    use_gpu=self._gpu_enabled.get("yolox", False),
+                    gpu_mode=str(self.gpu_mode_combo.currentData() or "auto"),
+                    fallback_to_cpu=bool(self.gpu_fallback_toggle.isChecked()),
                 )
             except (RuntimeError, TypeError, ValueError) as exc:
                 error = str(exc)
@@ -1156,7 +1192,8 @@ class DesignerScreen(QWidget):
         try:
             recipe = self.build_recipe()
             RecipeManager().validate(recipe)
-        except (RecipeError, TypeError, ValueError) as exc:
+            self._validate_runtime_settings(recipe)
+        except (RecipeError, RuntimeError, TypeError, ValueError) as exc:
             message = f"Recipe 驗證失敗：{exc}"
             self.preview_status.setText(message)
             self.preview_status.setStyleSheet(f"color: {COLORS['ng']}; font-size: 9pt;")
@@ -1186,6 +1223,19 @@ class DesignerScreen(QWidget):
         self.recipe_saved.emit(recipe_path)
         self.preview_status.setText(f"Recipe 已儲存：{recipe_path}")
         self.preview_status.setStyleSheet(f"color: {COLORS['accent_text']}; font-size: 9pt;")
+
+    def _validate_runtime_settings(self, recipe: dict) -> None:
+        gpu = recipe.get("gpu", {}) or {}
+        config = (recipe.get("detectors", {}) or {}).get("yolox")
+        if not config or not config.get("enabled", False):
+            return
+        self.detector_manager.validate_runtime_parameters(
+            "yolox",
+            config.get("params", {}),
+            use_gpu=bool(config.get("use_gpu", False)),
+            gpu_mode=str(gpu.get("mode", "auto")),
+            fallback_to_cpu=bool(gpu.get("fallback_to_cpu", True)),
+        )
 
 
 def _wrap_layout(layout) -> QWidget:

@@ -82,6 +82,33 @@ class _RoiCapturingDetector:
 
 
 class GpuExecutionSessionTests(unittest.TestCase):
+    def test_yolox_gpu_request_uses_shared_ai_manager_without_loading_cuda_dll(self):
+        recipe_path = (
+            ROOT / "recipes" / "examples" / "YOLOX_TINY_REFERENCE_AOI_01.yaml"
+        )
+        recipe = AOIPipeline(
+            recipe_path, ROOT / "outputs"
+        ).recipe_manager.load(recipe_path)
+        recipe["gpu"]["mode"] = "auto"
+        recipe["detectors"]["yolox"]["use_gpu"] = True
+        recipe["detectors"]["yolox"]["params"]["inference_backend"] = "auto"
+        session = GpuExecutionSession.from_recipe(recipe)
+        try:
+            first = AOIPipeline(recipe_path, ROOT / "outputs", gpu_session=session)
+            second = AOIPipeline(recipe_path, ROOT / "outputs", gpu_session=session)
+
+            self.assertFalse(session.requested)
+            self.assertIs(
+                first.detector_manager._ai_session_manager,
+                session.ai_session_manager,
+            )
+            self.assertIs(
+                second.detector_manager._ai_session_manager,
+                session.ai_session_manager,
+            )
+        finally:
+            session.close()
+
     def test_gui_session_cache_reuses_unchanged_recipe_and_invalidates_changed_recipe(self):
         first_session = Mock()
         second_session = Mock()

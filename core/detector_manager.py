@@ -92,6 +92,44 @@ class DetectorManager:
         if callable(validator):
             validator(params, self._ai_manager().registry)
 
+    def validate_runtime_parameters(
+        self,
+        detector_id: str,
+        params: dict,
+        *,
+        use_gpu: bool,
+        gpu_mode: str,
+        fallback_to_cpu: bool = True,
+    ) -> None:
+        self.validate_parameters(detector_id, params)
+        if str(detector_id) != DetectorYolox.detector_id:
+            return
+        manager = self._ai_manager()
+        manager.configure_policy(
+            gpu_mode=gpu_mode,
+            fallback_to_cpu=fallback_to_cpu,
+        )
+        manifest = manager.registry.get(str(params.get("model_id", "")))
+        manager.validate_runtime_request(
+            manifest,
+            backend=str(params.get("inference_backend", "auto")),
+            precision=str(params.get("precision", "fp32")),
+            prefer_gpu=bool(use_gpu),
+        )
+
+    def configure_ai_policy(self, *, gpu_mode: str, fallback_to_cpu: bool) -> None:
+        self._ai_manager().configure_policy(
+            gpu_mode=gpu_mode,
+            fallback_to_cpu=fallback_to_cpu,
+        )
+
+    def ai_available_providers(self) -> tuple[str, ...]:
+        return self._ai_manager().available_providers()
+
+    @classmethod
+    def uses_native_cuda_runtime(cls, detector_id: str) -> bool:
+        return str(detector_id) != DetectorYolox.detector_id
+
     def _ai_manager(self):
         if self._ai_session_manager is None:
             from core.ai_runtime import AiModelSessionManager

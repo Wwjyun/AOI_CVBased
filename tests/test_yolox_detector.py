@@ -7,12 +7,16 @@ import unittest
 
 import cv2
 import numpy as np
+import yaml
 
 from core.ai_runtime import (
+    AiBackendUnavailable,
+    AiInferenceError,
     AiModelError,
     AiModelSessionManager,
     LetterboxTransform,
     YoloXModelRegistry,
+    compare_yolox_backend_results,
     decode_yolox_output,
     prepare_yolox_input,
 )
@@ -24,6 +28,83 @@ from core.recipe_manager import RecipeError, RecipeManager
 ROOT = Path(__file__).resolve().parents[1]
 MODEL_ROOT = ROOT / "models" / "yolox"
 EXAMPLE_RECIPE = ROOT / "recipes" / "examples" / "YOLOX_TINY_REFERENCE_AOI_01.yaml"
+
+
+class _FakeNode:
+    def __init__(self, name):
+        self.name = name
+
+
+class _FakeSessionOptions:
+    def __init__(self):
+        self.graph_optimization_level = None
+        self.entries = {}
+
+    def add_session_config_entry(self, key, value):
+        self.entries[key] = value
+
+
+class _FakeOrtSession:
+    def __init__(self, owner, providers, options):
+        self.owner = owner
+        self.providers = list(providers)
+        self.options = options
+        self.run_calls = 0
+
+    def get_providers(self):
+        return list(self.providers)
+
+    def get_inputs(self):
+        return [_FakeNode("images")]
+
+    def get_outputs(self):
+        return [_FakeNode("output")]
+
+    def run(self, _output_names, _inputs):
+        self.run_calls += 1
+        if (
+            self.providers[0] == "CUDAExecutionProvider"
+            and self.owner.fail_cuda_inference
+            and self.run_calls > 1
+        ):
+            raise RuntimeError("CUDA out of memory")
+        return [self.owner.output.copy()]
+
+
+class _FakeOrt:
+    class GraphOptimizationLevel:
+        ORT_ENABLE_ALL = "all"
+
+    SessionOptions = _FakeSessionOptions
+
+    def __init__(
+        self,
+        output,
+        providers,
+        *,
+        fail_cuda_inference=False,
+        fail_cuda_initialization=False,
+    ):
+        self.output = np.asarray(output, dtype=np.float32)
+        self.providers = list(providers)
+        self.fail_cuda_inference = fail_cuda_inference
+        self.fail_cuda_initialization = fail_cuda_initialization
+        self.sessions = []
+        self.inference_session_calls = []
+
+    def get_available_providers(self):
+        return list(self.providers)
+
+    def InferenceSession(self, _path, sess_options, providers):
+        self.inference_session_calls.append(providers[0])
+        if (
+            providers[0] == "CUDAExecutionProvider"
+            and self.fail_cuda_initialization
+        ):
+            raise RuntimeError("CUDA initialization failed")
+        session = _FakeOrtSession(self, providers, sess_options)
+        self.sessions.append(session)
+        return session
 
 
 def write_png(path: Path, image: np.ndarray) -> None:
@@ -64,6 +145,98 @@ class YoloXRegistryAndSessionTests(unittest.TestCase):
             (root / "registry.yaml").write_text(registry, encoding="utf-8")
             with self.assertRaisesRegex(AiModelError, "SHA-256 驗證失敗"):
                 YoloXModelRegistry(root)
+
+    def test_cuda_and_cpu_sessions_have_distinct_cache_keys_and_no_ep_fallback(self):
+        registry = YoloXModelRegistry(MODEL_ROOT)
+        manifest = registry.get("yolox_tiny_fixture")
+        fake_ort = _FakeOrt(
+            np.zeros((1, 21, 7), dtype=np.float32),
+            ["CUDAExecutionProvider", "CPUExecutionProvider"],
+        )
+        manager = AiModelSessionManager(
+            registry,
+            gpu_mode="cuda",
+            fallback_to_cpu=False,
+            ort_module=fake_ort,
+        )
+
+        cpu = manager.session_for(manifest, backend="onnxruntime_cpu")
+        cuda = manager.session_for(manifest, backend="onnxruntime_cuda")
+
+        self.assertIs(
+            cuda, manager.session_for(manifest, backend="onnxruntime_cuda")
+        )
+        self.assertIsNot(cpu, cuda)
+        self.assertEqual(manager.load_count, 2)
+        self.assertEqual(cpu.device, "CPU")
+        self.assertEqual(cuda.device, "CUDA")
+        self.assertEqual(
+            fake_ort.sessions[1].options.entries,
+            {"session.disable_cpu_ep_fallback": "1"},
+        )
+
+    def test_missing_cuda_provider_falls_back_only_when_policy_allows_it(self):
+        registry = YoloXModelRegistry(MODEL_ROOT)
+        manifest = registry.get("yolox_tiny_fixture")
+        fake_ort = _FakeOrt(
+            np.zeros((1, 21, 7), dtype=np.float32),
+            ["CPUExecutionProvider"],
+        )
+        fallback_manager = AiModelSessionManager(
+            registry,
+            gpu_mode="auto",
+            fallback_to_cpu=True,
+            ort_module=fake_ort,
+        )
+
+        selection = fallback_manager.select_session(
+            manifest, backend="auto", prefer_gpu=True
+        )
+
+        self.assertEqual(selection.actual_backend, "onnxruntime_cpu")
+        self.assertIn("CUDAExecutionProvider 不可用", selection.fallback_reason)
+        strict_manager = AiModelSessionManager(
+            registry,
+            gpu_mode="cuda",
+            fallback_to_cpu=False,
+            ort_module=fake_ort,
+        )
+        with self.assertRaisesRegex(
+            AiBackendUnavailable, "CUDAExecutionProvider 不可用"
+        ):
+            strict_manager.select_session(
+                manifest, backend="auto", prefer_gpu=True
+            )
+
+    def test_cuda_initialization_failure_is_quarantined_after_cpu_fallback(self):
+        registry = YoloXModelRegistry(MODEL_ROOT)
+        manifest = registry.get("yolox_tiny_fixture")
+        fake_ort = _FakeOrt(
+            np.zeros((1, 21, 7), dtype=np.float32),
+            ["CUDAExecutionProvider", "CPUExecutionProvider"],
+            fail_cuda_initialization=True,
+        )
+        manager = AiModelSessionManager(
+            registry,
+            gpu_mode="auto",
+            fallback_to_cpu=True,
+            ort_module=fake_ort,
+        )
+
+        first = manager.select_session(
+            manifest, backend="auto", prefer_gpu=True
+        )
+        second = manager.select_session(
+            manifest, backend="auto", prefer_gpu=True
+        )
+
+        self.assertEqual(first.actual_backend, "onnxruntime_cpu")
+        self.assertEqual(second.actual_backend, "onnxruntime_cpu")
+        self.assertIn("CUDA initialization failed", second.fallback_reason)
+        self.assertEqual(
+            fake_ort.inference_session_calls,
+            ["CUDAExecutionProvider", "CPUExecutionProvider"],
+        )
 
 
 class YoloXPreprocessAndPostprocessTests(unittest.TestCase):
@@ -153,6 +326,48 @@ class YoloXPreprocessAndPostprocessTests(unittest.TestCase):
             ["scratch", "stain", "scratch"],
         )
 
+    def test_backend_comparison_enforces_raw_bbox_class_and_confidence_tolerances(self):
+        reference_output = np.zeros((1, 21, 7), dtype=np.float32)
+        candidate_output = reference_output.copy()
+        candidate_output[0, 0, 0] = 5e-6
+        reference_defects = [
+            {
+                "bbox_local": [10, 10, 20, 20],
+                "confidence": 0.8,
+                "metadata": {"class_id": 0},
+            }
+        ]
+        candidate_defects = [
+            {
+                "bbox_local": [11, 10, 20, 20],
+                "confidence": 0.80005,
+                "metadata": {"class_id": 0},
+            }
+        ]
+
+        accepted = compare_yolox_backend_results(
+            reference_output,
+            candidate_output,
+            reference_defects,
+            candidate_defects,
+        )
+        rejected = compare_yolox_backend_results(
+            reference_output,
+            candidate_output,
+            reference_defects,
+            [
+                {
+                    "bbox_local": [12, 10, 20, 20],
+                    "confidence": 0.8002,
+                    "metadata": {"class_id": 1},
+                }
+            ],
+        )
+
+        self.assertTrue(accepted["passed"])
+        self.assertFalse(rejected["passed"])
+        self.assertFalse(rejected["detections"]["same_classes_and_order"])
+
     def _decode(self, output, transform, **overrides):
         params = {
             "confidence_threshold": 0.25,
@@ -208,6 +423,61 @@ class DetectorYoloXIntegrationTests(unittest.TestCase):
         self.assertTrue(result["pass"])
         self.assertEqual(result["defects"], [])
 
+    def test_cuda_inference_failure_restarts_detector_on_cpu(self):
+        registry = YoloXModelRegistry(MODEL_ROOT)
+        manifest = registry.get("yolox_tiny_fixture")
+        reference = AiModelSessionManager(registry)
+        tensor, _ = prepare_yolox_input(
+            np.zeros((32, 32, 3), dtype=np.uint8), manifest
+        )
+        output = reference.session_for(manifest).infer(tensor)
+        fake_ort = _FakeOrt(
+            output,
+            ["CUDAExecutionProvider", "CPUExecutionProvider"],
+            fail_cuda_inference=True,
+        )
+        sessions = AiModelSessionManager(
+            registry,
+            gpu_mode="auto",
+            fallback_to_cpu=True,
+            ort_module=fake_ort,
+        )
+        detector = DetectorManager(ai_session_manager=sessions).create(
+            "yolox", params={**self.params, "inference_backend": "auto"}, use_gpu=True
+        )
+
+        result = detector.run(np.zeros((32, 32, 3), dtype=np.uint8))
+        second = detector.run(np.zeros((32, 32, 3), dtype=np.uint8))
+
+        self.assertEqual(len(result["defects"]), 2)
+        self.assertEqual(result["execution"]["ai"]["actual_backend"], "onnxruntime_cpu")
+        self.assertIn("CUDA out of memory", result["execution"]["ai"]["fallback_reason"])
+        self.assertIn("CUDA out of memory", second["execution"]["ai"]["fallback_reason"])
+        self.assertFalse(result["execution"]["gpu_active"])
+        self.assertEqual([session.run_calls for session in fake_ort.sessions], [2, 3])
+
+    def test_strict_cuda_inference_failure_does_not_fallback(self):
+        registry = YoloXModelRegistry(MODEL_ROOT)
+        manifest = registry.get("yolox_tiny_fixture")
+        output = np.zeros((1, 21, 7), dtype=np.float32)
+        fake_ort = _FakeOrt(
+            output,
+            ["CUDAExecutionProvider", "CPUExecutionProvider"],
+            fail_cuda_inference=True,
+        )
+        sessions = AiModelSessionManager(
+            registry,
+            gpu_mode="cuda",
+            fallback_to_cpu=False,
+            ort_module=fake_ort,
+        )
+        detector = DetectorManager(ai_session_manager=sessions).create(
+            "yolox", params={**self.params, "inference_backend": "auto"}, use_gpu=True
+        )
+
+        with self.assertRaisesRegex(AiInferenceError, "CUDA out of memory"):
+            detector.run(np.zeros((32, 32, 3), dtype=np.uint8))
+
     def test_recipe_round_trip_rejects_unknown_model_and_pipeline_runs(self):
         recipe = RecipeManager().load(EXAMPLE_RECIPE)
         self.assertEqual(
@@ -235,6 +505,99 @@ class DetectorYoloXIntegrationTests(unittest.TestCase):
             result["tiles"][0]["detectors"][0]["execution"]["ai"]["actual_backend"],
             "onnxruntime_cpu",
         )
+
+    def test_pipeline_auto_fallback_reports_ort_provider_without_loading_cuda_dll(self):
+        recipe = RecipeManager().load(EXAMPLE_RECIPE)
+        recipe["gpu"]["mode"] = "auto"
+        recipe["gpu"]["fallback_to_cpu"] = True
+        recipe["detectors"]["yolox"]["use_gpu"] = True
+        recipe["detectors"]["yolox"]["params"]["inference_backend"] = "auto"
+        with tempfile.TemporaryDirectory(prefix="visionflow_yolox_fallback_") as temporary:
+            root = Path(temporary)
+            recipe_path = root / "recipe.yaml"
+            recipe_path.write_text(
+                yaml.safe_dump(recipe, allow_unicode=True, sort_keys=False),
+                encoding="utf-8",
+            )
+            image_path = root / "input.png"
+            write_png(image_path, np.zeros((32, 32, 3), dtype=np.uint8))
+
+            result = AOIPipeline(recipe_path, root / "output").run(image_path)
+
+        detector_execution = result["tiles"][0]["detectors"][0]["execution"]
+        gpu_status = result["execution"]["gpu"]["detectors"]["yolox"]
+        self.assertEqual(detector_execution["ai"]["actual_backend"], "onnxruntime_cpu")
+        self.assertIn(
+            "CUDAExecutionProvider 不可用",
+            detector_execution["ai"]["fallback_reason"],
+        )
+        self.assertTrue(gpu_status["requested"])
+        self.assertFalse(gpu_status["active"])
+        self.assertEqual(gpu_status["backend"], "onnxruntime_cpu")
+        self.assertEqual(result["execution"]["gpu"]["metrics"]["call_count"], 0)
+
+    def test_pipeline_fake_cuda_reports_active_backend_and_device(self):
+        registry = YoloXModelRegistry(MODEL_ROOT)
+        manifest = registry.get("yolox_tiny_fixture")
+        tensor, _ = prepare_yolox_input(
+            np.zeros((32, 32, 3), dtype=np.uint8), manifest
+        )
+        output = AiModelSessionManager(registry).session_for(manifest).infer(tensor)
+        fake_ort = _FakeOrt(
+            output,
+            ["CUDAExecutionProvider", "CPUExecutionProvider"],
+        )
+        sessions = AiModelSessionManager(
+            registry,
+            gpu_mode="auto",
+            fallback_to_cpu=True,
+            ort_module=fake_ort,
+        )
+        recipe = RecipeManager().load(EXAMPLE_RECIPE)
+        recipe["gpu"]["mode"] = "auto"
+        recipe["detectors"]["yolox"]["use_gpu"] = True
+        recipe["detectors"]["yolox"]["params"]["inference_backend"] = "auto"
+        with tempfile.TemporaryDirectory(prefix="visionflow_yolox_cuda_") as temporary:
+            root = Path(temporary)
+            recipe_path = root / "recipe.yaml"
+            recipe_path.write_text(
+                yaml.safe_dump(recipe, allow_unicode=True, sort_keys=False),
+                encoding="utf-8",
+            )
+            image_path = root / "input.png"
+            write_png(image_path, np.zeros((32, 32, 3), dtype=np.uint8))
+            pipeline = AOIPipeline(recipe_path, root / "output")
+            pipeline.detector_manager = DetectorManager(ai_session_manager=sessions)
+
+            result = pipeline.run(image_path)
+
+        gpu_status = result["execution"]["gpu"]["detectors"]["yolox"]
+        self.assertTrue(gpu_status["requested"])
+        self.assertTrue(gpu_status["active"])
+        self.assertEqual(gpu_status["backend"], "onnxruntime_cuda")
+        self.assertEqual(gpu_status["device_name"], "CUDA")
+        self.assertEqual(result["execution"]["gpu"]["metrics"]["call_count"], 0)
+
+    def test_pipeline_strict_cuda_rejects_missing_ort_provider(self):
+        recipe = RecipeManager().load(EXAMPLE_RECIPE)
+        recipe["gpu"]["mode"] = "cuda"
+        recipe["gpu"]["fallback_to_cpu"] = False
+        recipe["detectors"]["yolox"]["use_gpu"] = True
+        recipe["detectors"]["yolox"]["params"]["inference_backend"] = "auto"
+        with tempfile.TemporaryDirectory(prefix="visionflow_yolox_strict_") as temporary:
+            root = Path(temporary)
+            recipe_path = root / "recipe.yaml"
+            recipe_path.write_text(
+                yaml.safe_dump(recipe, allow_unicode=True, sort_keys=False),
+                encoding="utf-8",
+            )
+            image_path = root / "input.png"
+            write_png(image_path, np.zeros((32, 32, 3), dtype=np.uint8))
+
+            with self.assertRaisesRegex(
+                AiBackendUnavailable, "CUDAExecutionProvider 不可用"
+            ):
+                AOIPipeline(recipe_path, root / "output").run(image_path)
 
 
 if __name__ == "__main__":

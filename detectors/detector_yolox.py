@@ -3,7 +3,9 @@ from __future__ import annotations
 from copy import deepcopy
 
 from core.ai_runtime import (
+    AiInferenceError,
     AiModelSessionManager,
+    AiSessionSelection,
     decode_yolox_output,
     parse_target_class_ids,
     prepare_yolox_input,
@@ -74,7 +76,10 @@ class DetectorYolox(BaseDetector):
                 ),
                 "engineer_visible": False,
                 "label": "推論後端",
-                "tooltip": "Auto 在目前 CPU reference 階段會選擇 ONNX Runtime CPU。",
+                "tooltip": (
+                    "Auto 會依 detector GPU 開關選擇 ONNX Runtime CUDA；"
+                    "provider 不可用時依 GPU mode 決定回退或失敗。"
+                ),
             },
             "precision": {
                 "choices": ("fp32", "fp16", "int8"),
@@ -108,6 +113,22 @@ class DetectorYolox(BaseDetector):
         self.ai_session_manager = ai_session_manager or AiModelSessionManager()
         self._ai_execution: dict = {}
 
+    @property
+    def gpu_active(self) -> bool:
+        return self._ai_execution.get("actual_backend") == "onnxruntime_cuda"
+
+    @property
+    def gpu_requested(self) -> bool:
+        return bool(
+            self.use_gpu
+            or str(self.params.get("inference_backend", "auto")).lower()
+            == "onnxruntime_cuda"
+        )
+
+    @property
+    def actual_backend(self) -> str:
+        return str(self._ai_execution.get("actual_backend") or "onnxruntime_cpu")
+
     @staticmethod
     def validate_parameters(params: dict, registry) -> None:
         merged = deepcopy(DetectorYolox.default_params)
@@ -118,14 +139,40 @@ class DetectorYolox(BaseDetector):
         manifest = validate_yolox_parameters(
             self.params, self.ai_session_manager.registry
         )
+        requested_backend = str(self.params.get("inference_backend", "auto"))
+        with self.measure_detection_stage("model_session"):
+            selection = self.ai_session_manager.select_session(
+                manifest,
+                backend=requested_backend,
+                precision=str(self.params.get("precision", "fp32")),
+                prefer_gpu=self.use_gpu,
+            )
+        try:
+            return self._detect_with_selection(image, manifest, selection)
+        except AiInferenceError as exc:
+            if selection.actual_backend != "onnxruntime_cuda":
+                raise
+            self.ai_session_manager.mark_backend_failed(
+                manifest,
+                backend=selection.actual_backend,
+                reason=str(exc),
+            )
+            if not self.ai_session_manager.fallback_to_cpu:
+                raise
+            with self.measure_detection_stage("model_session"):
+                cpu_selection = self.ai_session_manager.cpu_fallback_selection(
+                    manifest,
+                    requested_backend=requested_backend,
+                    reason=str(exc),
+                )
+            return self._detect_with_selection(image, manifest, cpu_selection)
+
+    def _detect_with_selection(
+        self, image, manifest, selection: AiSessionSelection
+    ) -> list[dict]:
         with self.measure_detection_stage("dl_preprocess"):
             tensor, transform = prepare_yolox_input(image, manifest)
-        with self.measure_detection_stage("model_session"):
-            session = self.ai_session_manager.session_for(
-                manifest,
-                backend=str(self.params.get("inference_backend", "auto")),
-                precision=str(self.params.get("precision", "fp32")),
-            )
+        session = selection.session
         with self.measure_detection_stage("inference"):
             output = session.infer(tensor)
         with self.measure_detection_stage("postprocess"):
@@ -150,10 +197,8 @@ class DetectorYolox(BaseDetector):
                 ),
             )
         self._ai_execution = {
-            "requested_backend": str(
-                self.params.get("inference_backend", "auto")
-            ),
-            "actual_backend": session.backend,
+            "requested_backend": selection.requested_backend,
+            "actual_backend": selection.actual_backend,
             "device": session.device,
             "precision": session.precision,
             "model_id": manifest.model_id,
@@ -166,17 +211,20 @@ class DetectorYolox(BaseDetector):
             "warmup_sec": round(session.warmup_sec, 6),
             "last_inference_sec": round(session.last_inference_sec, 6),
             "session_inference_count": session.inference_count,
-            "fallback_reason": "",
+            "fallback_reason": selection.fallback_reason,
         }
+        self.gpu_fallback_reason = selection.fallback_reason
         return defects
 
     def run(self, image, device_roi=None, preprocess_cache=None) -> dict:
         self._ai_execution = {}
+        self.gpu_fallback_reason = ""
         result = super().run(
             image, device_roi=device_roi, preprocess_cache=preprocess_cache
         )
         result["execution"]["ai"] = deepcopy(self._ai_execution)
         if self._ai_execution:
             result["execution"]["backend"] = self._ai_execution["actual_backend"]
-            result["execution"]["gpu_active"] = False
+            result["execution"]["gpu_active"] = self.gpu_active
+            result["execution"]["fallback_reason"] = self.gpu_fallback_reason
         return result

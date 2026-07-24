@@ -4,6 +4,8 @@ from contextlib import contextmanager
 import threading
 from pathlib import Path
 
+from core.ai_runtime import AiModelSessionManager
+from core.detector_manager import DetectorManager
 from core.gpu_runtime import GpuRuntime, GpuRuntimeError
 from core.recipe_manager import RecipeManager
 
@@ -11,7 +13,14 @@ from core.recipe_manager import RecipeManager
 class GpuExecutionSession:
     """Own one long-lived runtime/context shared by compatible pipeline runs."""
 
-    def __init__(self, runtime: GpuRuntime, requested: bool, config: dict, workload: str = "latency"):
+    def __init__(
+        self,
+        runtime: GpuRuntime,
+        requested: bool,
+        config: dict,
+        workload: str = "latency",
+        ai_session_manager: AiModelSessionManager | None = None,
+    ):
         self.runtime = runtime
         self.requested = bool(requested)
         self._dll_path = GpuRuntime._resolve_path(
@@ -19,6 +28,10 @@ class GpuExecutionSession:
         )
         self._fallback_to_cpu = RecipeManager().gpu_fallback_enabled(config)
         self.workload = workload
+        self.ai_session_manager = ai_session_manager or AiModelSessionManager(
+            gpu_mode=RecipeManager().gpu_mode(config),
+            fallback_to_cpu=RecipeManager().gpu_fallback_enabled(config),
+        )
         self._closed = False
         self._pipeline_lock = threading.RLock()
 
@@ -27,8 +40,13 @@ class GpuExecutionSession:
         gpu_config = recipe.get("gpu", {}) or {}
         manager = RecipeManager()
         detector_configs = manager.enabled_detectors(recipe)
-        requested = manager.gpu_feature_requested(gpu_config, "tiling") or manager.gpu_mode(gpu_config) != "cpu" and any(
-            bool(config.get("use_gpu", False)) for config in detector_configs.values()
+        requested = manager.gpu_feature_requested(gpu_config, "tiling") or (
+            manager.gpu_mode(gpu_config) != "cpu"
+            and any(
+                bool(config.get("use_gpu", False))
+                and DetectorManager.uses_native_cuda_runtime(detector_id)
+                for detector_id, config in detector_configs.items()
+            )
         )
         runtime = GpuRuntime(
             gpu_config.get("dll_path", GpuRuntime.DEFAULT_DLL),
@@ -60,6 +78,7 @@ class GpuExecutionSession:
         if self._closed:
             return
         self._closed = True
+        self.ai_session_manager.close()
         self.runtime.close()
 
     @contextmanager

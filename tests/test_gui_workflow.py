@@ -54,6 +54,25 @@ class GuiWorkflowTests(unittest.TestCase):
         )
         self.assertTrue(status["active"])
         self.assertEqual(status["device_name"], "RTX 3090")
+        ai_status = _backend_status_from_result(
+            {
+                "execution": {
+                    "gpu": {
+                        "tiling": {"requested": False, "active": False},
+                        "detectors": {
+                            "yolox": {
+                                "requested": True,
+                                "active": True,
+                                "device_name": "CUDA",
+                                "fallback_reason": "",
+                            }
+                        },
+                    }
+                }
+            }
+        )
+        self.assertTrue(ai_status["active"])
+        self.assertEqual(ai_status["device_name"], "CUDA")
 
     def test_permission_manager_defaults_to_op_and_checks_each_privileged_password(self):
         permissions = PermissionManager()
@@ -228,6 +247,7 @@ class GuiWorkflowTests(unittest.TestCase):
         self.assertTrue(screen.yolox_model_info_edit.isReadOnly())
         self.assertIn("輸入 32 × 32", screen.yolox_model_info_edit.text())
         self.assertIn("測試模型", screen.detector_notice_label.text())
+        self.assertTrue(screen._row_widgets["yolox"]["gpu_toggle"].isEnabled())
 
         screen._set_dirty(False)
         confidence = screen._param_widgets["yolox"]["confidence_threshold"]
@@ -252,10 +272,12 @@ class GuiWorkflowTests(unittest.TestCase):
         screen.set_mode("admin")
         screen._select_detector("yolox")
         screen._row_widgets["yolox"]["toggle"].setChecked(True)
+        screen._row_widgets["yolox"]["gpu_toggle"].setChecked(True)
         backend = screen._param_widgets["yolox"]["inference_backend"]
         backend.setCurrentIndex(backend.findData("onnxruntime_cuda"))
 
-        self.assertIn("不支援推論後端", screen.detector_notice_label.text())
+        self.assertIn("CUDAExecutionProvider 不可用", screen.detector_notice_label.text())
+        self.assertIn("YOLOX ORT CUDA 不可用", screen.gpu_status_label.text())
         self.assertIn("YOLOX 設定錯誤", screen.editor_state_badge.text())
         with patch(
             "gui.screens.designer_screen.QFileDialog.getSaveFileName"

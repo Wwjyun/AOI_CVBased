@@ -75,10 +75,18 @@ def _backend_status_from_result(result: dict | None) -> dict:
     requested = any(status.get("requested") for status in statuses)
     active = any(status.get("active") for status in statuses)
     reasons = [str(status.get("fallback_reason") or status.get("reason") or "") for status in statuses]
+    active_device = next(
+        (
+            str(status.get("device_name"))
+            for status in statuses
+            if status.get("active") and status.get("device_name")
+        ),
+        "",
+    )
     return {
         "requested": requested,
         "active": active,
-        "device_name": str(tiling_status.get("device_name") or "CUDA"),
+        "device_name": active_device or str(tiling_status.get("device_name") or "CUDA"),
         "fallback_reason": next((reason for reason in reasons if reason), ""),
     }
 

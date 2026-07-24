@@ -12,6 +12,7 @@ models:
       - "stain"
     allowed_backends:
       - "onnxruntime_cpu"
+      - "onnxruntime_cuda"
     allowed_precisions:
       - "fp32"
     test_only: true

@@ -41,7 +41,11 @@ class AOIPipeline(LogMixin):
         self.output_overrides = output_overrides
         self.gpu_session = gpu_session
         self.recipe_manager = RecipeManager()
-        self.detector_manager = DetectorManager()
+        self.detector_manager = DetectorManager(
+            ai_session_manager=(
+                gpu_session.ai_session_manager if gpu_session is not None else None
+            )
+        )
         self._active_profiler = None
         self._last_progress_percent = None
 
@@ -73,10 +77,19 @@ class AOIPipeline(LogMixin):
             gpu_config = recipe.get("gpu", {}) or {}
             detector_configs = self.recipe_manager.enabled_detectors(recipe)
             gpu_mode = self.recipe_manager.gpu_mode(gpu_config)
+            self.detector_manager.configure_ai_policy(
+                gpu_mode=gpu_mode,
+                fallback_to_cpu=self.recipe_manager.gpu_fallback_enabled(gpu_config),
+            )
             tiling_gpu_requested = self.recipe_manager.gpu_feature_requested(gpu_config, "tiling")
             detector_gpu_allowed = gpu_mode != "cpu"
-            gpu_requested = tiling_gpu_requested or detector_gpu_allowed and any(
-                bool(config.get("use_gpu", False)) for config in detector_configs.values()
+            gpu_requested = tiling_gpu_requested or (
+                detector_gpu_allowed
+                and any(
+                    bool(config.get("use_gpu", False))
+                    and self.detector_manager.uses_native_cuda_runtime(detector_id)
+                    for detector_id, config in detector_configs.items()
+                )
             )
             gpu_runtime = self._build_gpu_runtime(gpu_config, gpu_requested)
         if gpu_requested and not gpu_runtime.available and not gpu_runtime.fallback_to_cpu:
@@ -100,7 +113,9 @@ class AOIPipeline(LogMixin):
             tile_config = recipe["tile"]
             resident_image = None
             detector_gpu_requested = detector_gpu_allowed and any(
-                bool(config.get("use_gpu", False)) for config in detector_configs.values()
+                bool(config.get("use_gpu", False))
+                and self.detector_manager.uses_native_cuda_runtime(detector_id)
+                for detector_id, config in detector_configs.items()
             )
             if (
                 detector_gpu_requested
@@ -167,12 +182,17 @@ class AOIPipeline(LogMixin):
         detector_fallbacks = {
             detector.detector_id: detector.gpu_fallback_reason
             for detector in detectors
-            if detector.use_gpu and detector.gpu_fallback_reason
+            if getattr(detector, "gpu_requested", detector.use_gpu)
+            and detector.gpu_fallback_reason
         }
         if detector_fallbacks:
             self.logger.warning("Detector CUDA fallback: %s", detector_fallbacks)
-        fallback_message = " (CPU fallback)" if gpu_requested and (
-            not gpu_runtime.available or gpu_runtime.last_error or detector_fallbacks
+        fallback_message = " (CPU fallback)" if (
+            (
+                gpu_requested
+                and (not gpu_runtime.available or gpu_runtime.last_error)
+            )
+            or detector_fallbacks
         ) else ""
         self._progress(85, f"Aggregating PASS / NG result{fallback_message}")
         with profiler.measure("aggregation"):
@@ -204,9 +224,25 @@ class AOIPipeline(LogMixin):
                     "display_requested": self.recipe_manager.gpu_feature_requested(gpu_config, "display"),
                     "detectors": {
                         detector.detector_id: {
-                            "requested": detector.use_gpu,
+                            "requested": getattr(
+                                detector, "gpu_requested", detector.use_gpu
+                            ),
                             "active": detector.gpu_active,
-                            "backend": "cuda_dll" if detector.gpu_active else "cpu",
+                            "backend": getattr(
+                                detector,
+                                "actual_backend",
+                                "cuda_dll" if detector.gpu_active else "cpu",
+                            ),
+                            "device_name": (
+                                (
+                                    getattr(detector, "_ai_execution", {}).get(
+                                        "device", ""
+                                    )
+                                    or gpu_runtime.device_name
+                                )
+                                if detector.gpu_active
+                                else ""
+                            ),
                             "fallback_reason": detector.gpu_fallback_reason,
                         }
                         for detector in detectors

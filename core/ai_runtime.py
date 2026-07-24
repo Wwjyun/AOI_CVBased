@@ -22,6 +22,10 @@ class AiBackendUnavailable(AiModelError):
     pass
 
 
+class AiInferenceError(AiModelError):
+    pass
+
+
 @dataclass(frozen=True)
 class YoloXModelManifest:
     model_id: str
@@ -349,32 +353,66 @@ def validate_yolox_parameters(
     return manifest
 
 
-class OnnxRuntimeCpuSession:
-    backend = "onnxruntime_cpu"
-    device = "CPU"
-    precision = "fp32"
+class OnnxRuntimeSession:
+    PROVIDERS = {
+        "onnxruntime_cpu": ("CPUExecutionProvider", "CPU"),
+        "onnxruntime_cuda": ("CUDAExecutionProvider", "CUDA"),
+    }
 
-    def __init__(self, manifest: YoloXModelManifest):
+    def __init__(
+        self,
+        manifest: YoloXModelManifest,
+        *,
+        backend: str = "onnxruntime_cpu",
+        precision: str = "fp32",
+        ort_module=None,
+    ):
+        self.backend = str(backend).lower()
+        self.precision = str(precision).lower()
         try:
-            import onnxruntime as ort
-        except ImportError as exc:
+            provider, self.device = self.PROVIDERS[self.backend]
+        except KeyError as exc:
+            raise AiBackendUnavailable(f"尚未實作 YOLOX backend：{self.backend}") from exc
+        if self.precision != "fp32":
             raise AiBackendUnavailable(
-                "onnxruntime is required for the YOLOX CPU reference backend"
-            ) from exc
+                f"YOLOX {self.backend} 目前只支援 fp32，收到 {self.precision}"
+            )
+        ort = ort_module or _import_onnxruntime()
+        available = tuple(ort.get_available_providers())
+        if provider not in available:
+            raise AiBackendUnavailable(
+                f"ONNX Runtime {provider} 不可用；目前 providers："
+                f"{', '.join(available) or '(none)'}"
+            )
+
         started = time.perf_counter()
         options = ort.SessionOptions()
         options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-        self._session = ort.InferenceSession(
-            str(manifest.model_path),
-            sess_options=options,
-            providers=["CPUExecutionProvider"],
-        )
+        if provider == "CUDAExecutionProvider":
+            options.add_session_config_entry("session.disable_cpu_ep_fallback", "1")
+        try:
+            self._session = ort.InferenceSession(
+                str(manifest.model_path),
+                sess_options=options,
+                providers=[provider],
+            )
+        except Exception as exc:
+            raise AiBackendUnavailable(
+                f"YOLOX {self.backend} session 初始化失敗：{exc}"
+            ) from exc
         self.load_sec = time.perf_counter() - started
         self.manifest = manifest
         self._lock = threading.RLock()
         self.last_inference_sec = 0.0
         self.inference_count = 0
+        self._closed = False
 
+        active_providers = tuple(self._session.get_providers())
+        if provider not in active_providers:
+            raise AiBackendUnavailable(
+                f"YOLOX {self.backend} 未啟用預期 provider {provider}；"
+                f"實際 providers：{', '.join(active_providers) or '(none)'}"
+            )
         input_names = {item.name for item in self._session.get_inputs()}
         output_names = {item.name for item in self._session.get_outputs()}
         if manifest.input_name not in input_names:
@@ -386,13 +424,20 @@ class OnnxRuntimeCpuSession:
                 f"YOLOX model output {manifest.output_name!r} is not present in the ONNX graph"
             )
         warmup_started = time.perf_counter()
-        self._session.run(
-            [manifest.output_name],
-            {manifest.input_name: np.zeros(manifest.input_shape, dtype=np.float32)},
-        )
+        try:
+            self._session.run(
+                [manifest.output_name],
+                {manifest.input_name: np.zeros(manifest.input_shape, dtype=np.float32)},
+            )
+        except Exception as exc:
+            raise AiBackendUnavailable(
+                f"YOLOX {self.backend} warm-up 失敗：{exc}"
+            ) from exc
         self.warmup_sec = time.perf_counter() - warmup_started
 
     def infer(self, tensor: np.ndarray) -> np.ndarray:
+        if self._closed:
+            raise AiInferenceError("YOLOX session 已關閉")
         if tuple(tensor.shape) != self.manifest.input_shape or tensor.dtype != np.float32:
             raise AiModelError(
                 f"YOLOX tensor must be float32 {self.manifest.input_shape}, "
@@ -400,49 +445,274 @@ class OnnxRuntimeCpuSession:
             )
         with self._lock:
             started = time.perf_counter()
-            output = self._session.run(
-                [self.manifest.output_name],
-                {self.manifest.input_name: tensor},
-            )[0]
+            try:
+                output = self._session.run(
+                    [self.manifest.output_name],
+                    {self.manifest.input_name: tensor},
+                )[0]
+            except Exception as exc:
+                raise AiInferenceError(
+                    f"YOLOX {self.backend} 推論失敗：{exc}"
+                ) from exc
             self.last_inference_sec = time.perf_counter() - started
             self.inference_count += 1
         return np.asarray(output)
 
+    def close(self) -> None:
+        with self._lock:
+            self._closed = True
+            self._session = None
+
+
+class OnnxRuntimeCpuSession(OnnxRuntimeSession):
+    def __init__(self, manifest: YoloXModelManifest, *, ort_module=None):
+        super().__init__(
+            manifest,
+            backend="onnxruntime_cpu",
+            precision="fp32",
+            ort_module=ort_module,
+        )
+
+
+@dataclass(frozen=True)
+class AiSessionSelection:
+    session: OnnxRuntimeSession
+    requested_backend: str
+    actual_backend: str
+    fallback_reason: str = ""
+
 
 class AiModelSessionManager:
-    def __init__(self, registry: YoloXModelRegistry | None = None):
-        self.registry = registry or YoloXModelRegistry()
-        self._sessions: dict[tuple[Any, ...], OnnxRuntimeCpuSession] = {}
+    def __init__(
+        self,
+        registry: YoloXModelRegistry | None = None,
+        *,
+        gpu_mode: str = "auto",
+        fallback_to_cpu: bool = True,
+        ort_module=None,
+    ):
+        self._registry = registry
+        self._sessions: dict[tuple[Any, ...], OnnxRuntimeSession] = {}
+        self._runtime_failures: dict[tuple[str, str], str] = {}
         self._lock = threading.RLock()
+        self._ort_module = ort_module
+        self.gpu_mode = "auto"
+        self.fallback_to_cpu = True
+        self.configure_policy(gpu_mode=gpu_mode, fallback_to_cpu=fallback_to_cpu)
         self.load_count = 0
+
+    @property
+    def registry(self) -> YoloXModelRegistry:
+        with self._lock:
+            if self._registry is None:
+                self._registry = YoloXModelRegistry()
+            return self._registry
+
+    def configure_policy(self, *, gpu_mode: str, fallback_to_cpu: bool) -> None:
+        normalized = str(gpu_mode).lower()
+        if normalized not in {"auto", "cpu", "cuda"}:
+            raise AiBackendUnavailable(f"未知的 GPU mode：{gpu_mode}")
+        self.gpu_mode = normalized
+        self.fallback_to_cpu = normalized != "cuda" and bool(fallback_to_cpu)
+
+    def available_providers(self) -> tuple[str, ...]:
+        return tuple(self._ort().get_available_providers())
+
+    def validate_runtime_request(
+        self,
+        manifest: YoloXModelManifest,
+        *,
+        backend: str,
+        precision: str,
+        prefer_gpu: bool,
+    ) -> None:
+        requested = str(backend).lower()
+        if requested == "onnxruntime_cuda" or requested == "auto" and prefer_gpu:
+            self._resolve_backend(
+                manifest,
+                requested_backend=requested,
+                precision=precision,
+                prefer_gpu=prefer_gpu,
+                allow_fallback=False,
+            )
+
+    def select_session(
+        self,
+        manifest: YoloXModelManifest,
+        *,
+        backend: str = "auto",
+        precision: str = "fp32",
+        prefer_gpu: bool = False,
+    ) -> AiSessionSelection:
+        requested = str(backend).lower()
+        actual, fallback_reason = self._resolve_backend(
+            manifest,
+            requested_backend=requested,
+            precision=precision,
+            prefer_gpu=prefer_gpu,
+            allow_fallback=self.fallback_to_cpu,
+        )
+        try:
+            session = self.session_for(
+                manifest,
+                backend=actual,
+                precision=precision,
+            )
+        except AiBackendUnavailable as exc:
+            if actual != "onnxruntime_cuda" or not self.fallback_to_cpu:
+                raise
+            fallback_reason = str(exc)
+            self.mark_backend_failed(
+                manifest,
+                backend=actual,
+                reason=fallback_reason,
+            )
+            actual = "onnxruntime_cpu"
+            session = self.session_for(
+                manifest,
+                backend=actual,
+                precision="fp32",
+            )
+        return AiSessionSelection(
+            session=session,
+            requested_backend=requested,
+            actual_backend=actual,
+            fallback_reason=fallback_reason,
+        )
 
     def session_for(
         self, manifest: YoloXModelManifest, backend: str = "auto", precision: str = "fp32"
-    ) -> OnnxRuntimeCpuSession:
-        requested_backend = str(backend).lower()
-        effective_backend = (
-            "onnxruntime_cpu" if requested_backend == "auto" else requested_backend
-        )
-        if effective_backend != "onnxruntime_cpu":
+    ) -> OnnxRuntimeSession:
+        effective_backend = str(backend).lower()
+        if effective_backend == "auto":
+            effective_backend = "onnxruntime_cpu"
+        normalized_precision = str(precision).lower()
+        if effective_backend not in OnnxRuntimeSession.PROVIDERS:
+            raise AiBackendUnavailable(f"尚未實作 YOLOX backend：{effective_backend}")
+        if effective_backend not in manifest.allowed_backends:
             raise AiBackendUnavailable(
-                f"YOLOX backend {effective_backend} is not implemented in the CPU reference phase"
+                f"YOLOX 模型 {manifest.model_id} 不支援推論後端 {effective_backend}"
             )
-        if str(precision).lower() != "fp32":
-            raise AiBackendUnavailable("YOLOX CPU reference currently supports fp32 only")
+        if normalized_precision not in manifest.allowed_precisions:
+            raise AiBackendUnavailable(
+                f"YOLOX 模型 {manifest.model_id} 不支援推論精度 {normalized_precision}"
+            )
         key = (
             manifest.sha256,
             effective_backend,
-            "CPU",
-            "fp32",
+            OnnxRuntimeSession.PROVIDERS[effective_backend][1],
+            normalized_precision,
             manifest.input_shape,
         )
         with self._lock:
             session = self._sessions.get(key)
             if session is None:
-                session = OnnxRuntimeCpuSession(manifest)
+                session = OnnxRuntimeSession(
+                    manifest,
+                    backend=effective_backend,
+                    precision=normalized_precision,
+                    ort_module=self._ort(),
+                )
                 self._sessions[key] = session
                 self.load_count += 1
             return session
+
+    def cpu_fallback_selection(
+        self,
+        manifest: YoloXModelManifest,
+        *,
+        requested_backend: str,
+        reason: str,
+    ) -> AiSessionSelection:
+        if not self.fallback_to_cpu:
+            raise AiBackendUnavailable(reason)
+        return AiSessionSelection(
+            session=self.session_for(
+                manifest, backend="onnxruntime_cpu", precision="fp32"
+            ),
+            requested_backend=str(requested_backend).lower(),
+            actual_backend="onnxruntime_cpu",
+            fallback_reason=str(reason),
+        )
+
+    def mark_backend_failed(
+        self,
+        manifest: YoloXModelManifest,
+        *,
+        backend: str,
+        reason: str,
+    ) -> None:
+        normalized = str(backend).lower()
+        with self._lock:
+            self._runtime_failures[(manifest.sha256, normalized)] = str(reason)
+            stale_keys = [
+                key
+                for key, session in self._sessions.items()
+                if session.manifest.sha256 == manifest.sha256
+                and session.backend == normalized
+            ]
+            for key in stale_keys:
+                self._sessions.pop(key).close()
+
+    def _resolve_backend(
+        self,
+        manifest: YoloXModelManifest,
+        *,
+        requested_backend: str,
+        precision: str,
+        prefer_gpu: bool,
+        allow_fallback: bool,
+    ) -> tuple[str, str]:
+        normalized_precision = str(precision).lower()
+        if normalized_precision != "fp32":
+            raise AiBackendUnavailable(
+                f"ONNX Runtime M3 僅支援 fp32，收到 {normalized_precision}"
+            )
+        requested = str(requested_backend).lower()
+        if requested not in {"auto", "onnxruntime_cpu", "onnxruntime_cuda"}:
+            raise AiBackendUnavailable(f"尚未實作 YOLOX backend：{requested}")
+        if self.gpu_mode == "cpu" and requested == "onnxruntime_cuda":
+            raise AiBackendUnavailable(
+                "GPU mode=cpu 不允許使用 ONNX Runtime CUDA"
+            )
+        desired = (
+            "onnxruntime_cuda"
+            if requested == "onnxruntime_cuda"
+            or requested == "auto" and prefer_gpu and self.gpu_mode != "cpu"
+            else "onnxruntime_cpu"
+        )
+        if desired not in manifest.allowed_backends:
+            raise AiBackendUnavailable(
+                f"YOLOX 模型 {manifest.model_id} 不支援推論後端 {desired}"
+            )
+        if normalized_precision not in manifest.allowed_precisions:
+            raise AiBackendUnavailable(
+                f"YOLOX 模型 {manifest.model_id} 不支援推論精度 {normalized_precision}"
+            )
+        with self._lock:
+            previous_failure = self._runtime_failures.get(
+                (manifest.sha256, desired), ""
+            )
+        if previous_failure:
+            if desired == "onnxruntime_cuda" and allow_fallback:
+                return "onnxruntime_cpu", previous_failure
+            raise AiBackendUnavailable(previous_failure)
+        provider = OnnxRuntimeSession.PROVIDERS[desired][0]
+        available = self.available_providers()
+        if provider in available:
+            return desired, ""
+        reason = (
+            f"ONNX Runtime {provider} 不可用；目前 providers："
+            f"{', '.join(available) or '(none)'}"
+        )
+        if desired == "onnxruntime_cuda" and allow_fallback:
+            return "onnxruntime_cpu", reason
+        raise AiBackendUnavailable(reason)
+
+    def _ort(self):
+        if self._ort_module is None:
+            self._ort_module = _import_onnxruntime()
+        return self._ort_module
 
     @property
     def session_count(self) -> int:
@@ -451,7 +721,20 @@ class AiModelSessionManager:
 
     def close(self) -> None:
         with self._lock:
+            for session in self._sessions.values():
+                session.close()
             self._sessions.clear()
+            self._runtime_failures.clear()
+
+
+def _import_onnxruntime():
+    try:
+        import onnxruntime as ort
+    except ImportError as exc:
+        raise AiBackendUnavailable(
+            "YOLOX 需要 onnxruntime 或 onnxruntime-gpu"
+        ) from exc
+    return ort
 
 
 def decode_yolox_output(
@@ -608,6 +891,113 @@ def decode_yolox_output(
         )
     )
     return defects
+
+
+YOLOX_RAW_ATOL = 1e-5
+YOLOX_RAW_RTOL = 1e-5
+YOLOX_BBOX_ABS_TOLERANCE_PX = 1
+YOLOX_CONFIDENCE_ABS_TOLERANCE = 1e-4
+
+
+def compare_yolox_backend_results(
+    reference_output: np.ndarray,
+    candidate_output: np.ndarray,
+    reference_defects: list[dict[str, Any]],
+    candidate_defects: list[dict[str, Any]],
+    *,
+    raw_atol: float = YOLOX_RAW_ATOL,
+    raw_rtol: float = YOLOX_RAW_RTOL,
+    bbox_abs_tolerance_px: int = YOLOX_BBOX_ABS_TOLERANCE_PX,
+    confidence_abs_tolerance: float = YOLOX_CONFIDENCE_ABS_TOLERANCE,
+) -> dict[str, Any]:
+    reference = np.asarray(reference_output, dtype=np.float32)
+    candidate = np.asarray(candidate_output, dtype=np.float32)
+    same_shape = reference.shape == candidate.shape
+    if same_shape and reference.size:
+        absolute = np.abs(reference - candidate)
+        max_raw_abs_diff = (
+            float(np.max(absolute))
+            if np.isfinite(absolute).all()
+            else float("inf")
+        )
+        raw_close = bool(
+            np.allclose(
+                reference,
+                candidate,
+                atol=float(raw_atol),
+                rtol=float(raw_rtol),
+                equal_nan=False,
+            )
+        )
+    else:
+        max_raw_abs_diff = 0.0 if same_shape else float("inf")
+        raw_close = same_shape
+
+    same_count = len(reference_defects) == len(candidate_defects)
+    same_classes = same_count and all(
+        int(left.get("metadata", {}).get("class_id", -1))
+        == int(right.get("metadata", {}).get("class_id", -1))
+        for left, right in zip(reference_defects, candidate_defects)
+    )
+    max_bbox_abs_diff = 0
+    max_confidence_abs_diff = 0.0
+    if same_count:
+        for left, right in zip(reference_defects, candidate_defects):
+            left_bbox = [int(value) for value in left.get("bbox_local", [])]
+            right_bbox = [int(value) for value in right.get("bbox_local", [])]
+            if len(left_bbox) != 4 or len(right_bbox) != 4:
+                max_bbox_abs_diff = max(
+                    max_bbox_abs_diff, int(bbox_abs_tolerance_px) + 1
+                )
+            else:
+                max_bbox_abs_diff = max(
+                    max_bbox_abs_diff,
+                    max(
+                        abs(left_value - right_value)
+                        for left_value, right_value in zip(left_bbox, right_bbox)
+                    ),
+                )
+            max_confidence_abs_diff = max(
+                max_confidence_abs_diff,
+                abs(
+                    float(left.get("confidence", 0.0))
+                    - float(right.get("confidence", 0.0))
+                ),
+            )
+    bbox_close = same_count and max_bbox_abs_diff <= int(bbox_abs_tolerance_px)
+    confidence_close = (
+        same_count
+        and max_confidence_abs_diff <= float(confidence_abs_tolerance)
+    )
+    return {
+        "passed": bool(
+            raw_close
+            and same_count
+            and same_classes
+            and bbox_close
+            and confidence_close
+        ),
+        "raw": {
+            "same_shape": same_shape,
+            "shape": list(candidate.shape),
+            "max_abs_diff": max_raw_abs_diff,
+            "atol": float(raw_atol),
+            "rtol": float(raw_rtol),
+            "within_tolerance": raw_close,
+        },
+        "detections": {
+            "reference_count": len(reference_defects),
+            "candidate_count": len(candidate_defects),
+            "same_classes_and_order": same_classes,
+            "max_bbox_abs_diff_px": max_bbox_abs_diff,
+            "bbox_abs_tolerance_px": int(bbox_abs_tolerance_px),
+            "max_confidence_abs_diff": max_confidence_abs_diff,
+            "confidence_abs_tolerance": float(confidence_abs_tolerance),
+            "within_tolerance": bool(
+                same_count and same_classes and bbox_close and confidence_close
+            ),
+        },
+    }
 
 
 def _box_iou(first: list[float], second: list[float]) -> float:
