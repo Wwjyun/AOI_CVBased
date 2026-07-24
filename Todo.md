@@ -251,6 +251,49 @@
 
 ## 未來 AI Detector
 
+### YOLOX Detector 規格與參數
+
+- [ ] 定義 detector ID 為 `yolox`、顯示名稱為「YOLOX 物件偵測」，輸入語意為目前 tile／ROI 的 BGR `uint8` 影像；命中指定缺陷類別即產生 defect，零筆 defect 為 PASS。
+- [ ] 建立受控的 YOLOX model registry；Recipe 只保存穩定的 `model_id`，不可直接依賴使用者電腦上的任意絕對路徑。每個模型 manifest 至少記錄模型名稱、版本、格式、SHA-256、class names、輸入尺寸、色彩順序、正規化方式、letterbox padding、輸出節點與 decoder/stride 規格。
+- [ ] 第一版工程模式可調參數固定為：
+  - `model_id`：從已驗證的 model registry 下拉選擇模型。
+  - `confidence_threshold`：信心門檻，範圍 `0.0～1.0`，建議預設 `0.25`。
+  - `nms_iou_threshold`：NMS 重疊率門檻，範圍 `0.0～1.0`，建議預設 `0.45`。
+  - `target_class_ids`：要判定為 NG 的類別；空值代表模型 manifest 內全部類別。
+  - `max_detections`：單張 tile／ROI 最大保留筆數，正整數，建議預設 `300`。
+  - `min_box_area_px`：濾除過小 bbox，`0` 代表停用；此參數與 NMS IoU 分開定義。
+- [ ] GUI 將 `nms_iou_threshold` 標示為「NMS 重疊率 (IoU)」，tooltip 說明其值為兩框交集除以聯集，不是像素交集面積；抑制規則固定為同類別較低分框在 `IoU > threshold` 時移除，邊界等於門檻時保留。
+- [ ] 管理模式才顯示進階參數：`inference_backend`（`auto`／`onnxruntime_cpu`／`onnxruntime_cuda`／`tensorrt`）、`precision`（`fp32`／`fp16`／`int8`）與 `class_agnostic_nms`；模型輸入寬高由 manifest 唯讀帶入，不讓 Recipe 任意改成模型不支援的尺寸。
+- [ ] `ParameterSpec`／Recipe validation 驗證數值範圍、model ID 存在、類別 ID、backend/precision 相容性及 `max_detections > 0`；舊 Recipe 不含 YOLOX 時行為完全不變。
+
+### 前處理、推論與結果契約
+
+- [ ] 建立可追溯的共用 DL 前處理：BGR/RGB 轉換、等比例 resize、letterbox、padding、dtype/normalization 與 NCHW 轉換皆由 model manifest 決定；保存 scale、padding 與原始/模型輸入 shape，供 bbox 精確映回 tile／ROI。
+- [ ] 先以 ONNX Runtime CPU 建立 correctness reference；使用固定輸入及已知 raw output 驗證 YOLOX grid/stride decode、`objectness × class_probability` 信心分數、class filter、NMS、clip 與反 letterbox 座標。
+- [ ] 每筆結果沿用既有 defect schema：`type` 使用 class name、`bbox_local` 為 `[x, y, width, height]` 整數、`area` 為 bbox 的 `width × height` px²、`confidence` 為最終合成分數；metadata 保存 `class_id`、`class_name`、objectness、class probability、model ID/version/SHA-256、閾值、原始 float bbox 與 letterbox 資訊。
+- [ ] detector execution metadata 明確記錄 requested/actual backend、device、precision、input/output shape、batch size、model load/warm-up/inference/postprocess 耗時及 fallback reason；不得把 Recipe 要求的 CUDA 誤報為實際 CUDA。
+- [ ] 輸出固定採 deterministic ordering：`confidence` 由高到低，再依 `class_id`、`y`、`x` 排序；同分與 NMS tie case 必須有穩定結果。
+- [ ] 明確限制第一版支援的 export contract；若同時支援 raw YOLOX output 與 end-to-end NMS model，必須由 manifest 指定 decoder，不可依 tensor shape 猜測後靜默套用。
+
+### Model/session 生命週期與 fallback
+
+- [ ] 在 `core/` 建立 detector-neutral 的 AI model/session manager；cache key 至少包含 model SHA-256、backend、device、precision 與 input shape，GUI preview、單張檢測、batch 與 monitor 共用 session，不得由每個 worker 各載入一份模型。
+- [ ] session 支援明確 `close()`、warm-up、bounded batch queue、VRAM budget、模型切換安全釋放及 cache invalidation；同一模型連續執行不得重複載入。
+- [ ] 沿用 `gpu.mode` 與 `fallback_to_cpu`：`cpu` 只使用 ONNX Runtime CPU；`auto` 的 CUDA/TensorRT 初始化或推論失敗時，只有在存在相容 ONNX reference model 時才整個 detector 於 CPU 重跑；`cuda` 必須明確失敗且禁止 silent fallback。
+- [ ] TensorRT engine 必須與 GPU compute capability、TensorRT/CUDA 版本及模型 SHA-256 綁定；不相容時不可載入舊 engine。FP16 通過精度驗收後才可選，INT8 需保存校正資料集版本與精度報告。
+- [ ] AI inference 與既有傳統 CV 共用 GPU scheduler、queue depth、取消/停止語意與 VRAM 觀測；避免 YOLOX session 和 CUDA DLL 工作同時無限制搶占 GPU。
+
+### 整合、測試與驗收順序
+
+- [ ] M0：完成 model manifest/schema、model registry、ONNX Runtime CPU session cache、獨立前處理/後處理單元測試與一個可散佈的 tiny 測試模型；此階段不接 GUI、不預設 GPU。
+- [ ] M1：新增 `DetectorYolox`、DetectorManager registration、Recipe round trip、繁中 detector label 與合成 CLI smoke；驗證 PASS/NG、defect count、class、confidence、bbox、area、metadata 與排序。
+- [ ] M2：Recipe Designer 加入模型下拉、信心門檻、NMS 重疊率、NG 類別、最大筆數與最小 bbox 面積；模型不存在、checksum 錯誤或 backend 不可用時使用 inline notice，Recipe 不可在錯誤狀態下儲存。
+- [ ] M3：接入 ONNX Runtime CUDA，再以相同 ONNX 模型比較 CPU/CUDA 的前處理、raw output、NMS 後 class/數量/座標/分數；先定義 bbox 與 confidence 容差，任何不等價都不得預設啟用。
+- [ ] M4：需要效能時才加入 TensorRT FP32/FP16；以固定資料集比較 ONNX Runtime CPU、ONNX Runtime CUDA 與 TensorRT 的 cold/warm median、P95、吞吐、peak VRAM、模型載入時間與端到端時間。
+- [ ] 測試 invalid model/manifest、缺少 execution provider、CUDA OOM、推論中斷、輸出 shape 錯誤、空 detection、單框、多框、高重疊同類／跨類、邊界框、非方形影像、極小 ROI、灰階輸入及 Unicode 路徑。
+- [ ] 驗證 GUI、CLI、batch、monitor 與 PyInstaller package；無 NVIDIA GPU 電腦可使用 reference CPU model，有 GPU 電腦連續執行 1000 張後 session 數量與 VRAM 位於穩定平台，且停止/切換模型無 crash 或 stale result。
+- [ ] 建立人工標註 acceptance set，以 precision、recall、mAP50、誤殺率、漏檢率及每類 confusion matrix 驗收；`confidence_threshold` 與 `nms_iou_threshold` 的 production 預設值必須由該資料集決定，不以範例預設值直接上線。
+
 - [ ] 導入模型時比較 PyTorch CUDA、ONNX Runtime CUDA 與 TensorRT 的部署及效能。
 - [ ] 模型/session 只載入一次並常駐 GPU；支援 batch inference 與固定輸入尺寸。
 - [ ] 優先驗證 FP16；INT8 必須完成校正與精度驗收後才能啟用。
@@ -270,6 +313,7 @@
 
 ## 完成紀錄
 
+- [x] 2026-07-24：完成 YOLOX Detector 分階段規劃；固定 model registry、信心門檻、NMS IoU 重疊率、NG 類別、最大筆數與最小 bbox 面積等參數語意，並定義前後處理、結果 metadata、共享 session、CPU reference、GPU fallback、GUI、測試及 production acceptance 順序；尚未實作 detector 或導入模型。
 - [x] 2026-07-13：建立 `cuda_practice/`、RTX 3090 `sm_86` 練習與編譯說明。
 - [x] 2026-07-14：加入 recipe/detector/GUI GPU 開關、CUDA 狀態與安全 CPU fallback。
 - [x] 2026-07-14：建立 CUDA DLL C ABI、ctypes bridge、build script、C++ smoke 與 Python 驗證工具。
