@@ -3,7 +3,10 @@ from __future__ import annotations
 from copy import deepcopy
 import tempfile
 from pathlib import Path
+import threading
+import time
 import unittest
+from unittest.mock import patch
 
 import cv2
 import numpy as np
@@ -20,7 +23,10 @@ from core.ai_runtime import (
     decode_yolox_output,
     prepare_yolox_input,
 )
+from core.batch_processor import BatchInspectionProcessor
 from core.detector_manager import DetectorManager
+from core.gpu_session import GpuExecutionSession
+from core.monitor_processor import FolderMonitorProcessor
 from core.pipeline import AOIPipeline
 from core.recipe_manager import RecipeError, RecipeManager
 
@@ -62,6 +68,9 @@ class _FakeOrtSession:
 
     def run(self, _output_names, _inputs):
         self.run_calls += 1
+        if self.run_calls > 1 and self.owner.block_inference:
+            self.owner.inference_started.set()
+            self.owner.inference_release.wait(timeout=5)
         if (
             self.providers[0] == "CUDAExecutionProvider"
             and self.owner.fail_cuda_inference
@@ -84,11 +93,15 @@ class _FakeOrt:
         *,
         fail_cuda_inference=False,
         fail_cuda_initialization=False,
+        block_inference=False,
     ):
         self.output = np.asarray(output, dtype=np.float32)
         self.providers = list(providers)
         self.fail_cuda_inference = fail_cuda_inference
         self.fail_cuda_initialization = fail_cuda_initialization
+        self.block_inference = block_inference
+        self.inference_started = threading.Event()
+        self.inference_release = threading.Event()
         self.sessions = []
         self.inference_session_calls = []
 
@@ -238,6 +251,87 @@ class YoloXRegistryAndSessionTests(unittest.TestCase):
             ["CUDAExecutionProvider", "CPUExecutionProvider"],
         )
 
+    def test_bounded_inference_queue_serializes_calls_and_reports_metrics(self):
+        registry = YoloXModelRegistry(MODEL_ROOT)
+        manifest = registry.get("yolox_tiny_fixture")
+        fake_ort = _FakeOrt(
+            np.zeros((1, 21, 7), dtype=np.float32),
+            ["CPUExecutionProvider"],
+            block_inference=True,
+        )
+        manager = AiModelSessionManager(
+            registry, queue_depth=1, ort_module=fake_ort
+        )
+        session = manager.session_for(manifest)
+        tensor = np.zeros(manifest.input_shape, dtype=np.float32)
+        failures = []
+
+        def infer_once():
+            try:
+                session.infer(tensor)
+            except Exception as exc:  # pragma: no cover - failure is asserted below
+                failures.append(exc)
+
+        first = threading.Thread(target=infer_once)
+        second = threading.Thread(target=infer_once)
+        first.start()
+        self.assertTrue(fake_ort.inference_started.wait(timeout=2))
+        second.start()
+        deadline = time.monotonic() + 2
+        while (
+            session.performance_stats()["queue_waiting"] != 1
+            and time.monotonic() < deadline
+        ):
+            time.sleep(0.005)
+
+        with self.assertRaisesRegex(AiInferenceError, "queue is full"):
+            session.infer(tensor)
+
+        fake_ort.inference_release.set()
+        first.join(timeout=2)
+        second.join(timeout=2)
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(failures, [])
+        stats = session.performance_stats()
+        self.assertEqual(stats["inference_count"], 2)
+        self.assertEqual(stats["queue_max_waiting"], 1)
+        self.assertEqual(stats["queue_rejections"], 1)
+        self.assertEqual(stats["active"], 0)
+
+    def test_session_cache_is_lru_bounded_and_supports_selective_invalidation(self):
+        registry = YoloXModelRegistry(MODEL_ROOT)
+        manifest = registry.get("yolox_tiny_fixture")
+        fake_ort = _FakeOrt(
+            np.zeros((1, 21, 7), dtype=np.float32),
+            ["CUDAExecutionProvider", "CPUExecutionProvider"],
+        )
+        manager = AiModelSessionManager(
+            registry,
+            max_cached_sessions=1,
+            gpu_mode="cuda",
+            fallback_to_cpu=False,
+            ort_module=fake_ort,
+        )
+
+        cpu = manager.session_for(manifest, backend="onnxruntime_cpu")
+        cuda = manager.session_for(manifest, backend="onnxruntime_cuda")
+
+        self.assertTrue(cpu.performance_stats()["closed"])
+        self.assertFalse(cuda.performance_stats()["closed"])
+        self.assertEqual(manager.session_count, 1)
+        self.assertEqual(manager.load_count, 2)
+        self.assertEqual(
+            manager.invalidate(
+                model_sha256=manifest.sha256,
+                backend="onnxruntime_cuda",
+            ),
+            1,
+        )
+        self.assertTrue(cuda.performance_stats()["closed"])
+        self.assertEqual(manager.session_count, 0)
+        self.assertEqual(manager.performance_stats()["providers"], fake_ort.providers)
+
 
 class YoloXPreprocessAndPostprocessTests(unittest.TestCase):
     def setUp(self):
@@ -258,6 +352,17 @@ class YoloXPreprocessAndPostprocessTests(unittest.TestCase):
         self.assertEqual(transform.scale_x, 1.0)
         self.assertEqual(transform.scale_y, 1.0)
         self.assertEqual((transform.pad_x, transform.pad_y), (0, 0))
+
+    def test_tiny_roi_is_supported_and_grayscale_is_rejected_explicitly(self):
+        tensor, transform = prepare_yolox_input(
+            np.zeros((1, 1, 3), dtype=np.uint8), self.manifest
+        )
+
+        self.assertEqual(tensor.shape, self.manifest.input_shape)
+        self.assertEqual(transform.source_width, 1)
+        self.assertEqual(transform.source_height, 1)
+        with self.assertRaisesRegex(AiModelError, "three channels"):
+            prepare_yolox_input(np.zeros((32, 32), dtype=np.uint8), self.manifest)
 
     def test_real_fixture_decodes_nms_coordinates_scores_and_order(self):
         manager = AiModelSessionManager(YoloXModelRegistry(MODEL_ROOT))
@@ -505,6 +610,62 @@ class DetectorYoloXIntegrationTests(unittest.TestCase):
             result["tiles"][0]["detectors"][0]["execution"]["ai"]["actual_backend"],
             "onnxruntime_cpu",
         )
+
+    def test_batch_and_monitor_reuse_one_yolox_session(self):
+        output_overrides = {
+            "save_overlay": False,
+            "save_ng_tiles": False,
+            "save_csv": False,
+            "save_matrix_csv": False,
+            "save_json": False,
+        }
+        with tempfile.TemporaryDirectory(prefix="visionflow_yolox_modes_") as temporary:
+            root = Path(temporary)
+            input_dir = root / "input"
+            input_dir.mkdir()
+            for name in ("第一張.png", "second.png"):
+                write_png(
+                    input_dir / name, np.zeros((32, 32, 3), dtype=np.uint8)
+                )
+
+            batch_session = GpuExecutionSession.from_recipe_path(
+                EXAMPLE_RECIPE, workload="throughput"
+            )
+            with patch(
+                "core.batch_processor.GpuExecutionSession.from_recipe_path",
+                return_value=batch_session,
+            ):
+                batch = BatchInspectionProcessor(
+                    input_dir,
+                    EXAMPLE_RECIPE,
+                    root / "batch_output",
+                    output_overrides=output_overrides,
+                    max_workers=2,
+                ).run()
+            self.assertEqual(batch["summary"]["ng"], 2)
+            self.assertEqual(batch["summary"]["defects"], 4)
+            self.assertEqual(batch_session.ai_session_manager.load_count, 1)
+
+            monitor_session = GpuExecutionSession.from_recipe_path(
+                EXAMPLE_RECIPE, workload="throughput"
+            )
+            monitor = FolderMonitorProcessor(
+                input_dir,
+                EXAMPLE_RECIPE,
+                root / "monitor_output",
+                output_overrides=output_overrides,
+            )
+            first = monitor._process_image(
+                input_dir / "第一張.png", root / "monitor", monitor_session
+            )
+            second = monitor._process_image(
+                input_dir / "second.png", root / "monitor", monitor_session
+            )
+            self.assertEqual([first.final_result, second.final_result], ["NG", "NG"])
+            self.assertEqual([first.defect_count, second.defect_count], [2, 2])
+            self.assertEqual(monitor_session.ai_session_manager.load_count, 1)
+            self.assertEqual(monitor_session.ai_session_manager.session_count, 1)
+            monitor_session.close()
 
     def test_pipeline_auto_fallback_reports_ort_provider_without_loading_cuda_dll(self):
         recipe = RecipeManager().load(EXAMPLE_RECIPE)

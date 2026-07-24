@@ -279,9 +279,11 @@
 
 - [x] 在 `core/` 建立 detector-neutral 的 AI model/session manager；cache key 至少包含 model SHA-256、backend、device、precision 與 input shape，GUI preview、單張檢測、batch 與 monitor 共用 session，不得由每個 worker 各載入一份模型。
 - [ ] session 支援明確 `close()`、warm-up、bounded batch queue、VRAM budget、模型切換安全釋放及 cache invalidation；同一模型連續執行不得重複載入。
+  - [x] 已完成 `close()`、warm-up、bounded inference queue、LRU cache 上限、模型/backend 選擇性 invalidation、安全等待 active inference 結束及 session/queue metrics；同模型連續執行與 batch/monitor 實測只載入一次。
+  - [ ] production 模型的實際 VRAM budget 與模型切換峰值仍需在 RTX 3090 量測後定案。
 - [x] 沿用 `gpu.mode` 與 `fallback_to_cpu`：`cpu` 只使用 ONNX Runtime CPU；`auto` 的 CUDA/TensorRT 初始化或推論失敗時，只有在存在相容 ONNX reference model 時才整個 detector 於 CPU 重跑；`cuda` 必須明確失敗且禁止 silent fallback。
 - [ ] TensorRT engine 必須與 GPU compute capability、TensorRT/CUDA 版本及模型 SHA-256 綁定；不相容時不可載入舊 engine。FP16 通過精度驗收後才可選，INT8 需保存校正資料集版本與精度報告。
-- [ ] AI inference 與既有傳統 CV 共用 GPU scheduler、queue depth、取消/停止語意與 VRAM 觀測；避免 YOLOX session 和 CUDA DLL 工作同時無限制搶占 GPU。
+- [x] AI inference 與既有傳統 CV 共用 `GpuExecutionSession` execution scope；YOLOX 另有 bounded inference queue 與 metrics，batch/monitor 停止會在目前影像完成後收斂，CUDA stability validator 以 `nvidia-smi` 記錄 process VRAM，避免 YOLOX session 和 CUDA DLL 工作同時無限制搶占 GPU。
 
 ### 整合、測試與驗收順序
 
@@ -292,9 +294,13 @@
   - [x] M3 軟體接入：provider 探測、CPU/CUDA 分離 session cache、禁止 CUDA EP 靜默 CPU fallback、初始化／OOM／推論失敗完整 CPU 重跑、strict CUDA 明確失敗及實機 validator 已完成。
   - [ ] M3 RTX 3090 驗收：使用 `gpu/validate_yolox_ort.py` 實測 raw tensor `atol=1e-5`／`rtol=1e-5`、bbox 最大差 1 px、confidence 最大差 `1e-4`，且 class／數量／排序完全相同。
 - [ ] M4：需要效能時才加入 TensorRT FP32/FP16；以固定資料集比較 ONNX Runtime CPU、ONNX Runtime CUDA 與 TensorRT 的 cold/warm median、P95、吞吐、peak VRAM、模型載入時間與端到端時間。
-- [ ] 測試 invalid model/manifest、缺少 execution provider、CUDA OOM、推論中斷、輸出 shape 錯誤、空 detection、單框、多框、高重疊同類／跨類、邊界框、非方形影像、極小 ROI、灰階輸入及 Unicode 路徑。
+- [x] 測試 invalid model/manifest、缺少 execution provider、CUDA OOM、推論中斷、輸出 shape 錯誤、空 detection、單框、多框、高重疊同類／跨類、邊界框、非方形影像、極小 ROI、灰階輸入及 Unicode 路徑。
 - [ ] 驗證 GUI、CLI、batch、monitor 與 PyInstaller package；無 NVIDIA GPU 電腦可使用 reference CPU model，有 GPU 電腦連續執行 1000 張後 session 數量與 VRAM 位於穩定平台，且停止/切換模型無 crash 或 stale result。
+  - [x] CPU reference 已覆蓋 GUI Recipe、CLI、batch、monitor、Unicode 路徑與 PyInstaller bundled YOLOX smoke；本機 warm-up 5 後執行 1000 次，session/load count 固定 1、輸出 deterministic、RSS 由 69,177,344 增至 69,484,544 bytes，validator 通過。
+  - [ ] RTX 3090 尚需以 production 模型連續 1000 張驗證 session 數量、VRAM 平台、停止與模型切換。
 - [ ] 建立人工標註 acceptance set，以 precision、recall、mAP50、誤殺率、漏檢率及每類 confusion matrix 驗收；`confidence_threshold` 與 `nms_iou_threshold` 的 production 預設值必須由該資料集決定，不以範例預設值直接上線。
+  - [x] 已建立 `gpu/yolox_acceptance.example.yaml` 與 `gpu/validate_yolox_acceptance.py`；檢查 PASS/NG coverage、標註 bbox 邊界、production/test-only 模型隔離、backend、單一 session，並輸出完整指標與 JSON 證據。
+  - [ ] 尚待 production ONNX 權重、實際 AOI 標註影像與門檻，由正式 acceptance set 決定 production 預設值。
 
 - [ ] 導入模型時比較 PyTorch CUDA、ONNX Runtime CUDA 與 TensorRT 的部署及效能。
 - [ ] 模型/session 只載入一次並常駐 GPU；支援 batch inference 與固定輸入尺寸。
@@ -315,6 +321,7 @@
 
 ## 完成紀錄
 
+- [x] 2026-07-24：完成 YOLOX session 治理與 CPU 交付驗證：加入 bounded inference queue、LRU session cache、模型/backend invalidation、安全 close、pipeline AI metrics；新增 production acceptance manifest/validator（precision、recall、mAP50、誤殺率、漏檢率、per-class/confusion matrix）及 stability validator。本機 fixture warm-up 5 後執行 1000 次維持單一 session/load、輸出 deterministic、RSS 僅增加 307,200 bytes；batch/monitor 共用 session 與 Unicode 路徑測試通過。CPU-compatible PyInstaller package 已重建為 288 個檔案、確認不含 CUDA DLL，bundled YOLOX registry／ONNX model／Recipe 存在且 EXE smoke exit 0。RTX 3090、production 權重與標註資料仍待外部資產驗收。
 - [x] 2026-07-24：完成 YOLOX M3 軟體接入：新增 ONNX Runtime CUDA FP32 session、provider/active EP 驗證與 CPU/CUDA 分離 cache，CUDA session 明確停用 CPU EP fallback；`gpu.mode=auto` 在 provider 缺少、初始化失敗、OOM 或推論失敗時完整以 CPU 重跑，`gpu.mode=cuda` 維持嚴格失敗。GUI 單張、batch、monitor 透過既有 execution session 共用 AI manager，YOLOX 不再誤載 `visionflow_cuda.dll`；Recipe Designer 開放 YOLOX GPU toggle 並在 provider 不可用時阻止儲存。新增 raw/NMS 等價性容差與 `gpu/validate_yolox_ort.py`，本機僅有 CPUExecutionProvider，因此 RTX 3090 實機 M3 驗收仍未勾選。
 - [x] 2026-07-24：完成 YOLOX M2 Recipe Designer 整合：動態讀取已驗證 model registry 建立模型下拉，工程模式顯示信心、NMS IoU、NG 類別、最大筆數與最小框面積，管理模式才顯示 backend／precision／class-agnostic NMS；模型輸入尺寸與 class mapping 唯讀顯示，NMS tooltip 固定嚴格 `IoU > threshold` 語意。遺失模型、SHA-256 錯誤及不支援 backend 皆以繁中 inline notice 顯示並阻止 Recipe 儲存；當時 YOLOX CUDA toggle 在 M3 前維持停用，後續已由 M3 軟體接入開放，動態參數也已納入 dirty tracking。
 - [x] 2026-07-24：完成 YOLOX M0/M1 CPU reference 垂直切片：新增 checksum model registry、固定輸出 tiny ONNX fixture、ONNX Runtime CPU session cache、manifest-driven letterbox/NCHW 前處理、raw YOLOX decode、class-aware NMS、座標還原、`DetectorYolox`、Recipe/DetectorManager/繁中標籤整合、結果與 execution metadata、reference Recipe 及 9 項專屬測試；合成 CLI smoke 固定輸出 2 筆 NG。GUI 模型下拉、跨工作模式 session、CUDA、TensorRT 與 production 模型驗收仍未完成。

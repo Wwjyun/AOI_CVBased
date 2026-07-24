@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import OrderedDict
 from dataclasses import dataclass
 import hashlib
 import os
@@ -365,6 +366,7 @@ class OnnxRuntimeSession:
         *,
         backend: str = "onnxruntime_cpu",
         precision: str = "fp32",
+        queue_depth: int = 8,
         ort_module=None,
     ):
         self.backend = str(backend).lower()
@@ -402,9 +404,19 @@ class OnnxRuntimeSession:
             ) from exc
         self.load_sec = time.perf_counter() - started
         self.manifest = manifest
-        self._lock = threading.RLock()
+        self.queue_depth = int(queue_depth)
+        if self.queue_depth < 0:
+            raise AiModelError("YOLOX queue_depth must be zero or greater")
+        self._condition = threading.Condition(threading.RLock())
         self.last_inference_sec = 0.0
         self.inference_count = 0
+        self.inference_failures = 0
+        self.queue_rejections = 0
+        self.queue_wait_sec = 0.0
+        self.max_waiting = 0
+        self._active_count = 0
+        self._waiting_count = 0
+        self._closing = False
         self._closed = False
 
         active_providers = tuple(self._session.get_providers())
@@ -436,40 +448,99 @@ class OnnxRuntimeSession:
         self.warmup_sec = time.perf_counter() - warmup_started
 
     def infer(self, tensor: np.ndarray) -> np.ndarray:
-        if self._closed:
-            raise AiInferenceError("YOLOX session 已關閉")
         if tuple(tensor.shape) != self.manifest.input_shape or tensor.dtype != np.float32:
             raise AiModelError(
                 f"YOLOX tensor must be float32 {self.manifest.input_shape}, "
                 f"got {tensor.dtype} {tuple(tensor.shape)}"
             )
-        with self._lock:
-            started = time.perf_counter()
-            try:
-                output = self._session.run(
-                    [self.manifest.output_name],
-                    {self.manifest.input_name: tensor},
-                )[0]
-            except Exception as exc:
-                raise AiInferenceError(
-                    f"YOLOX {self.backend} 推論失敗：{exc}"
-                ) from exc
-            self.last_inference_sec = time.perf_counter() - started
-            self.inference_count += 1
+        queued_at = time.perf_counter()
+        with self._condition:
+            if self._closed or self._closing:
+                raise AiInferenceError("YOLOX session 已關閉")
+            if self._active_count:
+                if self._waiting_count >= self.queue_depth:
+                    self.queue_rejections += 1
+                    raise AiInferenceError(
+                        f"YOLOX inference queue is full (depth={self.queue_depth})"
+                    )
+                self._waiting_count += 1
+                self.max_waiting = max(self.max_waiting, self._waiting_count)
+                try:
+                    while self._active_count and not self._closing:
+                        self._condition.wait()
+                finally:
+                    self._waiting_count -= 1
+                if self._closed or self._closing:
+                    raise AiInferenceError("YOLOX session 已關閉")
+            self.queue_wait_sec += time.perf_counter() - queued_at
+            self._active_count += 1
+
+        started = time.perf_counter()
+        try:
+            output = self._session.run(
+                [self.manifest.output_name],
+                {self.manifest.input_name: tensor},
+            )[0]
+        except Exception as exc:
+            with self._condition:
+                self.inference_failures += 1
+            raise AiInferenceError(
+                f"YOLOX {self.backend} 推論失敗：{exc}"
+            ) from exc
+        finally:
+            elapsed = time.perf_counter() - started
+            with self._condition:
+                self.last_inference_sec = elapsed
+                self.inference_count += 1
+                self._active_count -= 1
+                self._condition.notify_all()
         return np.asarray(output)
 
+    def performance_stats(self) -> dict[str, Any]:
+        with self._condition:
+            return {
+                "backend": self.backend,
+                "device": self.device,
+                "precision": self.precision,
+                "model_id": self.manifest.model_id,
+                "model_sha256": self.manifest.sha256,
+                "load_sec": round(self.load_sec, 6),
+                "warmup_sec": round(self.warmup_sec, 6),
+                "inference_count": self.inference_count,
+                "inference_failures": self.inference_failures,
+                "last_inference_sec": round(self.last_inference_sec, 6),
+                "queue_depth": self.queue_depth,
+                "queue_waiting": self._waiting_count,
+                "queue_max_waiting": self.max_waiting,
+                "queue_rejections": self.queue_rejections,
+                "queue_wait_sec": round(self.queue_wait_sec, 6),
+                "active": self._active_count,
+                "closed": self._closed,
+            }
+
     def close(self) -> None:
-        with self._lock:
-            self._closed = True
+        with self._condition:
+            if self._closed:
+                return
+            self._closing = True
+            self._condition.notify_all()
+            while self._active_count:
+                self._condition.wait()
             self._session = None
+            self._closed = True
+            self._closing = False
+            self._condition.notify_all()
 
 
 class OnnxRuntimeCpuSession(OnnxRuntimeSession):
-    def __init__(self, manifest: YoloXModelManifest, *, ort_module=None):
+    def __init__(
+        self, manifest: YoloXModelManifest, *, queue_depth: int = 8, ort_module=None
+    ):
         super().__init__(
             manifest,
             backend="onnxruntime_cpu",
             precision="fp32",
+            queue_depth=queue_depth,
             ort_module=ort_module,
         )
 
@@ -489,10 +560,20 @@ class AiModelSessionManager:
         *,
         gpu_mode: str = "auto",
         fallback_to_cpu: bool = True,
+        queue_depth: int = 8,
+        max_cached_sessions: int = 2,
         ort_module=None,
     ):
         self._registry = registry
-        self._sessions: dict[tuple[Any, ...], OnnxRuntimeSession] = {}
+        self.queue_depth = int(queue_depth)
+        self.max_cached_sessions = int(max_cached_sessions)
+        if self.queue_depth < 0:
+            raise AiModelError("YOLOX queue_depth must be zero or greater")
+        if self.max_cached_sessions <= 0:
+            raise AiModelError("YOLOX max_cached_sessions must be greater than zero")
+        self._sessions: OrderedDict[tuple[Any, ...], OnnxRuntimeSession] = (
+            OrderedDict()
+        )
         self._runtime_failures: dict[tuple[str, str], str] = {}
         self._lock = threading.RLock()
         self._ort_module = ort_module
@@ -611,10 +692,16 @@ class AiModelSessionManager:
                     manifest,
                     backend=effective_backend,
                     precision=normalized_precision,
+                    queue_depth=self.queue_depth,
                     ort_module=self._ort(),
                 )
                 self._sessions[key] = session
                 self.load_count += 1
+                while len(self._sessions) > self.max_cached_sessions:
+                    _, evicted = self._sessions.popitem(last=False)
+                    evicted.close()
+            else:
+                self._sessions.move_to_end(key)
             return session
 
     def cpu_fallback_selection(
@@ -653,6 +740,35 @@ class AiModelSessionManager:
             ]
             for key in stale_keys:
                 self._sessions.pop(key).close()
+
+    def invalidate(
+        self,
+        *,
+        model_sha256: str | None = None,
+        backend: str | None = None,
+        clear_failures: bool = True,
+    ) -> int:
+        normalized_backend = str(backend).lower() if backend is not None else None
+        with self._lock:
+            stale_keys = [
+                key
+                for key, session in self._sessions.items()
+                if (model_sha256 is None or session.manifest.sha256 == model_sha256)
+                and (normalized_backend is None or session.backend == normalized_backend)
+            ]
+            stale_sessions = [self._sessions.pop(key) for key in stale_keys]
+            if clear_failures:
+                failure_keys = [
+                    key
+                    for key in self._runtime_failures
+                    if (model_sha256 is None or key[0] == model_sha256)
+                    and (normalized_backend is None or key[1] == normalized_backend)
+                ]
+                for key in failure_keys:
+                    self._runtime_failures.pop(key, None)
+        for session in stale_sessions:
+            session.close()
+        return len(stale_sessions)
 
     def _resolve_backend(
         self,
@@ -719,11 +835,39 @@ class AiModelSessionManager:
         with self._lock:
             return len(self._sessions)
 
-    def close(self) -> None:
+    def performance_stats(self) -> dict[str, Any]:
         with self._lock:
-            for session in self._sessions.values():
-                session.close()
-            self._sessions.clear()
+            sessions = [
+                session.performance_stats() for session in self._sessions.values()
+            ]
+            failures = [
+                {
+                    "model_sha256": model_sha256,
+                    "backend": backend,
+                    "reason": reason,
+                }
+                for (model_sha256, backend), reason in sorted(
+                    self._runtime_failures.items()
+                )
+            ]
+            providers = (
+                list(self._ort_module.get_available_providers())
+                if self._ort_module is not None
+                else []
+            )
+            return {
+                "providers": providers,
+                "session_count": len(sessions),
+                "max_cached_sessions": self.max_cached_sessions,
+                "load_count": self.load_count,
+                "queue_depth": self.queue_depth,
+                "sessions": sessions,
+                "runtime_failures": failures,
+            }
+
+    def close(self) -> None:
+        self.invalidate()
+        with self._lock:
             self._runtime_failures.clear()
 
 

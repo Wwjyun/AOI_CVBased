@@ -21,8 +21,11 @@ class GuiThreadingPackagingContractTests(unittest.TestCase):
 
     def test_gui_launcher_has_noninteractive_packaged_smoke_mode(self):
         launcher = (ROOT / "gui_launcher.py").read_text(encoding="utf-8")
+        spec = (ROOT / "VisionFlow AOI.spec").read_text(encoding="utf-8")
 
         self.assertIn('"--smoke-test" in sys.argv[1:]', launcher)
+        self.assertIn("run_packaged_yolox_smoke_test", launcher)
+        self.assertIn("models/yolox", spec)
         self.assertIn("window.recipe_panel.load_recipe(recipe_path)", launcher)
         self.assertIn("window.recipe_panel.detector_list.count() > 0", launcher)
 

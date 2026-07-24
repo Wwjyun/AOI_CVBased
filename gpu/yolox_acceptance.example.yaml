@@ -1,0 +1,19 @@
+schema_version: 1
+model_id: replace_with_production_model_id
+recipe: ../recipes/replace_with_production_yolox_recipe.yaml
+iou_match_threshold: 0.5
+thresholds:
+  min_precision: 0.95
+  min_recall: 0.95
+  min_map50: 0.90
+  max_false_kill_rate: 0.01
+  max_miss_rate: 0.05
+cases:
+  - id: production_pass_001
+    image: ../acceptance_data/yolox/pass_001.png
+    ground_truth: []
+  - id: production_ng_001
+    image: ../acceptance_data/yolox/ng_001.png
+    ground_truth:
+      - class_id: 0
+        bbox_xywh: [100, 120, 32, 18]

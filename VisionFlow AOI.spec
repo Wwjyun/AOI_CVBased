@@ -8,7 +8,11 @@ a = Analysis(
     ['gui_launcher.py'],
     pathex=[],
     binaries=cuda_binaries,
-    datas=[('recipes', 'recipes'), ('build_provenance.json', '.')],
+    datas=[
+        ('recipes', 'recipes'),
+        ('models/yolox', 'models/yolox'),
+        ('build_provenance.json', '.'),
+    ],
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},

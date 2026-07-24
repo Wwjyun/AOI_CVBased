@@ -31,6 +31,9 @@ class GpuExecutionSession:
         self.ai_session_manager = ai_session_manager or AiModelSessionManager(
             gpu_mode=RecipeManager().gpu_mode(config),
             fallback_to_cpu=RecipeManager().gpu_fallback_enabled(config),
+            queue_depth=(
+                1 if workload == "latency" else int(config.get("queue_depth", 8))
+            ),
         )
         self._closed = False
         self._pipeline_lock = threading.RLock()

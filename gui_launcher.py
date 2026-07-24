@@ -34,7 +34,10 @@ def run_packaged_smoke_test() -> int:
     app.processEvents()
     if not valid:
         return 3
-    return run_packaged_gpu_fallback_smoke_test()
+    fallback_status = run_packaged_gpu_fallback_smoke_test()
+    if fallback_status:
+        return fallback_status
+    return run_packaged_yolox_smoke_test()
 
 
 def _packaged_smoke_recipe() -> dict:
@@ -150,6 +153,59 @@ def run_packaged_gpu_fallback_smoke_test() -> int:
                 return 7
         else:
             return 8
+    return 0
+
+
+def run_packaged_yolox_smoke_test() -> int:
+    """Verify the bundled registry, ONNX fixture, and CPU YOLOX pipeline."""
+    import cv2
+    import numpy as np
+
+    from core.ai_runtime import AiModelError, YoloXModelRegistry
+    from core.pipeline import AOIPipeline
+
+    bundle_root = Path(getattr(sys, "_MEIPASS", Path(__file__).resolve().parent))
+    recipe_path = (
+        bundle_root
+        / "recipes"
+        / "examples"
+        / "YOLOX_TINY_REFERENCE_AOI_01.yaml"
+    )
+    try:
+        registry = YoloXModelRegistry()
+        manifest = registry.get("yolox_tiny_fixture")
+    except AiModelError:
+        return 9
+    if not recipe_path.is_file() or not manifest.model_path.is_file():
+        return 10
+
+    with tempfile.TemporaryDirectory(prefix="visionflow_packaged_yolox_") as temporary:
+        root = Path(temporary)
+        image_path = root / "input.png"
+        encoded, payload = cv2.imencode(
+            ".png", np.zeros((32, 32, 3), dtype=np.uint8)
+        )
+        if not encoded:
+            return 11
+        image_path.write_bytes(payload.tobytes())
+        result = AOIPipeline(recipe_path, root / "output").run(image_path)
+
+    defect_types = [
+        defect["type"]
+        for tile in result["tiles"]
+        for detector in tile["detectors"]
+        if detector["detector_id"] == "yolox"
+        for defect in detector["defects"]
+    ]
+    ai = result.get("execution", {}).get("ai", {})
+    if (
+        result.get("final_result") != "NG"
+        or defect_types != ["scratch", "stain"]
+        or ai.get("load_count") != 1
+        or ai.get("session_count") != 1
+        or ai.get("sessions", [{}])[0].get("backend") != "onnxruntime_cpu"
+    ):
+        return 12
     return 0
 
 

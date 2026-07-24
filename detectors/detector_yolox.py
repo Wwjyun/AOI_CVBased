@@ -211,6 +211,7 @@ class DetectorYolox(BaseDetector):
             "warmup_sec": round(session.warmup_sec, 6),
             "last_inference_sec": round(session.last_inference_sec, 6),
             "session_inference_count": session.inference_count,
+            "session_metrics": session.performance_stats(),
             "fallback_reason": selection.fallback_reason,
         }
         self.gpu_fallback_reason = selection.fallback_reason

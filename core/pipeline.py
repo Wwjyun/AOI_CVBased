@@ -210,6 +210,7 @@ class AOIPipeline(LogMixin):
             "outputs": {},
             "duration_sec": round(time.perf_counter() - started, 3),
             "execution": {
+                "ai": self.detector_manager._ai_manager().performance_stats(),
                 "gpu": {
                     "mode": gpu_mode,
                     "resident_image": {
@@ -258,6 +259,9 @@ class AOIPipeline(LogMixin):
         with profiler.measure("reporting_total"):
             outputs = Reporter(self.output_dir, recipe["output"], profiler=profiler).write(image, result)
         serializable_result["outputs"] = outputs
+        serializable_result["execution"][
+            "ai"
+        ] = self.detector_manager._ai_manager().performance_stats()
         serializable_result["execution"]["gpu"]["metrics"] = gpu_runtime.performance_stats()
         serializable_result["execution"]["performance"] = profiler.snapshot()
         self.logger.info(
